@@ -1,0 +1,26 @@
+[project]
+name = "porcipeso"
+version = "0.1.0"
+description = "Sistema de pesaje porcino por lote sobre indicadores seriales (RS-232/RS-485/TCP)"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pyserial",
+  "pyyaml",
+  "openpyxl",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx", "websockets"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["porcipeso*"]

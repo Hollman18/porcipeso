@@ -1,0 +1,385 @@
+<meta charset="utf-8">
+<title>PorciPeso — MVP interactivo</title>
+<style>
+:root{
+  --surface:#F2F4F1; --card:#FFFFFF; --ink:#1B231F; --muted:#57635B;
+  --border:#DDE3DD; --accent:#178A50; --accent-ink:#0F5C36; --accent-soft:#E3F0E8;
+  --amber:#B97E1E; --amber-soft:#F5EAD5; --red:#C03A22;
+  --panel:#202722; --panel-edge:#39443C; --led:#FF4A2E;
+  --grid:#E4E9E4; --chart-1:#178A50;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --surface:#121714; --card:#1B221D; --ink:#E7ECE7; --muted:#97A49A;
+    --border:#2B342D; --accent:#2E9D68; --accent-ink:#7FCBA4; --accent-soft:#1E2F25;
+    --amber:#BA8323; --amber-soft:#2E2617; --red:#E06248;
+    --panel:#0D1210; --panel-edge:#242E27; --led:#FF5A3C;
+    --grid:#242D26; --chart-1:#2E9D68;
+  }
+}
+:root[data-theme="light"]{
+  --surface:#F2F4F1; --card:#FFFFFF; --ink:#1B231F; --muted:#57635B;
+  --border:#DDE3DD; --accent:#178A50; --accent-ink:#0F5C36; --accent-soft:#E3F0E8;
+  --amber:#B97E1E; --amber-soft:#F5EAD5; --red:#C03A22;
+  --panel:#202722; --panel-edge:#39443C; --led:#FF4A2E;
+  --grid:#E4E9E4; --chart-1:#178A50;
+}
+:root[data-theme="dark"]{
+  --surface:#121714; --card:#1B221D; --ink:#E7ECE7; --muted:#97A49A;
+  --border:#2B342D; --accent:#2E9D68; --accent-ink:#7FCBA4; --accent-soft:#1E2F25;
+  --amber:#BA8323; --amber-soft:#2E2617; --red:#E06248;
+  --panel:#0D1210; --panel-edge:#242E27; --led:#FF5A3C;
+  --grid:#242D26; --chart-1:#2E9D68;
+}
+*{box-sizing:border-box}
+body{background:var(--surface);color:var(--ink);margin:0;
+  font:15px/1.55 "Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif}
+.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 18px 70px;display:flex;flex-direction:column;gap:22px}
+header .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+header h1{font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-weight:700;
+  font-size:clamp(26px,4vw,38px);margin:4px 0 6px;text-transform:uppercase;letter-spacing:.01em;text-wrap:balance}
+header p{color:var(--muted);margin:0;max-width:70ch}
+.demo-note{background:var(--amber-soft);color:var(--amber);border-radius:8px;padding:8px 14px;
+  font-size:13px;font-weight:600;display:inline-block;margin-top:10px}
+.layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:860px){.layout{grid-template-columns:1fr}}
+/* ------- panel operador ------- */
+.op{background:var(--panel);border:1px solid var(--panel-edge);border-radius:14px;padding:20px;
+  color:#DDE5DE;display:flex;flex-direction:column;gap:14px}
+.op .row{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:center}
+.sess{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#8FA096}
+.sess b{color:#DDE5DE}
+.state{padding:3px 12px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.state.estable{background:#173523;color:#7FCBA4}
+.state.movimiento{background:#3A2A14;color:#E8B95B}
+.state.senal{background:#3A1A14;color:#F08A72}
+.ledbox{background:#0A0E0B;border:1px solid var(--panel-edge);border-radius:10px;
+  padding:14px 10px 8px;display:flex;flex-direction:column;align-items:center;gap:4px}
+.led{font-family:"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-weight:700;
+  font-size:clamp(44px,8vw,72px);letter-spacing:.05em;color:var(--led);
+  text-shadow:0 0 16px rgba(255,74,46,.4)}
+.led small{font-size:.36em;opacity:.85}
+.ticker{font-family:"SF Mono",Menlo,monospace;font-size:11px;color:#6E7F74;letter-spacing:.1em;
+  white-space:nowrap;overflow:hidden;width:100%;text-align:center}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.tile{background:#161C18;border:1px solid var(--panel-edge);border-radius:8px;padding:10px 12px}
+.tile .k{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:#8FA096}
+.tile .v{font-family:"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-size:21px;font-weight:600;margin-top:1px}
+.tile .v em{font-style:normal;font-size:12px;color:#8FA096}
+canvas{width:100%;height:120px;background:#0A0E0B;border:1px solid var(--panel-edge);border-radius:8px}
+.opbtns{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--border);
+  background:var(--card);color:var(--ink);padding:9px 14px;font-weight:600;font-size:14px}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-ghost-dark{background:#161C18;border-color:var(--panel-edge);color:#DDE5DE}
+.btn-danger{background:transparent;border-color:var(--red);color:var(--red)}
+/* ------- columna derecha ------- */
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.card h2{font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-size:16px;margin:0 0 10px;
+  text-transform:uppercase;letter-spacing:.06em}
+.sim{border-style:dashed}
+.simbtns{display:flex;flex-wrap:wrap;gap:8px}
+.queue:empty::after{content:"Sin eventos por confirmar";color:var(--muted);font-size:13px}
+.amb{background:var(--amber-soft);border:1px solid var(--amber);border-radius:10px;padding:12px;margin-bottom:8px}
+.amb b{color:var(--amber)}
+.amb .abtns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.amb button{padding:5px 12px;font-size:13px}
+.log{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow-y:auto}
+.ev{display:flex;gap:10px;align-items:baseline;font-size:13.5px;padding:7px 10px;border-radius:8px;
+  background:var(--surface);border:1px solid var(--border)}
+.ev .t{color:var(--muted);font-size:12px;flex:0 0 62px}
+.ev .badge{font-weight:700;flex:0 0 18px;text-align:center}
+.ev.up .badge{color:var(--accent)}
+.ev.down .badge{color:var(--red)}
+.ev.amb-ev{border-color:var(--amber)} .ev.amb-ev .badge{color:var(--amber)}
+.ev .d{flex:1;min-width:0}
+.ev .kg{font-weight:600}
+/* ------- ticket ------- */
+dialog{border:none;border-radius:14px;background:var(--card);color:var(--ink);
+  box-shadow:0 20px 60px rgba(0,0,0,.35);padding:0;max-width:420px;width:92%}
+dialog::backdrop{background:rgba(10,14,11,.55)}
+.ticket{padding:24px}
+.ticket h2{margin:0 0 2px;font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;text-transform:uppercase}
+.ticket .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+.trow{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--border);font-size:14.5px}
+.trow b{font-variant-numeric:tabular-nums}
+.trow.big b{font-size:20px;color:var(--accent-ink)}
+footer{font-size:13px;color:var(--muted)}
+a{color:var(--accent-ink)}
+</style>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">MVP interactivo · Modo A (plataforma que acumula) · v0.1</span>
+  <h1>PorciPeso — pantalla del operador</h1>
+  <p>Esto es una <b>simulación funcional del algoritmo real</b>: el "indicador" de abajo genera lecturas a 10 Hz
+  con ruido, y el software detecta estabilidad, cuenta por promedio y pide confirmación cuando duda.
+  Usa los botones del simulador como si fueras el corral.</p>
+  <span class="demo-note">DEMO — no hay báscula conectada; las tramas seriales son simuladas</span>
+</header>
+
+<div class="layout">
+  <!-- ===== PANEL OPERADOR ===== -->
+  <div class="op">
+    <div class="row">
+      <span class="sess">Lote <b>L-2407</b> · Corral <b>C-14</b> · Báscula <b>Matrix RS-232</b></span>
+      <span class="state estable" id="state">ESTABLE</span>
+    </div>
+    <div class="ledbox">
+      <div class="led" id="led">0.0 <small>kg</small></div>
+      <div class="ticker mono" id="ticker">esperando tramas…</div>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">Cerdos</div><div class="v" id="tCount">0</div></div>
+      <div class="tile"><div class="k">Acumulado</div><div class="v" id="tTotal">0.0 <em>kg</em></div></div>
+      <div class="tile"><div class="k">Promedio</div><div class="v" id="tAvg">— <em>kg</em></div></div>
+      <div class="tile"><div class="k">Peso ref</div><div class="v" id="tRef">— <em>kg</em></div></div>
+    </div>
+    <canvas id="chart" width="900" height="240" role="img" aria-label="Curva de peso en vivo"></canvas>
+    <div class="opbtns">
+      <button class="btn-primary" id="bRef">① Pesar cerdo de referencia</button>
+      <button class="btn-ghost-dark" id="bClose" disabled>Cerrar lote e imprimir tiquete</button>
+    </div>
+  </div>
+
+  <!-- ===== COLUMNA DERECHA ===== -->
+  <div class="col">
+    <div class="card sim">
+      <h2>🎛 Simulador (esto es el corral)</h2>
+      <div class="simbtns">
+        <button id="s1" disabled>Sube 1 cerdo</button>
+        <button id="s2" disabled>Suben 2 a la vez</button>
+        <button id="s3" disabled>Suben 3 a la vez</button>
+        <button id="sBack" disabled>Se devuelve 1 😱</button>
+        <button id="sNervous" disabled>Cerdo inquieto</button>
+      </div>
+      <p style="font-size:12.5px;color:var(--muted);margin:10px 0 0">
+        Primero pesa el cerdo de referencia (①). Cada botón mueve kilos "de verdad" sobre la plataforma
+        simulada; el software solo ve el stream de números, igual que en producción.</p>
+    </div>
+
+    <div class="card">
+      <h2>⚠ Por confirmar</h2>
+      <div class="queue" id="queue"></div>
+    </div>
+
+    <div class="card">
+      <h2>Eventos de la sesión</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<footer>PorciPeso MVP v0.1 · el motor de conteo que ves aquí (ventana de estabilidad de 2 s, tolerancia 20 %,
+promedio auto-corregido) es el mismo especificado en SPEC §4 — solo cambia la fuente: aquí simulador, en granja RS-232/RS-485.</footer>
+</div>
+
+<dialog id="ticket">
+  <div class="ticket">
+    <h2>Tiquete de lote</h2>
+    <div class="sub">Lote L-2407 · Corral C-14 → Planta Norte</div>
+    <div id="ticketBody"></div>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn-primary" id="tNew">Nuevo lote</button>
+      <button id="tClose2">Cerrar</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+'use strict';
+/* ================= SIMULADOR FÍSICO =================
+   trueW = kilos reales sobre la plataforma. Los botones lo animan
+   con rampas + sacudidas. El "indicador" emite trueW + ruido a 10 Hz. */
+const S = {
+  trueW: 0, target: 0, shaking: 0,          // física simulada
+  readings: [],                              // ventana del detector
+  lastStable: 0, stableNow: null, moving: false,
+  ref: null, avg: null, count: 0, total: 0,
+  events: [], pending: 0, sessionOpen: false, t0: null,
+  pigs: []                                   // pesos individuales sobre plataforma (para "se devuelve")
+};
+const $ = id => document.getElementById(id);
+const fmt = (n,d=1) => n.toLocaleString('es-CO',{minimumFractionDigits:d,maximumFractionDigits:d});
+const now = () => new Date().toLocaleTimeString('es-CO',{hour12:false});
+const rnd = (a,b) => a + Math.random()*(b-a);
+
+function pigWeight(){ return rnd(88,118); }   // N~(103,~9)
+
+/* --- acciones del simulador --- */
+function addPigs(n){
+  let kg=0; for(let i=0;i<n;i++){ const w=pigWeight(); S.pigs.push(w); kg+=w; }
+  S.target += kg; S.shaking = 22;             // sacudida mientras suben
+}
+function removePig(){
+  if(!S.pigs.length) return;
+  const w = S.pigs.splice(Math.floor(Math.random()*S.pigs.length),1)[0];
+  S.target -= w; S.shaking = 18;
+}
+function nervous(){ addPigs(1); S.shaking = 60; }  // tarda mucho más en calmarse
+
+/* --- física: trueW persigue a target con jitter decreciente --- */
+function physTick(){
+  const diff = S.target - S.trueW;
+  S.trueW += diff * 0.18;
+  if (S.shaking > 0){ S.trueW += rnd(-1,1) * Math.min(S.shaking,14); S.shaking -= 0.55; }
+  if (Math.abs(diff) < 0.05 && S.shaking <= 0) S.trueW = S.target;
+}
+
+/* ================= MOTOR PORCIPESO (idéntico al spec) ================= */
+const WIN = 20;          // 2 s @ 10 Hz
+const STAB_RANGE = 2.0;  // kg
+const MIN_DELTA = 40;    // kg para considerar evento
+const TOL = 0.20;        // tolerancia de residuo
+
+function engineTick(reading){
+  S.readings.push(reading); if (S.readings.length > WIN) S.readings.shift();
+  if (S.readings.length < WIN) return;
+  const mx = Math.max(...S.readings), mn = Math.min(...S.readings);
+  const stable = (mx - mn) <= STAB_RANGE;
+  setState(stable ? 'estable' : 'movimiento');
+  if (!stable){ S.moving = true; return; }
+  const level = S.readings.reduce((a,b)=>a+b,0)/S.readings.length;
+  if (S.moving){                       // transición movimiento → estable: ¿hubo escalón?
+    S.moving = false;
+    const delta = level - S.lastStable;
+    if (Math.abs(delta) >= MIN_DELTA) onStep(delta, level);
+    S.lastStable = level;
+  }
+}
+
+function onStep(delta, level){
+  if (!S.sessionOpen) return;
+  if (S.ref === null){                                  // primer escalón = referencia
+    S.ref = delta; S.avg = delta; S.count = 1; S.total = delta;
+    if(!S.t0) S.t0 = now();
+    pushEvent({dir:'up', kg:delta, n:1, txt:`Referencia seteada: ${fmt(delta)} kg`, amb:false});
+    refresh(); return;
+  }
+  const nRaw = delta / S.avg;
+  const n = Math.round(nRaw);
+  const residuo = Math.abs(nRaw - n);
+  if (n === 0) return;                                   // vibración menor
+  if (residuo > TOL){                                    // AMBIGUO → cola
+    S.pending++;
+    const lo = Math.floor(Math.abs(nRaw)), hi = Math.ceil(Math.abs(nRaw));
+    askConfirm(delta, [lo, hi].filter((v,i,a)=>v>0&&a.indexOf(v)===i));
+    pushEvent({dir: delta>0?'up':'down', kg:delta, n:null, txt:`${delta>0?'Subida':'Bajada'} de ${fmt(Math.abs(delta))} kg — AMBIGUO, esperando confirmación`, amb:true});
+    refresh(); return;
+  }
+  applyStep(delta, Math.abs(n));
+}
+
+function applyStep(delta, n, confirmed){
+  const sign = delta > 0 ? 1 : -1;
+  S.count += sign * n; S.total += delta;
+  if (S.count > 0) S.avg = S.total / S.count;
+  pushEvent({dir: sign>0?'up':'down', kg:delta, n:sign*n,
+    txt: sign>0 ? `Subieron ${n} cerdo${n>1?'s':''} (+${fmt(delta)} kg)`
+                : `Se devolvió ${n} cerdo${n>1?'s':''} (${fmt(delta)} kg) — conteo descontado`,
+    amb:false, conf:confirmed});
+  refresh();
+}
+
+/* --- cola de ambiguos --- */
+function askConfirm(delta, options){
+  const div = document.createElement('div'); div.className='amb';
+  div.innerHTML = `<b>${delta>0?'Subida':'Bajada'} de ${fmt(Math.abs(delta))} kg</b> — el residuo no cuadra con el promedio (${fmt(S.avg)} kg). ¿Cuántos fueron?`;
+  const btns = document.createElement('div'); btns.className='abtns';
+  options.forEach(o=>{
+    const b=document.createElement('button'); b.textContent = `${o} cerdo${o>1?'s':''}`;
+    b.onclick = ()=>{ div.remove(); S.pending--; applyStep(delta, o, true); };
+    btns.appendChild(b);
+  });
+  div.appendChild(btns); $('queue').appendChild(div);
+}
+
+/* --- log --- */
+function pushEvent(e){
+  e.t = now(); S.events.push(e);
+  const div = document.createElement('div');
+  div.className = 'ev ' + (e.amb ? 'amb-ev' : e.dir==='up' ? 'up' : 'down');
+  div.innerHTML = `<span class="t mono">${e.t}</span><span class="badge">${e.amb?'⚠':e.dir==='up'?'⬆':'⬇'}</span>
+    <span class="d">${e.txt}${e.conf?' <span style="color:var(--muted)">· confirmado por operador</span>':''}</span>`;
+  $('log').prepend(div);
+}
+
+/* --- UI --- */
+function setState(s){
+  const el=$('state'); el.className='state '+s;
+  el.textContent = s==='estable'?'ESTABLE':s==='movimiento'?'MOVIMIENTO':'SIN SEÑAL';
+}
+function refresh(){
+  $('tCount').textContent = S.count;
+  $('tTotal').innerHTML = fmt(S.total)+' <em>kg</em>';
+  $('tAvg').innerHTML = (S.avg?fmt(S.avg):'—')+' <em>kg</em>';
+  $('tRef').innerHTML = (S.ref?fmt(S.ref):'—')+' <em>kg</em>';
+  const started = S.ref !== null;
+  ['s1','s2','s3','sNervous'].forEach(id=>$(id).disabled = !S.sessionOpen || !started);
+  $('sBack').disabled = !S.sessionOpen || S.pigs.length===0 || !started;
+  $('bClose').disabled = !started || S.pending>0;
+  $('bRef').disabled = started;
+}
+
+/* --- chart en vivo --- */
+const cv = $('chart'), cx = cv.getContext('2d');
+const hist = [];
+function drawChart(){
+  const css = getComputedStyle(document.documentElement);
+  const grid = css.getPropertyValue('--panel-edge').trim() || '#39443C';
+  const line = css.getPropertyValue('--led').trim() || '#FF4A2E';
+  cx.clearRect(0,0,cv.width,cv.height);
+  const maxY = Math.max(400, ...hist)*1.15;
+  cx.strokeStyle = grid; cx.lineWidth = 1;
+  for(let i=1;i<4;i++){ const y=cv.height*i/4; cx.beginPath(); cx.moveTo(0,y); cx.lineTo(cv.width,y); cx.stroke(); }
+  cx.strokeStyle = line; cx.lineWidth = 2.5; cx.beginPath();
+  hist.forEach((v,i)=>{ const x=i/(hist.length-1||1)*cv.width, y=cv.height-(v/maxY)*cv.height;
+    i?cx.lineTo(x,y):cx.moveTo(x,y); });
+  cx.stroke();
+}
+
+/* --- loop 10 Hz: física + trama + motor --- */
+setInterval(()=>{
+  physTick();
+  const reading = Math.max(0, S.trueW + rnd(-0.25,0.25));
+  $('led').innerHTML = fmt(reading)+' <small>kg</small>';
+  const frame = '='+fmt(reading).replace(/\./g,'').replace(',','.')+'␠';
+  $('ticker').textContent = (frame+'  ').repeat(6)+'— RS-232 · 10 lecturas/s (simulado)';
+  hist.push(reading); if(hist.length>300) hist.shift();
+  drawChart();
+  engineTick(reading);
+},100);
+
+/* --- botones --- */
+$('bRef').onclick = ()=>{ S.sessionOpen = true; $('bRef').disabled = true; addPigs(1); refresh(); $('bRef').disabled = true; };
+$('s1').onclick = ()=>{ addPigs(1); refresh(); };
+$('s2').onclick = ()=>{ addPigs(2); refresh(); };
+$('s3').onclick = ()=>{ addPigs(3); refresh(); };
+$('sBack').onclick = ()=>{ removePig(); refresh(); };
+$('sNervous').onclick = ()=>{ nervous(); refresh(); };
+$('bClose').onclick = ()=>{
+  const dur = S.t0 ? `${S.t0} → ${now()}` : '—';
+  const perPig = S.events.filter(e=>e.n===1&&e.dir==='up').map(e=>e.kg);
+  $('ticketBody').innerHTML = `
+    <div class="trow big"><span>Total</span><b>${fmt(S.total)} kg</b></div>
+    <div class="trow big"><span>Cerdos</span><b>${S.count}</b></div>
+    <div class="trow"><span>Promedio por cerdo</span><b>${fmt(S.avg||0)} kg</b></div>
+    <div class="trow"><span>Eventos registrados</span><b>${S.events.length}</b></div>
+    <div class="trow"><span>Devueltos gestionados</span><b>${S.events.filter(e=>e.dir==='down').length}</b></div>
+    <div class="trow"><span>Confirmaciones del operador</span><b>${S.events.filter(e=>e.conf).length}</b></div>
+    <div class="trow"><span>Horario</span><b class="mono" style="font-size:13px">${dur}</b></div>`;
+  $('ticket').showModal();
+};
+$('tClose2').onclick = ()=>$('ticket').close();
+$('tNew').onclick = ()=>{
+  $('ticket').close();
+  Object.assign(S,{trueW:0,target:0,shaking:0,readings:[],lastStable:0,moving:false,
+    ref:null,avg:null,count:0,total:0,events:[],pending:0,sessionOpen:false,t0:null,pigs:[]});
+  $('log').textContent=''; $('queue').textContent=''; hist.length=0; refresh();
+};
+refresh();
+</script>

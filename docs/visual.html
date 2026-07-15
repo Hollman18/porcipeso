@@ -1,0 +1,401 @@
+<title>PorciPeso — Spec visual</title>
+<style>
+:root{
+  --surface:#F2F4F1; --card:#FFFFFF; --ink:#1B231F; --muted:#57635B;
+  --border:#DDE3DD; --accent:#178A50; --accent-ink:#0F5C36; --accent-soft:#E3F0E8;
+  --amber:#B97E1E; --amber-soft:#F5EAD5;
+  --panel:#202722; --panel-edge:#39443C; --led:#FF4A2E; --led-dim:#5A2A22;
+  --grid:#E4E9E4; --chart-1:#178A50; --chart-warn:#B97E1E;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --surface:#121714; --card:#1B221D; --ink:#E7ECE7; --muted:#97A49A;
+    --border:#2B342D; --accent:#2E9D68; --accent-ink:#7FCBA4; --accent-soft:#1E2F25;
+    --amber:#BA8323; --amber-soft:#2E2617;
+    --panel:#0D1210; --panel-edge:#242E27; --led:#FF5A3C; --led-dim:#4A241C;
+    --grid:#242D26; --chart-1:#2E9D68; --chart-warn:#BA8323;
+  }
+}
+:root[data-theme="light"]{
+  --surface:#F2F4F1; --card:#FFFFFF; --ink:#1B231F; --muted:#57635B;
+  --border:#DDE3DD; --accent:#178A50; --accent-ink:#0F5C36; --accent-soft:#E3F0E8;
+  --amber:#B97E1E; --amber-soft:#F5EAD5;
+  --panel:#202722; --panel-edge:#39443C; --led:#FF4A2E; --led-dim:#5A2A22;
+  --grid:#E4E9E4; --chart-1:#178A50; --chart-warn:#B97E1E;
+}
+:root[data-theme="dark"]{
+  --surface:#121714; --card:#1B221D; --ink:#E7ECE7; --muted:#97A49A;
+  --border:#2B342D; --accent:#2E9D68; --accent-ink:#7FCBA4; --accent-soft:#1E2F25;
+  --amber:#BA8323; --amber-soft:#2E2617;
+  --panel:#0D1210; --panel-edge:#242E27; --led:#FF5A3C; --led-dim:#4A241C;
+  --grid:#242D26; --chart-1:#2E9D68; --chart-warn:#BA8323;
+}
+*{box-sizing:border-box}
+body{background:var(--surface);color:var(--ink);margin:0;
+  font:16px/1.6 "Avenir Next","Helvetica Neue",Helvetica,Arial,sans-serif;}
+.wrap{max-width:1040px;margin:0 auto;padding:40px 20px 80px;display:flex;flex-direction:column;gap:56px}
+h1,h2{font-family:"Avenir Next Condensed","Arial Narrow","Helvetica Neue",sans-serif;
+  text-wrap:balance;line-height:1.08;margin:0;font-weight:700;letter-spacing:.01em}
+h1{font-size:clamp(34px,5vw,52px);text-transform:uppercase}
+h2{font-size:26px;text-transform:uppercase}
+.eyebrow{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent-ink);font-weight:600}
+.lede{color:var(--muted);max-width:62ch;margin:0}
+section{display:flex;flex-direction:column;gap:18px}
+.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;
+  font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.chip.mvp{background:var(--accent-soft);color:var(--accent-ink)}
+.chip.f2{border:1px solid var(--border);color:var(--muted)}
+.chip.warn{background:var(--amber-soft);color:var(--amber)}
+/* ---- indicador / pantalla operador (deliberadamente oscura siempre: es un panel físico) ---- */
+.opscreen{background:var(--panel);border:1px solid var(--panel-edge);border-radius:14px;
+  padding:26px;color:#DDE5DE;display:flex;flex-direction:column;gap:20px}
+.opscreen .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.opscreen .sess{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#8FA096}
+.opscreen .sess b{color:#DDE5DE}
+.led-wrap{display:flex;flex-direction:column;gap:6px;align-items:center;padding:18px 10px;
+  background:#0A0E0B;border-radius:10px;border:1px solid var(--panel-edge)}
+.led{font-family:"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;
+  font-size:clamp(48px,9vw,84px);font-weight:700;letter-spacing:.06em;color:var(--led);
+  text-shadow:0 0 18px color-mix(in srgb,var(--led) 45%,transparent)}
+.led small{font-size:.38em;color:var(--led);opacity:.85}
+.ticker{font-family:"SF Mono",Menlo,monospace;font-size:12px;color:#6E7F74;letter-spacing:.12em;
+  white-space:nowrap;overflow:hidden;max-width:100%}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.tile{background:#161C18;border:1px solid var(--panel-edge);border-radius:8px;padding:12px 14px}
+.tile .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8FA096}
+.tile .v{font-family:"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-size:24px;font-weight:600;margin-top:2px}
+.tile .v em{font-style:normal;font-size:13px;color:#8FA096}
+.tile.warn{border-color:var(--amber)}
+.tile.warn .v{color:#E8B95B}
+/* ---- chart ---- */
+.chart-card{padding:22px 22px 10px}
+.chart-scroll{overflow-x:auto}
+svg text{font-family:"Avenir Next","Helvetica Neue",sans-serif}
+.tt{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--border);
+  border-radius:8px;padding:8px 12px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.18);
+  opacity:0;transition:opacity .12s;z-index:10;max-width:240px}
+@media (prefers-reduced-motion: reduce){.tt{transition:none}}
+/* ---- pasos ---- */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+.step .n{font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-weight:700;
+  color:var(--accent-ink);font-size:15px;letter-spacing:.08em;text-transform:uppercase}
+.step p{margin:6px 0 0;font-size:14px;color:var(--muted)}
+.step p b{color:var(--ink)}
+.formula{background:var(--accent-soft);border:1px solid var(--border);border-radius:10px;
+  padding:14px 18px;font-size:15px}
+/* ---- arquitectura ---- */
+.arch{display:flex;gap:0;align-items:stretch;overflow-x:auto;padding-bottom:6px}
+.node{flex:1 1 0;min-width:190px;background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:16px}
+.node h3{margin:0 0 4px;font-size:15px;font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;
+  text-transform:uppercase;letter-spacing:.06em}
+.node ul{margin:8px 0 0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.node li{font-size:13px;color:var(--muted)}
+.node li b{color:var(--ink);font-weight:600}
+.link{flex:0 0 34px;display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:20px}
+.linklab{display:block;font-size:10px;color:var(--muted);text-align:center;letter-spacing:.08em}
+/* ---- paridad ---- */
+.parity{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.pcard{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;
+  display:flex;flex-direction:column;gap:8px}
+.pcard h3{margin:0;font-size:15px}
+.pcard p{margin:0;font-size:13px;color:var(--muted)}
+/* ---- datos ---- */
+.datagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.field{font-family:"SF Mono",Menlo,monospace;font-size:11.5px;padding:3px 8px;border-radius:6px;
+  background:var(--surface);border:1px solid var(--border);color:var(--muted)}
+.field.hl{color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+ol.open{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:8px;color:var(--muted)}
+ol.open b{color:var(--ink)}
+footer{font-size:13px;color:var(--muted);border-top:1px solid var(--border);padding-top:16px}
+a{color:var(--accent-ink)}
+</style>
+
+<div class="wrap">
+
+<header style="display:flex;flex-direction:column;gap:12px">
+  <span class="eyebrow">Spec visual · v0.1 · 2026-07-15</span>
+  <h1>PorciPeso — pesaje porcino por lote</h1>
+  <p class="lede">Un indicador serial económico manda el <b>peso crudo</b> por RS-232/RS-485.
+  El software hace todo lo demás: cuenta los cerdos, registra cada evento con hora exacta,
+  calcula la estadística del lote y la transmite en tiempo real. Paridad funcional con el
+  PTM Advance Control Weight.</p>
+</header>
+
+<!-- ============ 1. PANTALLA DEL OPERADOR ============ -->
+<section>
+  <h2>1 · La pantalla del operador, en vivo</h2>
+  <p class="lede">Así se ve la sesión mientras suben los cerdos. El panel replica la lógica de un
+  indicador físico: peso gigante, conteo y promedio siempre visibles.</p>
+  <div class="opscreen">
+    <div class="row">
+      <span class="sess">Lote <b>L-2407</b> · Corral <b>C-14</b> · Destino <b>Planta Norte</b> · Placa <b>WXY-834</b></span>
+      <span class="chip mvp">Sesión abierta · 10:02:14</span>
+    </div>
+    <div class="led-wrap">
+      <div class="led" id="led">875.5 <small>kg</small></div>
+      <div class="ticker" aria-hidden="true">=875.5␠&nbsp;&nbsp;=875.5␠&nbsp;&nbsp;=875.5␠&nbsp;&nbsp;=875.5␠&nbsp;&nbsp;=875.5␠&nbsp;&nbsp;=875.5␠&nbsp;&nbsp;— trama RS-232 · 10 lecturas/s</div>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">Cerdos contados</div><div class="v">9</div></div>
+      <div class="tile"><div class="k">Promedio real</div><div class="v">97.3 <em>kg</em></div></div>
+      <div class="tile"><div class="k">Peso referencia</div><div class="v">102.5 <em>kg</em></div></div>
+      <div class="tile"><div class="k">Último delta</div><div class="v">+312.0 <em>kg · 3 cerdos</em></div></div>
+      <div class="tile warn"><div class="k">Por confirmar</div><div class="v">1 <em>evento ambiguo</em></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. CÓMO FUNCIONA EN PROMEDIO ============ -->
+<section>
+  <h2>2 · Cómo funciona el conteo por promedio</h2>
+  <p class="lede">El software vigila el stream y detecta <b>escalones estables</b>. Cada escalón se divide
+  por el promedio vigente para saber cuántos cerdos subieron — y el promedio se auto-corrige con cada evento.</p>
+
+  <div class="card chart-card">
+    <div style="font-weight:600;margin-bottom:2px">Peso acumulado del lote L-2407 — sesión de las 10:02</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:8px">kg en plataforma vs. hora · cada punto = escalón estable registrado</div>
+    <div class="chart-scroll">
+    <svg id="stair" viewBox="0 0 920 340" width="100%" style="min-width:680px" role="img"
+         aria-label="Gráfico de escalera: el peso acumulado sube en escalones a medida que suben cerdos">
+      <!-- grid -->
+      <g stroke="var(--grid)" stroke-width="1">
+        <line x1="70" y1="290" x2="900" y2="290"/><line x1="70" y1="225" x2="900" y2="225"/>
+        <line x1="70" y1="160" x2="900" y2="160"/><line x1="70" y1="95"  x2="900" y2="95"/>
+        <line x1="70" y1="30"  x2="900" y2="30"/>
+      </g>
+      <g fill="var(--muted)" font-size="12" text-anchor="end">
+        <text x="62" y="294">0</text><text x="62" y="229">250</text><text x="62" y="164">500</text>
+        <text x="62" y="99">750</text><text x="62" y="34">1 000</text>
+      </g>
+      <g fill="var(--muted)" font-size="12" text-anchor="middle">
+        <text x="120" y="312">10:02</text><text x="290" y="312">10:04</text><text x="450" y="312">10:05</text>
+        <text x="620" y="312">10:07</text><text x="790" y="312">10:09</text>
+      </g>
+      <!-- escalera: y = 290 - kg*0.26 -->
+      <path d="M 80 290 H 120 V 263.4 H 290 V 209.5 H 450 V 183.9 H 620 V 143.5 H 790 V 62.4 H 900"
+            fill="none" stroke="var(--chart-1)" stroke-width="2" stroke-linejoin="round"/>
+      <!-- marcas de evento -->
+      <g>
+        <circle class="ev" cx="120" cy="263.4" r="5" fill="var(--chart-1)" stroke="var(--card)" stroke-width="2"
+          data-tt="10:02:14 · Seteo referencia&#10;1 cerdo · 102.5 kg → peso_ref"/>
+        <circle class="ev" cx="290" cy="209.5" r="5" fill="var(--chart-1)" stroke="var(--card)" stroke-width="2"
+          data-tt="10:04:02 · +207.0 kg&#10;207.0 / 102.5 = 2.02 → 2 cerdos&#10;promedio → 103.2 kg"/>
+        <circle class="ev" cx="450" cy="183.9" r="5" fill="var(--chart-1)" stroke="var(--card)" stroke-width="2"
+          data-tt="10:05:31 · +98.5 kg&#10;98.5 / 103.2 = 0.95 → 1 cerdo&#10;promedio → 102.0 kg"/>
+        <circle class="ev" cx="620" cy="143.5" r="6" fill="var(--chart-warn)" stroke="var(--card)" stroke-width="2"
+          data-tt="10:07:12 · +155.5 kg · AMBIGUO&#10;155.5 / 102.0 = 1.52 → ¿1 o 2?&#10;→ cola de confirmación (operador: 2)"/>
+        <circle class="ev" cx="790" cy="62.4" r="5" fill="var(--chart-1)" stroke="var(--card)" stroke-width="2"
+          data-tt="10:09:47 · +312.0 kg&#10;312.0 / 96.9 = 3.2 → 3 cerdos&#10;promedio → 97.3 kg"/>
+      </g>
+      <!-- etiquetas directas selectivas -->
+      <g font-size="12" fill="var(--ink)">
+        <text x="128" y="256">ref: 102.5 kg</text>
+        <text x="298" y="202">+2 cerdos</text>
+        <text x="628" y="170" fill="var(--chart-warn)" font-weight="600">± ambiguo: ¿1 o 2?</text>
+        <text x="700" y="55">+3 cerdos → 875.5 kg</text>
+      </g>
+    </svg>
+    </div>
+    <div style="font-size:12px;color:var(--muted);padding:6px 2px 10px">
+      ● verde = escalón confirmado &nbsp;·&nbsp; ● ámbar = requiere confirmación del operador (nunca se resuelve en silencio)
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step"><div class="n">Paso 1 · Setear</div>
+      <p>Se pesa <b>un cerdo solo</b>. Ese valor queda como <b>peso de referencia</b> (102.5 kg).</p></div>
+    <div class="step"><div class="n">Paso 2 · Detectar</div>
+      <p>El stream se estabiliza (varianza &lt; umbral por 2 s) → el software registra el <b>escalón</b> con hora exacta.</p></div>
+    <div class="step"><div class="n">Paso 3 · Contar</div>
+      <p><b>Δpeso ÷ promedio vigente</b>, redondeado = cerdos que subieron. Si el residuo &gt; 20 %, el evento queda <b>ambiguo</b>.</p></div>
+    <div class="step"><div class="n">Paso 4 · Auto-corregir</div>
+      <p>El promedio se recalcula: <b>acumulado ÷ conteo</b>. Cada escalón calibra el siguiente — el error no se acumula.</p></div>
+  </div>
+  <div class="formula mono">n = round(Δpeso / promedio_móvil) &nbsp;&nbsp;·&nbsp;&nbsp; promedio_móvil = peso_acumulado / conteo_total</div>
+</section>
+
+<!-- ============ 3. DEVUELTOS ============ -->
+<section>
+  <h2>3 · ¿Y si un cerdo se devuelve?</h2>
+  <p class="lede">Depende de la geometría de la báscula. El software soporta ambas; el video de la operación
+  real define cuál queda como principal.</p>
+  <div class="datagrid">
+    <div class="card">
+      <span class="chip mvp">Modo A · Plataforma que acumula</span>
+      <p style="font-size:14px;color:var(--muted);margin:12px 0 8px">Los cerdos se quedan sobre la báscula.
+      El conteo se deriva del <b style="color:var(--ink)">peso neto en plataforma</b>, así que la resta con signo lo resuelve sola:</p>
+      <div class="fields" style="margin-bottom:8px">
+        <span class="field hl">+300 kg → +3 cerdos</span>
+        <span class="field" style="color:var(--amber);border-color:var(--amber)">−101 kg → se bajó 1</span>
+        <span class="field hl">+101 kg → volvió a subir</span>
+      </div>
+      <p style="font-size:14px;color:var(--muted);margin:0">Neto del ciclo: <b style="color:var(--ink)">cuenta exactamente una vez</b>.
+      La báscula no sabe mentir: el conteo nunca contradice los kilos que están encima.</p>
+    </div>
+    <div class="card">
+      <span class="chip warn">Modo B · Báscula de paso</span>
+      <p style="font-size:14px;color:var(--muted);margin:12px 0 8px">El cerdo cruza y sale (0 → peso → 0). La celda de carga
+      <b style="color:var(--ink)">no puede distinguir dirección</b> — un cruce hacia atrás se ve idéntico. Tres defensas, en orden:</p>
+      <ol class="open" style="font-size:14px">
+        <li><b>Puerta antirretorno</b> a la salida (fierro, recomendada): el cerdo no puede volver a pisar la báscula.</li>
+        <li><b>Par de fotoceldas IR</b>: corta A→B = adelante (+1); B→A = devuelto (−1). ~USD 50.</li>
+        <li><b>Red de seguridad</b> (siempre activa): peso repetido ±3 % en &lt; 60 s → ámbar "¿posible devuelto?" + conciliación contra el conteo físico del camión al cerrar.</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. ARQUITECTURA ============ -->
+<section>
+  <h2>4 · Arquitectura</h2>
+  <p class="lede">El indicador es tonto; el software es listo. Cualquier indicador que transmita peso por serial
+  entra con un perfil de trama.</p>
+  <div class="arch">
+    <div class="node">
+      <h3>Indicador</h3>
+      <ul>
+        <li><b>Matrix</b> · trama <span class="mono">=X6…X1␠</span></li>
+        <li><b>XK3190-A12E</b> · ASCII continuo</li>
+        <li><b>Tuxon S</b> · ASCII / Modbus RTU</li>
+        <li>10 lecturas por segundo</li>
+      </ul>
+    </div>
+    <div class="link"><div><span aria-hidden="true">→</span><span class="linklab">RS-232 · RS-485<br>o serial→TCP</span></div></div>
+    <div class="node">
+      <h3>PC granja · Core</h3>
+      <ul>
+        <li><b>Adquisición</b> · parser por perfil</li>
+        <li><b>Motor FSM</b> · escalones estables</li>
+        <li><b>Conteo</b> · promedio auto-corregido</li>
+        <li>Pantalla del operador (kiosk)</li>
+      </ul>
+    </div>
+    <div class="link"><div><span aria-hidden="true">→</span><span class="linklab">append-only</span></div></div>
+    <div class="node">
+      <h3>Base local</h3>
+      <ul>
+        <li><b>SQLite</b> · WAL · offline-first</li>
+        <li>Sesiones · eventos · crudas</li>
+        <li>Auditoría: nada se borra</li>
+        <li>Replay de sesiones grabadas</li>
+      </ul>
+    </div>
+    <div class="link"><div><span aria-hidden="true">→</span><span class="linklab">WebSocket<br>store &amp; forward</span></div></div>
+    <div class="node">
+      <h3>Dashboard remoto</h3>
+      <ul>
+        <li><b>Peso vivo</b> + eventos en tiempo real</li>
+        <li>Estadística por sesión y lote</li>
+        <li>Export Excel / PDF · tiquete</li>
+        <li>Si cae internet: se reenvía al volver</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. PARIDAD PTM ============ -->
+<section>
+  <h2>5 · Paridad con PTM Advance Control Weight</h2>
+  <div class="parity">
+    <div class="pcard"><span class="chip mvp">MVP</span><h3>F1 · Animales en movimiento</h3>
+      <p>Estabilización estadística sobre el stream: media recortada en ventana de 2 s, tolerante a cerdos inquietos.</p></div>
+    <div class="pcard"><span class="chip mvp">MVP</span><h3>F2 · Muestreo de ganancia</h3>
+      <p>Sesiones recurrentes por lote/corral; comparación automática contra el pesaje anterior.</p></div>
+    <div class="pcard"><span class="chip mvp">MVP</span><h3>F3 · Uniformidad por corral</h3>
+      <p>Desviación estándar, CV % y % de animales dentro de ±10 % del promedio, por sesión.</p></div>
+    <div class="pcard"><span class="chip f2">Fase 2</span><h3>F4 · Conversión alimenticia</h3>
+      <p>Requiere registrar consumo de alimento; el modelo de datos ya lo contempla.</p></div>
+    <div class="pcard"><span class="chip f2">Fase 2</span><h3>F5 · Salud y bienestar</h3>
+      <p>Alertas por peso fuera de rango, caída de ganancia diaria y CV % alto (lote desuniforme).</p></div>
+    <div class="pcard"><span class="chip mvp">MVP</span><h3>F6 · Registro y memoria</h3>
+      <p>Base local ilimitada y auditable — supera la memoria interna de cualquier indicador.</p></div>
+    <div class="pcard"><span class="chip mvp">MVP</span><h3>F7 · Export y software PC</h3>
+      <p>Excel/PDF + dashboard web en tiempo real (PTM exporta por USB; aquí es streaming).</p></div>
+    <div class="pcard"><span class="chip mvp">MVP</span><h3>F8 · Tiquete</h3>
+      <p>Tiquete PDF o impresora térmica al cerrar sesión: totales, conteo, promedio, horas.</p></div>
+  </div>
+</section>
+
+<!-- ============ 5. DATOS ============ -->
+<section>
+  <h2>6 · Todo queda registrado</h2>
+  <div class="datagrid">
+    <div class="card">
+      <b>Sesión</b> <span style="color:var(--muted);font-size:13px">— cabecera del lote</span>
+      <div class="fields">
+        <span class="field hl">hora_entrada</span><span class="field hl">hora_salida</span>
+        <span class="field hl">lote</span><span class="field">granja</span><span class="field">corral_origen</span>
+        <span class="field">destino</span><span class="field">placa</span><span class="field">conductor</span>
+        <span class="field">operador</span><span class="field">bascula</span><span class="field">peso_ref</span>
+        <span class="field">total_kg</span><span class="field">total_animales</span><span class="field">promedio</span>
+        <span class="field">conteo_fisico</span><span class="field">diferencia_conciliacion</span>
+      </div>
+    </div>
+    <div class="card">
+      <b>Evento de pesaje</b> <span style="color:var(--muted);font-size:13px">— cada escalón</span>
+      <div class="fields">
+        <span class="field hl">timestamp_ms</span><span class="field">peso_antes</span><span class="field">peso_después</span>
+        <span class="field hl">delta_kg</span><span class="field hl">animales_estimados</span>
+        <span class="field">animales_confirmados</span><span class="field">estabilización_ms</span>
+        <span class="field">tipo</span><span class="field">ambiguo</span><span class="field">confirmado_por</span>
+        <span class="field">motivo_bajada</span><span class="field">evento_relacionado</span>
+      </div>
+    </div>
+    <div class="card">
+      <b>Lecturas crudas</b> <span style="color:var(--muted);font-size:13px">— 10 Hz, activable</span>
+      <div class="fields">
+        <span class="field">timestamp_ms</span><span class="field">kg</span><span class="field">sesion</span>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin:10px 0 0">Permiten <b>re-procesar</b> cualquier sesión con el
+      algoritmo mejorado, sin volver a la granja.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. ABIERTAS ============ -->
+<section>
+  <h2>7 · Decisiones abiertas</h2>
+  <div class="card">
+    <ol class="open">
+      <li><b>¿El peso factura la venta?</b> Si sí, el indicador debe ser Clase III certificado (Sensocar SCA31); si es control interno, el Matrix basta.</li>
+      <li><b>PC de granja:</b> ¿Windows existente o mini-PC dedicado (~USD 150, más robusto al polvo)?</li>
+      <li><b>¿Cuántas básculas simultáneas?</b> Define si RS-485 multidrop entra al MVP.</li>
+      <li><b>Ficha técnica PTM:</b> está tras login del fabricante — si la consiguen, contrastamos paridad exacta.</li>
+    </ol>
+  </div>
+</section>
+
+<footer>PorciPeso · spec v0.1 · documentos completos en <span class="mono">~/pesaje_porcinos/docs/</span> (SPEC.md · ARQUITECTURA.md)</footer>
+</div>
+
+<div class="tt" id="tt"></div>
+<script>
+(function(){
+  var tt=document.getElementById('tt');
+  document.querySelectorAll('.ev').forEach(function(c){
+    function show(e){
+      tt.textContent='';
+      c.getAttribute('data-tt').split('\n').forEach(function(l,i){
+        var d=document.createElement('div'); if(i===0)d.style.fontWeight='600';
+        d.textContent=l; tt.appendChild(d);
+      });
+      tt.style.opacity='1';
+      var x=Math.min(e.clientX+14,window.innerWidth-260), y=e.clientY+14;
+      tt.style.left=x+'px'; tt.style.top=y+'px';
+    }
+    c.addEventListener('mousemove',show);
+    c.addEventListener('mouseleave',function(){tt.style.opacity='0';});
+    c.setAttribute('tabindex','0');
+    c.addEventListener('focus',function(){
+      var r=c.getBoundingClientRect();
+      show({clientX:r.left,clientY:r.top});
+    });
+    c.addEventListener('blur',function(){tt.style.opacity='0';});
+  });
+})();
+</script>
