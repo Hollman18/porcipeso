@@ -50,14 +50,39 @@ class Repo:
     crudas (SPEC §5: opcional, a 10 Hz solo para auditoría/replay).
     """
 
-    def __init__(self, path: str | Path, store_readings: bool = True) -> None:
+    #: Tope de filas en lecturas_crudas (a 10 Hz ≈ 5.5 h de stream).
+    #: Al superarlo se borran las más VIEJAS pero SOLO de sesiones no
+    #: abiertas (cerradas/anuladas o sin sesión): la sesión en curso
+    #: nunca pierde su replay. El chequeo corre cada
+    #: ``prune_check_every`` inserciones para no pagar un COUNT(*) por
+    #: cada lectura a 10 Hz.
+    DEFAULT_MAX_RAW_READINGS = 200_000
+    DEFAULT_PRUNE_CHECK_EVERY = 500
+
+    def __init__(
+        self,
+        path: str | Path,
+        store_readings: bool = True,
+        *,
+        max_raw_readings: int = DEFAULT_MAX_RAW_READINGS,
+        prune_check_every: int = DEFAULT_PRUNE_CHECK_EVERY,
+    ) -> None:
         self.path = Path(path)
         self.store_readings = store_readings
+        self.max_raw_readings = max_raw_readings
+        self.prune_check_every = max(1, prune_check_every)
+        self._inserts_since_prune = 0
         init_db(self.path)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # WAL verificado en runtime: si el FS no lo soporta, fallar claro.
+        (mode,) = self._conn.execute("PRAGMA journal_mode=WAL").fetchone()
+        if str(mode).lower() != "wal":
+            raise RuntimeError(
+                f"SQLite no pudo activar WAL en {self.path} (journal_mode={mode})"
+            )
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA foreign_keys=ON")
 
     def close(self) -> None:
@@ -88,10 +113,42 @@ class Repo:
             ).fetchone()
         return dict(row) if row else None
 
-    def list_sessions(self) -> list[dict[str, Any]]:
+    @staticmethod
+    def _session_filters(
+        desde: Optional[str], hasta: Optional[str], q: Optional[str] = None
+    ) -> tuple[str, list[Any]]:
+        """WHERE compartido por list_sessions y stats_global.
+
+        ``desde``/``hasta`` son fechas ISO (YYYY-MM-DD) inclusivas sobre
+        ``hora_entrada``; ``q`` busca subcadena en lote/corral/destino.
+        """
+        conds: list[str] = []
+        params: list[Any] = []
+        if desde:
+            conds.append("date(hora_entrada) >= date(?)")
+            params.append(desde)
+        if hasta:
+            conds.append("date(hora_entrada) <= date(?)")
+            params.append(hasta)
+        if q:
+            conds.append(
+                "(lote LIKE ? OR corral_origen LIKE ? OR destino LIKE ?)"
+            )
+            like = f"%{q}%"
+            params.extend([like, like, like])
+        where = f" WHERE {' AND '.join(conds)}" if conds else ""
+        return where, params
+
+    def list_sessions(
+        self,
+        desde: Optional[str] = None,
+        hasta: Optional[str] = None,
+        q: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        where, params = self._session_filters(desde, hasta, q)
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM sesiones ORDER BY id DESC"
+                f"SELECT * FROM sesiones{where} ORDER BY id DESC", params
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -212,6 +269,39 @@ class Repo:
                 (ts_ms, kg, sesion_id),
             )
             self._conn.commit()
+        self._inserts_since_prune += 1
+        if self._inserts_since_prune >= self.prune_check_every:
+            self._inserts_since_prune = 0
+            self.prune_readings()
+
+    def prune_readings(self) -> int:
+        """Retención de lecturas crudas (ver DEFAULT_MAX_RAW_READINGS).
+
+        Si el total supera ``max_raw_readings`` borra el excedente
+        empezando por las lecturas más viejas de sesiones NO abiertas
+        (incluye lecturas sin sesión). Las lecturas de sesiones abiertas
+        jamás se tocan, aunque el tope quede excedido temporalmente.
+        Retorna cuántas filas se borraron.
+        """
+        with self._lock:
+            (total,) = self._conn.execute(
+                "SELECT COUNT(*) FROM lecturas_crudas"
+            ).fetchone()
+            excess = int(total) - self.max_raw_readings
+            if excess <= 0:
+                return 0
+            cur = self._conn.execute(
+                """DELETE FROM lecturas_crudas WHERE rowid IN (
+                       SELECT lc.rowid FROM lecturas_crudas lc
+                       LEFT JOIN sesiones s ON s.id = lc.sesion_id
+                       WHERE s.id IS NULL OR s.estado != 'abierta'
+                       ORDER BY lc.ts_ms, lc.rowid
+                       LIMIT ?
+                   )""",
+                (excess,),
+            )
+            self._conn.commit()
+            return int(cur.rowcount)
 
     def count_readings(self, sesion_id: int) -> int:
         with self._lock:
@@ -222,6 +312,57 @@ class Repo:
         return int(n)
 
     # ---------------------------------------------------------------- stats
+
+    def stats_global(
+        self, desde: Optional[str] = None, hasta: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Agregado global + por lote (Módulo Datos), calculado en SQL.
+
+        Cuenta TODAS las sesiones del rango; los kg/animales solo suman
+        donde hay totales (es decir, sesiones cerradas — las abiertas
+        aún no tienen snapshot final y SUM ignora sus NULL).
+        """
+        where, params = self._session_filters(desde, hasta)
+        with self._lock:
+            g = self._conn.execute(
+                f"""SELECT COUNT(*)                        AS sesiones,
+                           COALESCE(SUM(total_animales), 0) AS total_animales,
+                           COALESCE(SUM(total_kg), 0.0)     AS total_kg
+                    FROM sesiones{where}""",
+                params,
+            ).fetchone()
+            lotes = self._conn.execute(
+                f"""SELECT COALESCE(lote, '(sin lote)')      AS lote,
+                           COUNT(*)                          AS sesiones,
+                           COALESCE(SUM(total_animales), 0)  AS animales,
+                           COALESCE(SUM(total_kg), 0.0)      AS kg,
+                           MAX(hora_entrada)                 AS ultima_fecha
+                    FROM sesiones{where}
+                    GROUP BY COALESCE(lote, '(sin lote)')
+                    ORDER BY ultima_fecha DESC""",
+                params,
+            ).fetchall()
+
+        def _prom(kg: float, animales: int) -> Optional[float]:
+            return round(kg / animales, 3) if animales else None
+
+        return {
+            "sesiones": int(g["sesiones"]),
+            "total_animales": int(g["total_animales"]),
+            "total_kg": round(float(g["total_kg"]), 3),
+            "promedio_global": _prom(g["total_kg"], g["total_animales"]),
+            "por_lote": [
+                {
+                    "lote": r["lote"],
+                    "sesiones": int(r["sesiones"]),
+                    "animales": int(r["animales"]),
+                    "kg": round(float(r["kg"]), 3),
+                    "promedio": _prom(r["kg"], r["animales"]),
+                    "ultima_fecha": r["ultima_fecha"],
+                }
+                for r in lotes
+            ],
+        }
 
     def stats(self, session_id: int) -> dict[str, Any]:
         """Estadística de la sesión (SPEC §6, por sesión).

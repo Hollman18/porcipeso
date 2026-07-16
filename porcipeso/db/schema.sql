@@ -58,3 +58,4 @@ CREATE INDEX IF NOT EXISTS idx_eventos_ambiguo   ON eventos_pesaje(sesion_id, am
   WHERE ambiguo = 1;
 CREATE INDEX IF NOT EXISTS idx_lecturas_sesion   ON lecturas_crudas(sesion_id, ts_ms);
 CREATE INDEX IF NOT EXISTS idx_sesiones_estado   ON sesiones(estado);
+CREATE INDEX IF NOT EXISTS idx_sesiones_hora_entrada ON sesiones(hora_entrada);

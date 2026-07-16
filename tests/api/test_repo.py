@@ -118,6 +118,38 @@ def test_insert_reading_respetando_flag(tmp_path):
     off.close()
 
 
+def test_retencion_lecturas_crudas(tmp_path):
+    """Tope de lecturas: borra las más viejas de sesiones CERRADAS;
+    la sesión abierta nunca pierde lecturas."""
+    repo = Repo(tmp_path / "ret.db", max_raw_readings=50, prune_check_every=10)
+    cerrada = repo.create_session({"lote": "vieja"})
+    for i in range(40):
+        repo.insert_reading(cerrada, 1000 + i, 100.0)
+    repo.close_session(cerrada, {"total_kg": 100.0, "count": 1, "avg_kg": 100.0})
+
+    abierta = repo.create_session({"lote": "en-curso"})
+    for i in range(30):
+        repo.insert_reading(abierta, 50_000 + i, 200.0)
+
+    repo.prune_readings()  # forzar el chequeo final
+    n_abierta = repo.count_readings(abierta)
+    n_cerrada = repo.count_readings(cerrada)
+    assert n_abierta == 30                      # intocable (sesión abierta)
+    assert n_cerrada + n_abierta <= 50          # tope respetado
+    assert n_cerrada == 20                      # se fueron las 20 más viejas
+    repo.close()
+
+
+def test_prune_no_borra_si_todo_es_sesion_abierta(tmp_path):
+    repo = Repo(tmp_path / "ret2.db", max_raw_readings=10, prune_check_every=1000)
+    abierta = repo.create_session({"lote": "L"})
+    for i in range(20):
+        repo.insert_reading(abierta, 1000 + i, 100.0)
+    assert repo.prune_readings() == 0
+    assert repo.count_readings(abierta) == 20
+    repo.close()
+
+
 # --------------------------------------------------------------------- stats
 
 def test_stats_con_datos_conocidos(repo):

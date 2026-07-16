@@ -2,60 +2,11 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PorciPeso — Pesajes anteriores</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐷</text></svg>">
-<link rel="stylesheet" href="styles.css">
+<meta http-equiv="refresh" content="0; url=index.html#datos">
+<title>PorciPeso — Datos</title>
+<script>location.replace('index.html#datos');</script>
 </head>
 <body>
-<div class="wrap">
-
-  <div class="banner banner-err" id="apiBanner" role="alert">
-    <span class="dot"></span><span>No encuentro el programa de la báscula — revisa que el computador esté encendido</span>
-  </div>
-  <div class="banner banner-practice" id="practiceBanner">
-    <span class="dot"></span><span>Modo práctica — estos pesajes son de ejemplo</span>
-  </div>
-
-  <!-- ===== LISTA ===== -->
-  <section class="view active" id="viewLista">
-    <div class="mini-top">
-      <a class="btn-link" id="linkVolver" href="index.html">◂ Volver a pesar</a>
-      <span class="title">Pesajes anteriores</span>
-      <div class="grow"></div>
-      <button class="btn-link" id="bRefresh">Actualizar</button>
-    </div>
-    <div class="list-cards" id="listCards">
-      <p class="empty">Cargando pesajes…</p>
-    </div>
-  </section>
-
-  <!-- ===== DETALLE ===== -->
-  <section class="view" id="viewDetalle">
-    <div class="mini-top">
-      <button class="btn-link" id="bBack">◂ Todos los pesajes</button>
-      <div class="grow"></div>
-      <button class="btn-primary" id="bExport" style="min-height:52px">Descargar Excel</button>
-    </div>
-
-    <div class="done-head">
-      <h2 id="dNombre">Pesaje</h2>
-      <div class="sub" id="dCuando"></div>
-    </div>
-
-    <div class="rcards" id="dCards"></div>
-    <div class="verdict" id="dVerdict" hidden></div>
-    <p class="empty" id="dExtra" style="text-align:center" hidden></p>
-
-    <details class="moves" open>
-      <summary>Lo que pasó, paso a paso</summary>
-      <div class="moves-list" id="dMoves"></div>
-    </details>
-  </section>
-
-  <footer>PorciPeso · la báscula que te habla claro</footer>
-</div>
-
-<script src="historial.js"></script>
+<p>El historial ahora vive en el módulo <a href="index.html#datos">Datos</a>.</p>
 </body>
 </html>

@@ -21,16 +21,26 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from porcipeso.api.simlive import SimLiveScale
 from porcipeso.core.interfaces import Engine
-from porcipeso.core.models import EngineConfig, Reading, WeighEvent
+from porcipeso.core.models import EngineConfig, Reading, ScaleProfile, WeighEvent
 from porcipeso.db.repo import Repo
+
+#: perfil sintético que reporta scale/status cuando manda la báscula simulada
+SIM_PROFILE = ScaleProfile(
+    id="simulador",
+    name="Báscula simulada (interactiva)",
+    brand="PorciPeso",
+    parser="sim",
+    transport="sim",
+)
 
 XLSX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -115,6 +125,13 @@ class MotivoBody(BaseModel):
     motivo: str
 
 
+class SimActionBody(BaseModel):
+    action: Literal["pigs_on", "pig_off", "nervous", "silence"]
+    n: Optional[int] = None            # pigs_on (default 1)
+    kg_each: Optional[float] = None    # pigs_on (default: gauss 102±6)
+    seconds: Optional[float] = None    # nervous (default 3.0) / silence (4.0)
+
+
 # ------------------------------------------------------------------ fábricas
 
 def _default_engine_factory(
@@ -167,6 +184,8 @@ def create_app(
     st.driver_error = None
     st.last_reading = None
     st.last_reading_broadcast = 0.0
+    st.sim = None                 # SimLiveScale activa (o None)
+    st.event_id_map = {}          # id de DB -> id interno del engine
 
     # ----------------------------------------------------------- wiring motor
 
@@ -183,8 +202,11 @@ def create_app(
     def on_engine_event(event: WeighEvent) -> None:
         if event.session_id is None and st.current_session_id is not None:
             event.session_id = st.current_session_id
-        event.id = repo.insert_event(event)
-        stored = repo.get_event(event.id)
+        # NO se pisa event.id: el engine usa su id interno en confirm();
+        # el mapa traduce el id de DB (el que ve la API) al del engine.
+        db_id = repo.insert_event(event)
+        st.event_id_map[db_id] = event.id if event.id is not None else db_id
+        stored = repo.get_event(db_id)
         if stored is not None:
             hub.broadcast({"type": "event", **stored})
         broadcast_snapshot()
@@ -225,6 +247,10 @@ def create_app(
             )
 
     def stop_driver() -> None:
+        """Detiene lo que esté alimentando lecturas (driver real o sim)."""
+        if st.sim is not None:
+            st.sim.stop()
+            st.sim = None
         if st.driver_stop is not None:
             st.driver_stop.set()
         if st.driver_thread is not None and st.driver_thread.is_alive():
@@ -314,6 +340,55 @@ def create_app(
             "error": st.driver_error,
         }
 
+    # ------------------------------------------------------- simulador vivo
+
+    @app.post("/api/sim/start")
+    def sim_start() -> dict[str, Any]:
+        """Conecta la báscula SIMULADA (detiene un driver real si lo había).
+
+        Equivale a scale/connect con el perfil "simulador": las lecturas
+        entran por el mismo on_reading (engine + lecturas_crudas + WS) y
+        scale/status refleja connected=true / profile_id="simulador".
+        """
+        stop_driver()
+        ensure_engine()
+        sim = SimLiveScale(on_reading).start()
+        st.sim = sim
+        st.driver_error = None
+        st.driver_profile = SIM_PROFILE
+        st.driver_thread = sim.thread
+        return {"connected": True, "profile_id": SIM_PROFILE.id,
+                "transport": SIM_PROFILE.transport, **sim.status()}
+
+    @app.post("/api/sim/action")
+    def sim_action(body: SimActionBody) -> dict[str, Any]:
+        sim: Optional[SimLiveScale] = st.sim
+        if sim is None or not sim.running:
+            raise HTTPException(
+                409,
+                "el simulador no está iniciado: llama primero a POST /api/sim/start",
+            )
+        try:
+            if body.action == "pigs_on":
+                estado = sim.pigs_on(body.n or 1, body.kg_each)
+            elif body.action == "pig_off":
+                estado = sim.pig_off()
+            elif body.action == "nervous":
+                estado = sim.nervous(body.seconds if body.seconds is not None else 3.0)
+            else:  # silence
+                estado = sim.silence(body.seconds if body.seconds is not None else 4.0)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"action": body.action, **estado}
+
+    @app.post("/api/sim/stop")
+    def sim_stop() -> dict[str, Any]:
+        was_running = st.sim is not None
+        stop_driver()
+        return {"connected": False, "stopped": was_running}
+
+    # --------------------------------------------------------------- sesiones
+
     @app.post("/api/sessions", status_code=201)
     def create_session(body: SessionBody) -> dict[str, Any]:
         data = body.model_dump(exclude_none=True)
@@ -330,8 +405,20 @@ def create_app(
         return session
 
     @app.get("/api/sessions")
-    def list_sessions() -> list[dict[str, Any]]:
-        return repo.list_sessions()
+    def list_sessions(
+        desde: Optional[str] = None,
+        hasta: Optional[str] = None,
+        q: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Lista sesiones; filtros opcionales desde/hasta (fecha ISO,
+        inclusivas sobre hora_entrada) y q (busca en lote/corral/destino)."""
+        return repo.list_sessions(desde=desde, hasta=hasta, q=q)
+
+    @app.get("/api/stats/global")
+    def stats_global(
+        desde: Optional[str] = None, hasta: Optional[str] = None
+    ) -> dict[str, Any]:
+        return repo.stats_global(desde=desde, hasta=hasta)
 
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: int) -> dict[str, Any]:
@@ -351,6 +438,7 @@ def create_app(
         if st.engine is not None and st.current_session_id == session_id:
             snap = _snapshot_dict(st.engine.close_session())
             st.current_session_id = None
+            st.event_id_map = {}  # los ids internos del engine se resetean
         else:
             stats = repo.stats(session_id)
             snap = {
@@ -379,8 +467,10 @@ def create_app(
         if repo.get_event(event_id) is None:
             raise HTTPException(404, "evento no encontrado")
         if st.engine is not None:
+            # el engine indexa por SU id de evento, no por el rowid de DB
+            engine_event_id = st.event_id_map.get(event_id, event_id)
             with contextlib.suppress(Exception):
-                st.engine.confirm(event_id, body.n)
+                st.engine.confirm(engine_event_id, body.n)
         repo.update_event_confirm(event_id, body.n, body.confirmado_por)
         updated = repo.get_event(event_id)
         assert updated is not None
