@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "httpx", "websockets"]
+build = ["pillow", "pyinstaller"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

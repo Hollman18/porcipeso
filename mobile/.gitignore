@@ -1,0 +1,4 @@
+# dependencias y artefactos generados por el build
+node_modules/
+www/
+src/profiles.json

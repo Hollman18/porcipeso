@@ -1,0 +1,96 @@
+# PorciPeso — APK Android (Capacitor)
+#
+# El APK se compila SOLO en CI (no hay Android SDK local). Dispara:
+#   - manualmente (workflow_dispatch), o
+#   - al pushear un tag v* (p. ej. v0.1.0).
+# Artifact resultante: porcipeso-debug-apk (app-debug.apk instalable).
+name: android-apk
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Java 17 (Gradle / AGP de Capacitor 6)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tests (paridad engine + parsers + apishim)
+        run: npm test
+
+      - name: Build webapp (www/ = UI + shim embebido)
+        run: npm run build
+
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      - name: Compilar APK debug
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: porcipeso-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # ------------------------------------------------------------------
+      # Release FIRMADO (pendiente de keystore) — pasos de referencia:
+      #
+      # 1. Generar el keystore UNA vez (guardarlo fuera del repo):
+      #      keytool -genkey -v -keystore porcipeso.keystore \
+      #        -alias porcipeso -keyalg RSA -keysize 2048 -validity 10000
+      # 2. Crear secrets del repo:
+      #      ANDROID_KEYSTORE_B64   (base64 -i porcipeso.keystore)
+      #      ANDROID_KEYSTORE_PASS, ANDROID_KEY_ALIAS, ANDROID_KEY_PASS
+      # 3. Descomentar:
+      #
+      # - name: Compilar APK release firmado
+      #   working-directory: mobile/android
+      #   env:
+      #     KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      #     KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+      #     KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      #     KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+      #   run: |
+      #     echo "$KEYSTORE_B64" | base64 -d > porcipeso.keystore
+      #     ./gradlew assembleRelease --no-daemon \
+      #       -Pandroid.injected.signing.store.file=$PWD/porcipeso.keystore \
+      #       -Pandroid.injected.signing.store.password=$KEYSTORE_PASS \
+      #       -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+      #       -Pandroid.injected.signing.key.password=$KEY_PASS
+      #
+      # - name: Subir APK release
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: porcipeso-release-apk
+      #     path: mobile/android/app/build/outputs/apk/release/app-release.apk
+      # ------------------------------------------------------------------

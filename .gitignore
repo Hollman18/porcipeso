@@ -8,3 +8,8 @@ data/*.db-*
 .claude/
 .playwright-mcp/
 .DS_Store
+
+# build (empaquetado de escritorio)
+build/
+dist/
+packaging/icons/

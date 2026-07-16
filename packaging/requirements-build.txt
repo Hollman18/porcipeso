@@ -1,0 +1,10 @@
+# Dependencias exactas para construir el escritorio (runtime + build).
+# Runtime de la app:
+fastapi>=0.139.0
+uvicorn[standard]>=0.51.0
+pyserial>=3.5
+pyyaml>=6.0.3
+openpyxl>=3.1.5
+# Solo build (iconos + empaquetado):
+pillow>=12.0.0
+pyinstaller>=6.21.0
