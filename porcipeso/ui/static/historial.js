@@ -1,247 +1,269 @@
 'use strict';
 /* ============================================================
-   PorciPeso — historial y analítica de sesiones
+   PorciPeso — pesajes anteriores (lenguaje humano)
    Consume:
-     GET /api/sessions              → tabla
+     GET /api/sessions              → tarjetas de pesajes
      GET /api/sessions/{id}         → cabecera del detalle
-     GET /api/sessions/{id}/stats   → estadística (si existe; si no, se calcula)
-     GET /api/sessions/{id}/events  → lista de eventos
+     GET /api/sessions/{id}/events  → "lo que pasó, paso a paso"
+     GET /api/sessions/{id}/stats   → estadística (si no existe, se calcula aquí)
      GET /api/sessions/{id}/export.xlsx
-   Analítica SPEC §6: total kg, nº animales, promedio, DE, CV%,
-   uniformidad (% dentro de ±10% del promedio).
-   ?demo=1 → datos falsos locales.
+   La estadística del SPEC §6 (DE, CV%, uniformidad ±10%) se TRADUCE:
+   "parejo / disparejo" con una frase que cualquiera entiende.
+   ?demo=1 → pesajes de ejemplo locales.
    ============================================================ */
 
 const DEMO = new URLSearchParams(location.search).get('demo') === '1';
 const $ = id => document.getElementById(id);
 const fmt = (n, d = 1) => (typeof n === 'number' && isFinite(n))
   ? n.toLocaleString('es-CO', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
-const hora = ts => { try { return new Date(ts).toLocaleTimeString('es-CO', { hour12: false }); } catch { return '—'; } };
+const hora = ts => { try { return new Date(ts).toLocaleTimeString('es-CO', { hour12: false, hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } };
 const fecha = ts => {
-  try { return ts ? new Date(ts).toLocaleString('es-CO', { hour12: false, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'; }
-  catch { return '—'; }
+  try {
+    return ts ? new Date(ts).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }) : '';
+  } catch { return ''; }
 };
 const escapeHtml = v => String(v ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-function showBanner() { $('apiBanner')?.classList.add('show'); }
-function hideBanner() { $('apiBanner')?.classList.remove('show'); }
 
 async function api(path) {
   if (DEMO) return demoApi(path);
   let res;
   try { res = await fetch(path); }
-  catch (e) { showBanner(); throw e; }
-  hideBanner();
+  catch (e) { $('apiBanner').classList.add('show'); throw e; }
+  $('apiBanner').classList.remove('show');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   try { return await res.json(); } catch { return null; }
 }
 
 /* ============================================================
-   LISTA DE SESIONES
+   LISTA
    ============================================================ */
-async function loadSessions() {
-  const tb = $('sessRows');
-  tb.innerHTML = '<tr><td colspan="9" class="empty">Cargando sesiones…</td></tr>';
+async function loadList() {
+  const box = $('listCards');
+  box.innerHTML = '<p class="empty">Cargando pesajes…</p>';
   let sessions = [];
   try {
     const data = await api('/api/sessions');
     sessions = Array.isArray(data) ? data : (data?.sessions ?? []);
   } catch {
-    tb.innerHTML = '<tr><td colspan="9" class="empty">No se pudo cargar el historial — servidor no disponible.</td></tr>';
+    box.innerHTML = '<p class="empty">No pude cargar los pesajes — el programa de la báscula no contesta.</p>';
     return;
   }
   if (!sessions.length) {
-    tb.innerHTML = '<tr><td colspan="9" class="empty">Aún no hay sesiones registradas.</td></tr>';
+    box.innerHTML = '<p class="empty">Todavía no hay pesajes. ¡El primero es el más fácil!</p>';
     return;
   }
-  tb.innerHTML = '';
+  box.innerHTML = '';
   for (const s of sessions) {
-    const tr = document.createElement('tr');
-    const estado = s?.estado ?? 'abierta';
-    tr.innerHTML = `
-      <td class="mono">${escapeHtml(s?.id ?? '—')}</td>
-      <td><b>${escapeHtml(s?.lote)}</b></td>
-      <td>${escapeHtml(s?.corral ?? s?.corral_origen)}</td>
-      <td>${escapeHtml(s?.destino)}</td>
-      <td><span class="pill ${escapeHtml(estado)}">${escapeHtml(estado)}</span></td>
-      <td class="mono">${escapeHtml(s?.total_animales ?? '—')}</td>
-      <td class="mono">${s?.total_kg != null ? fmt(s.total_kg) : '—'}</td>
-      <td class="mono">${s?.promedio_final != null ? fmt(s.promedio_final) : '—'}</td>
-      <td class="mono">${fecha(s?.hora_entrada ?? s?.created_at)}</td>`;
-    tr.onclick = () => { openDetail(s?.id).catch(() => {}); };
-    tb.appendChild(tr);
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'sess-card';
+    const abierta = (s?.estado ?? '') === 'abierta';
+    card.innerHTML = `
+      <span class="name">${escapeHtml(s?.lote ?? `Pesaje ${s?.id ?? ''}`)}</span>
+      ${abierta ? '<span class="pill encurso">en curso</span>' : '<span class="pill" data-uni></span>'}
+      <span class="when">${escapeHtml(fecha(s?.hora_entrada ?? s?.created_at))}${s?.hora_entrada ? ' · ' + hora(s.hora_entrada) : ''}</span>
+      <span class="nums">
+        <span><b>${escapeHtml(s?.total_animales ?? '—')}</b> cerdos</span>
+        <span><b>${s?.total_kg != null ? fmt(s.total_kg, 0) : '—'}</b> kg</span>
+        <span><b>${s?.promedio_final != null ? fmt(s.promedio_final, 0) : '—'}</b> kg de promedio</span>
+      </span>`;
+    card.onclick = () => { openDetail(s?.id).catch(() => {}); };
+    box.appendChild(card);
+    if (!abierta && s?.id != null) fillChip(card, s.id); // parejo/disparejo, sin bloquear la lista
   }
 }
 
+async function fillChip(card, id) {
+  try {
+    const u = await uniformityFor(id);
+    const pill = card.querySelector('[data-uni]');
+    if (!pill) return;
+    if (u == null) { pill.remove(); return; }
+    if (u >= 70) { pill.classList.add('parejo'); pill.textContent = 'parejo'; }
+    else { pill.classList.add('disparejo'); pill.textContent = 'disparejo'; }
+  } catch { /* sin chip */ }
+}
+
+const uniCache = new Map();
+async function uniformityFor(id) {
+  if (uniCache.has(id)) return uniCache.get(id);
+  let st = null;
+  try { st = await api(`/api/sessions/${id}/stats`); } catch { st = null; }
+  let u = st?.uniformidad ?? st?.uniformity ?? null;
+  if (u == null) {
+    let events = [];
+    try {
+      const d = await api(`/api/sessions/${id}/events`);
+      events = Array.isArray(d) ? d : (d?.events ?? []);
+    } catch { events = []; }
+    u = uniformity(weightsFrom(events));
+  }
+  uniCache.set(id, u);
+  return u;
+}
+
+function weightsFrom(events) {
+  const ws = [];
+  for (const ev of events) {
+    const tipo = ev?.tipo;
+    const n = Math.abs(ev?.animales_confirmados ?? ev?.animales_estimados ?? 0);
+    const delta = Number(ev?.delta_kg ?? 0);
+    if ((tipo === 'referencia' || tipo === 'subida' || tipo === 'reingreso') && delta > 0 && n >= 1) {
+      for (let i = 0; i < n; i++) ws.push(delta / n);
+    }
+  }
+  return ws;
+}
+function uniformity(ws) {
+  if (!Array.isArray(ws) || ws.length < 4) return null;
+  const m = ws.reduce((a, b) => a + b, 0) / ws.length;
+  if (!m) return null;
+  return (ws.filter(w => Math.abs(w - m) <= 0.10 * m).length / ws.length) * 100;
+}
+
 /* ============================================================
-   DETALLE + ESTADÍSTICA (SPEC §6)
+   DETALLE
    ============================================================ */
 let currentId = null;
 
 async function openDetail(id) {
   if (id == null) return;
   currentId = id;
-  let session = null, events = [], stats = null;
-  try { session = await api(`/api/sessions/${id}`); } catch { return; }
+  let s = null, events = [];
+  try { s = await api(`/api/sessions/${id}`); } catch { return; }
   try {
-    const evData = await api(`/api/sessions/${id}/events`);
-    events = Array.isArray(evData) ? evData : (evData?.events ?? []);
+    const d = await api(`/api/sessions/${id}/events`);
+    events = Array.isArray(d) ? d : (d?.events ?? []);
   } catch { events = []; }
-  try { stats = await api(`/api/sessions/${id}/stats`); } catch { stats = null; }
 
-  renderDetail(session ?? {}, events, stats ?? computeStats(session ?? {}, events));
-  $('listCard').hidden = true;
-  $('detailCard').hidden = false;
+  $('dNombre').textContent = s?.lote ?? `Pesaje ${id}`;
+  const cuando = [fecha(s?.hora_entrada), s?.hora_entrada ? `${hora(s.hora_entrada)}${s?.hora_salida ? ' – ' + hora(s.hora_salida) : ''}` : '']
+    .filter(Boolean).join(' · ');
+  $('dCuando').textContent = cuando || 'Sin fecha registrada';
+
+  const total = s?.total_kg, count = s?.total_animales, avg = s?.promedio_final;
+  $('dCards').innerHTML = `
+    <div class="rcard"><div class="rv">${count != null ? Number(count) || 0 : '—'}</div><div class="rk">cerdos</div></div>
+    <div class="rcard"><div class="rv">${total != null ? fmt(total, 0) : '—'}</div><div class="rk">kg en total</div></div>
+    <div class="rcard"><div class="rv">${avg != null ? fmt(avg, 0) : '—'}</div><div class="rk">kg de promedio</div></div>`;
+
+  const v = $('dVerdict');
+  const u = await uniformityFor(id).catch(() => null);
+  if (u == null) v.hidden = true;
+  else {
+    v.hidden = false;
+    if (u >= 70) {
+      v.className = 'verdict parejo';
+      v.textContent = `Lote parejo: ${Math.max(1, Math.round(u / 10))} de cada 10 cerdos están cerca del promedio.`;
+    } else {
+      v.className = 'verdict disparejo';
+      v.textContent = 'Lote disparejo: hay cerdos muy distintos entre sí — mira el paso a paso.';
+    }
+  }
+
+  const extras = [
+    s?.corral ?? s?.corral_origen ? `Corral: ${s.corral ?? s.corral_origen}` : null,
+    s?.destino ? `Destino: ${s.destino}` : null,
+    s?.placa ?? s?.placa_vehiculo ? `Camión: ${s.placa ?? s.placa_vehiculo}` : null,
+    s?.conductor ? `Conductor: ${s.conductor}` : null,
+    s?.conteo_fisico != null ? `Conteo a mano: ${Number(s.conteo_fisico) || 0}` : null,
+  ].filter(Boolean);
+  $('dExtra').textContent = extras.join(' · ');
+  $('dExtra').hidden = !extras.length;
+
+  renderMoves(events);
+  $('viewLista').classList.remove('active');
+  $('viewDetalle').classList.add('active');
   window.scrollTo({ top: 0 });
 }
 
-/* estadística calculada en cliente si la API no trae /stats:
-   pesos individuales ≈ delta/n de cada subida (incl. referencia) */
-function computeStats(session, events) {
-  const weights = [];
-  for (const ev of events) {
-    const tipo = ev?.tipo;
-    const n = Math.abs(ev?.animales_confirmados ?? ev?.animales_estimados ?? 0);
-    const delta = Number(ev?.delta_kg ?? 0);
-    if ((tipo === 'referencia' || tipo === 'subida' || tipo === 'reingreso') && delta > 0 && n >= 1) {
-      const per = delta / n;
-      for (let i = 0; i < n; i++) weights.push(per);
-    }
-  }
-  const total = session?.total_kg ?? weights.reduce((a, b) => a + b, 0);
-  const count = session?.total_animales ?? weights.length;
-  const avg = session?.promedio_final ?? (count ? total / count : null);
-  let de = null, cv = null, unif = null, min = null, max = null;
-  if (weights.length >= 2 && avg) {
-    const m = weights.reduce((a, b) => a + b, 0) / weights.length;
-    de = Math.sqrt(weights.reduce((a, w) => a + (w - m) ** 2, 0) / (weights.length - 1));
-    cv = m ? (de / m) * 100 : null;
-    unif = (weights.filter(w => Math.abs(w - m) <= 0.10 * m).length / weights.length) * 100;
-    min = Math.min(...weights);
-    max = Math.max(...weights);
-  }
-  return { total_kg: total, total_animales: count, promedio: avg, de, cv, uniformidad: unif, min_kg: min, max_kg: max };
-}
-
-function renderDetail(s, events, st) {
-  $('dTitle').textContent = `Sesión #${s?.id ?? currentId} — Lote ${s?.lote ?? '—'}`;
-  const partes = [
-    s?.corral ?? s?.corral_origen ? `Corral ${s.corral ?? s.corral_origen}` : null,
-    s?.destino ? `→ ${s.destino}` : null,
-    s?.placa ?? s?.placa_vehiculo ? `Placa ${s.placa ?? s.placa_vehiculo}` : null,
-    s?.conductor ? `Conductor: ${s.conductor}` : null,
-    s?.operador ? `Operador: ${s.operador}` : null,
-    s?.hora_entrada ? `Inicio ${fecha(s.hora_entrada)}` : null,
-    s?.hora_salida ? `Cierre ${fecha(s.hora_salida)}` : null,
-  ].filter(Boolean);
-  $('dMeta').textContent = partes.join(' · ') || 'Sin datos de cabecera';
-
-  const cards = [
-    ['Total', st?.total_kg != null ? `${fmt(st.total_kg)} <em>kg</em>` : '—'],
-    ['Cerdos', st?.total_animales != null ? Number(st.total_animales) || 0 : '—'],
-    ['Promedio', (st?.promedio ?? st?.promedio_final) != null ? `${fmt(st.promedio ?? st.promedio_final)} <em>kg</em>` : '—'],
-    ['Desv. estándar', st?.de != null ? `${fmt(st.de)} <em>kg</em>` : '—'],
-    ['CV%', st?.cv != null ? `${fmt(st.cv)} <em>%</em>` : '—'],
-    ['Uniformidad ±10%', st?.uniformidad != null ? `${fmt(st.uniformidad, 0)} <em>%</em>` : '—'],
-  ];
-  if (st?.min_kg != null && st?.max_kg != null) {
-    cards.push(['Mín / Máx est.', `${fmt(st.min_kg)}–${fmt(st.max_kg)} <em>kg</em>`]);
-  }
-  if (s?.conteo_fisico != null) cards.push(['Conteo físico', Number(s.conteo_fisico) || 0]);
-  if (s?.diferencia_conciliacion != null) cards.push(['Dif. conciliación', Number(s.diferencia_conciliacion) || 0]);
-  $('dStats').innerHTML = cards.map(([k, v]) =>
-    `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-
-  const log = $('dLog');
-  log.innerHTML = '';
-  const sorted = [...events].sort((a, b) => (b?.ts_ms ?? 0) - (a?.ts_ms ?? 0));
+function renderMoves(events) {
+  const box = $('dMoves');
+  box.innerHTML = '';
+  const sorted = [...events].sort((a, b) => (a?.ts_ms ?? 0) - (b?.ts_ms ?? 0));
   for (const ev of sorted) {
     const tipo = ev?.tipo ?? 'subida';
     const delta = Number(ev?.delta_kg ?? 0);
     const down = tipo === 'bajada' || delta < 0;
-    const amb = !!ev?.ambiguo && ev?.animales_confirmados == null;
-    const n = ev?.animales_confirmados ?? ev?.animales_estimados;
-    let txt;
-    if (tipo === 'referencia') txt = `Referencia: ${fmt(Math.abs(delta))} kg`;
-    else if (amb) txt = `${delta > 0 ? 'Subida' : 'Bajada'} de ${fmt(Math.abs(delta))} kg — sin confirmar`;
-    else if (down) txt = `Bajada de ${Math.abs(n ?? 1)} (${fmt(delta)} kg)${ev?.motivo_bajada ? ` · motivo: ${ev.motivo_bajada}` : ''}`;
-    else txt = `${tipo === 'reingreso' ? 'Reingreso' : 'Subida'} de ${Math.abs(n ?? 1)} (+${fmt(delta)} kg)`;
-    if (ev?.confirmado_por) txt += ` · confirmado por ${ev.confirmado_por}`;
+    const pendiente = !!ev?.ambiguo && ev?.animales_confirmados == null;
+    const n = Math.abs(ev?.animales_confirmados ?? ev?.animales_estimados ?? 1);
+    let cls = 'up', ico = '✓', txt;
+    if (tipo === 'referencia') {
+      txt = `Primer cerdo: ${fmt(Math.abs(delta))} kg — la báscula quedó calibrada`;
+    } else if (pendiente) {
+      cls = 'ask'; ico = '?';
+      txt = `Hubo una duda con ${fmt(Math.abs(delta))} kg que quedó sin responder`;
+    } else if (down) {
+      cls = 'down'; ico = '↩';
+      txt = `${n > 1 ? `Se bajaron ${n}` : 'Se bajó 1'} (${fmt(delta)} kg)${ev?.motivo_bajada ? ` · motivo: ${ev.motivo_bajada}` : ''}`;
+    } else if (tipo === 'reingreso') {
+      txt = `Volvió a subir 1 (+${fmt(delta)} kg)`;
+    } else {
+      txt = `${n > 1 ? `Subieron ${n}` : 'Subió 1'} (+${fmt(delta)} kg)`;
+    }
     const div = document.createElement('div');
-    div.className = 'ev ' + (amb ? 'amb-ev' : down ? 'down' : 'up');
-    div.innerHTML =
-      `<span class="t mono">${hora(ev?.ts_ms)}</span>` +
-      `<span class="badge-ev">${amb ? '⚠' : down ? '⬇' : '⬆'}</span>` +
+    div.className = 'mv ' + cls;
+    div.innerHTML = `<span class="t mono">${escapeHtml(hora(ev?.ts_ms))}</span>` +
+      `<span class="ico">${escapeHtml(ico)}</span>` +
       `<span class="d">${escapeHtml(txt)}</span>`;
-    log.appendChild(div);
+    box.appendChild(div);
   }
-  if (!sorted.length) log.innerHTML = '<div class="empty">Sin eventos registrados.</div>';
+  if (!sorted.length) box.innerHTML = '<p class="empty">No quedó registro del paso a paso.</p>';
 }
 
-$('dBack').onclick = () => {
-  $('detailCard').hidden = true;
-  $('listCard').hidden = false;
+$('bBack').onclick = () => {
+  $('viewDetalle').classList.remove('active');
+  $('viewLista').classList.add('active');
   currentId = null;
 };
-$('dExport').onclick = () => {
+$('bExport').onclick = () => {
   if (currentId == null) return;
-  if (DEMO) { alert('Exportar Excel no está disponible en modo demo.'); return; }
+  if (DEMO) { alert('En modo práctica no hay Excel — son pesajes de ejemplo.'); return; }
   window.open(`/api/sessions/${currentId}/export.xlsx`, '_blank');
 };
-$('bRefresh').onclick = () => { loadSessions().catch(() => {}); };
+$('bRefresh').onclick = () => { loadList().catch(() => {}); };
 
 /* ============================================================
-   MODO DEMO
+   MODO PRÁCTICA — pesajes de ejemplo
    ============================================================ */
+let DDATA = null;
 function demoData() {
   const base = Date.now() - 86400000;
-  const mkEvents = (sid, pesos) => {
+  const mk = (sid, grupos) => {
     let id = sid * 100, t = base + sid * 3600000;
     const evs = [];
-    pesos.forEach((grupo, i) => {
-      const delta = grupo.reduce((a, b) => a + b, 0);
+    grupos.forEach((g, i) => {
       t += 45000 + Math.random() * 60000;
       evs.push({
-        id: ++id, session_id: sid, ts_ms: t, delta_kg: delta,
+        id: ++id, session_id: sid, ts_ms: t,
+        delta_kg: g.reduce((a, b) => a + b, 0),
         tipo: i === 0 ? 'referencia' : 'subida',
-        animales_estimados: grupo.length, animales_confirmados: grupo.length,
+        animales_estimados: g.length, animales_confirmados: g.length,
       });
     });
-    // una bajada con motivo
     t += 60000;
-    evs.push({
-      id: ++id, session_id: sid, ts_ms: t, delta_kg: -pesos[1][0],
-      tipo: 'bajada', animales_estimados: -1, animales_confirmados: -1, motivo_bajada: 'estres',
-    });
+    evs.push({ id: ++id, session_id: sid, ts_ms: t, delta_kg: -grupos[1][0], tipo: 'bajada', animales_estimados: -1, animales_confirmados: -1, motivo_bajada: 'estres' });
     return evs;
   };
-  const grupos1 = [[104.2], [98.7], [101.3, 109.9], [95.2, 103.1, 111.4], [99.8], [106.5, 97.2]];
-  const grupos2 = [[92.1], [88.4, 90.2], [95.7], [101.2, 84.3], [93.8]];
-  const ev1 = mkEvents(1, grupos1), ev2 = mkEvents(2, grupos2);
-  const sum = evs => evs.reduce((a, e) => a + e.delta_kg, 0);
-  const cnt = evs => evs.reduce((a, e) => a + (e.animales_confirmados ?? 0), 0);
+  const g1 = [[104.2], [98.7], [101.3, 109.9], [95.2, 103.1, 111.4], [99.8], [106.5, 97.2]];
+  const g2 = [[92.1], [60.4], [118.2], [95.7], [131.2], [64.3]]; // lote DISPAREJO a propósito
+  const ev1 = mk(1, g1), ev2 = mk(2, g2);
+  const sum = e => e.reduce((a, x) => a + x.delta_kg, 0);
+  const cnt = e => e.reduce((a, x) => a + (x.animales_confirmados ?? 0), 0);
   return {
     sessions: [
-      {
-        id: 2, lote: 'L-2408', corral: 'C-03', destino: 'Planta Sur', estado: 'abierta',
-        operador: 'M. Rojas', hora_entrada: base + 2 * 3600000,
-        total_kg: sum(ev2), total_animales: cnt(ev2),
-        promedio_final: sum(ev2) / cnt(ev2),
-      },
-      {
-        id: 1, lote: 'L-2407', corral: 'C-14', destino: 'Planta Norte', estado: 'cerrada',
-        placa: 'ABC-123', conductor: 'J. Pérez', operador: 'M. Rojas',
+      { id: 2, lote: 'Lote 15 jul, 2:00 p. m.', estado: 'cerrada', corral: 'C-03', destino: 'Planta Sur',
+        hora_entrada: base + 2 * 3600000, hora_salida: base + 2 * 3600000 + 35 * 60000,
+        total_kg: sum(ev2), total_animales: cnt(ev2), promedio_final: sum(ev2) / cnt(ev2) },
+      { id: 1, lote: 'Lote 15 jul, 8:00 a. m.', estado: 'cerrada', corral: 'C-14', destino: 'Planta Norte',
+        placa: 'ABC-123', conductor: 'J. Pérez', conteo_fisico: cnt(ev1) + 1,
         hora_entrada: base + 3600000, hora_salida: base + 3600000 + 42 * 60000,
-        total_kg: sum(ev1), total_animales: cnt(ev1),
-        promedio_final: sum(ev1) / cnt(ev1),
-        conteo_fisico: cnt(ev1) + 1, diferencia_conciliacion: 1,
-      },
+        total_kg: sum(ev1), total_animales: cnt(ev1), promedio_final: sum(ev1) / cnt(ev1) },
     ],
     events: { 1: ev1, 2: ev2 },
   };
 }
-let DDATA = null;
 function demoApi(path) {
   DDATA ??= demoData();
   return new Promise((resolve, reject) => setTimeout(() => {
@@ -251,7 +273,7 @@ function demoApi(path) {
     m = path.match(/^\/api\/sessions\/(\d+)\/events$/);
     if (m) return resolve(DDATA.events[+m[1]] ?? []);
     m = path.match(/^\/api\/sessions\/(\d+)\/stats$/);
-    if (m) return reject(new Error('sin stats en demo — se calcula en cliente'));
+    if (m) return reject(new Error('sin stats en práctica — se calcula aquí'));
     resolve({});
   }, 120));
 }
@@ -260,6 +282,9 @@ function demoApi(path) {
    ARRANQUE
    ============================================================ */
 (function init() {
-  if (DEMO) $('demoBanner').classList.add('show');
-  loadSessions().catch(() => {});
+  if (DEMO) {
+    $('practiceBanner').classList.add('show');
+    $('linkVolver').href = 'index.html?demo=1';
+  }
+  loadList().catch(() => {});
 })();

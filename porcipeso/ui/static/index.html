@@ -3,144 +3,199 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PorciPeso — Pantalla del operador</title>
+<title>PorciPeso — Pesar es así de fácil</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐷</text></svg>">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div class="wrap">
 
-  <!-- Banner API caída / sin conexión -->
-  <div class="banner" id="apiBanner" role="alert">
-    <span class="dot"></span><span id="apiBannerTxt">Sin conexión con el servidor — reintentando…</span>
+  <!-- Avisos -->
+  <div class="banner banner-err" id="apiBanner" role="alert">
+    <span class="dot"></span><span id="apiBannerTxt">No encuentro el programa de la báscula — revisa que esté encendido</span>
   </div>
-  <!-- Banner modo demo -->
-  <div class="banner banner-demo" id="demoBanner">
-    <span class="dot"></span><span>MODO DEMO — datos simulados en el navegador; no hay báscula ni servidor</span>
+  <div class="banner banner-practice" id="practiceBanner">
+    <span class="dot"></span><span>Modo práctica — báscula imaginaria, nada se guarda de verdad</span>
   </div>
 
-  <!-- ===== BARRA SUPERIOR ===== -->
-  <div class="topbar">
-    <div class="brand">
-      <span class="eyebrow">Modo A · Plataforma que acumula</span>
+  <!-- ================= VISTA 1: INICIO ================= -->
+  <section class="view" id="viewInicio">
+    <div class="hero">
+      <span class="eyebrow">Pesaje de cerdos por lote</span>
       <h1>PorciPeso</h1>
-    </div>
-    <div class="tb-group">
-      <select id="profileSel" aria-label="Seleccionar báscula">
-        <option value="">Cargando básculas…</option>
-      </select>
-      <button class="btn-primary" id="bConnect">Conectar</button>
-      <span class="badge" id="scaleBadge">Sin báscula</span>
-    </div>
-    <div class="grow"></div>
-    <div class="tb-group">
-      <button id="bNewSession">Nueva sesión</button>
-      <button class="btn-danger" id="bCloseSession" disabled>Cerrar lote</button>
-      <a class="navlink" href="historial.html">Historial ▸</a>
-    </div>
-  </div>
-
-  <!-- ===== LAYOUT PRINCIPAL ===== -->
-  <div class="layout">
-
-    <!-- Panel del operador -->
-    <div class="op">
-      <div class="row">
-        <span class="sess" id="sessLine">Sin sesión — cree una nueva sesión para empezar</span>
-        <span class="state idle" id="state">SIN SEÑAL</span>
+      <p class="tag">Sube los cerdos a la plataforma. Yo los peso, los cuento y te aviso si tengo dudas.</p>
+      <button class="btn-primary hero-btn" id="bStart">Empezar a pesar</button>
+      <p class="hero-note" id="startNote" hidden></p>
+      <div class="hero-links">
+        <button class="btn-link" id="bHistorial">Ver pesajes anteriores</button>
+        <span aria-hidden="true">·</span>
+        <button class="btn-link" id="bHowto">¿Cómo funciona?</button>
+        <span aria-hidden="true">·</span>
+        <button class="btn-link" id="bConfig" aria-label="Configurar báscula">⚙ Báscula</button>
       </div>
+    </div>
+  </section>
+
+  <!-- ================= VISTA 2a: PREPARAR PESAJE ================= -->
+  <section class="view" id="viewSetup">
+    <div class="mini-top">
+      <button class="btn-link" id="bSetupBack">◂ Volver</button>
+      <div class="grow"></div>
+      <span class="chip practica" id="chipPractica1" hidden>Práctica</span>
+    </div>
+    <form class="setup" id="formSetup">
+      <label class="big">¿Cómo llamamos este pesaje?
+        <input class="name" name="nombre" id="inpNombre" required autocomplete="off">
+      </label>
+      <details class="more">
+        <summary>Más datos (opcional)</summary>
+        <div class="fields">
+          <label>Corral <input name="corral" autocomplete="off"></label>
+          <label>Destino <input name="destino" autocomplete="off"></label>
+          <label>Placa del camión <input name="placa" autocomplete="off"></label>
+          <label>Conductor <input name="conductor" autocomplete="off"></label>
+        </div>
+      </details>
+      <p class="form-error" id="setupError"></p>
+      <div class="error-actions" id="setupErrorActions">
+        <button type="button" id="bSetupPractice">Practicar sin báscula</button>
+        <button type="button" id="bSetupConfig">⚙ Revisar la báscula</button>
+      </div>
+      <button type="submit" class="btn-primary finish-btn" id="bComenzar">Comenzar</button>
+    </form>
+  </section>
+
+  <!-- ================= VISTA 2b: PESAJE ================= -->
+  <section class="view" id="viewPesaje">
+    <div class="mini-top">
+      <span class="title" id="pesajeTitle">Pesaje</span>
+      <div class="grow"></div>
+      <span class="chip practica" id="chipPractica2" hidden>Práctica</span>
+      <button class="btn-link" id="bHowto2">¿Cómo funciona?</button>
+    </div>
+
+    <div class="weigh-panel">
       <div class="ledbox">
-        <div class="led" id="led">0.0 <small>kg</small></div>
-        <div class="ticker mono" id="ticker">esperando tramas…</div>
+        <div class="led" id="led">0 <small>kg</small></div>
+        <canvas id="spark" class="spark" width="900" height="112" role="img" aria-label="Peso en los últimos segundos"></canvas>
       </div>
-      <div class="tiles">
-        <div class="tile"><div class="k">Cerdos</div><div class="v" id="tCount">0</div></div>
-        <div class="tile"><div class="k">Acumulado</div><div class="v" id="tTotal">0.0 <em>kg</em></div></div>
-        <div class="tile"><div class="k">Promedio</div><div class="v" id="tAvg">— <em>kg</em></div></div>
-        <div class="tile"><div class="k">Peso ref</div><div class="v" id="tRef">— <em>kg</em></div></div>
+
+      <!-- LA FIRMA: la báscula que te habla claro -->
+      <div class="narration" id="narration" role="status" aria-live="polite">
+        <p class="txt" id="narrTxt">Un momento…</p>
+        <div class="q-btns" id="narrBtns" hidden></div>
       </div>
-      <canvas id="chart" class="livechart" width="900" height="240" role="img" aria-label="Curva de peso en vivo"></canvas>
+
+      <div class="big3">
+        <div class="b"><div class="k">Cerdos</div><div class="v" id="nCerdos">0</div></div>
+        <div class="b"><div class="k">Total</div><div class="v" id="nTotal">0 <em>kg</em></div></div>
+        <div class="b"><div class="k">Promedio</div><div class="v" id="nProm">— <em>kg</em></div></div>
+      </div>
     </div>
 
-    <!-- Columna derecha -->
-    <div class="col">
-      <div class="card">
-        <h2>⚠ Por confirmar</h2>
-        <div class="queue" id="queue"></div>
-      </div>
-      <div class="card">
-        <h2>Eventos de la sesión</h2>
-        <div class="log" id="log"></div>
-      </div>
-    </div>
-  </div>
+    <details class="moves">
+      <summary>Ver movimientos</summary>
+      <div class="moves-list" id="movesList"></div>
+    </details>
 
-  <footer>PorciPeso MVP · motor SPEC §4 (ventana de estabilidad 2 s, tolerancia 20 %, promedio auto-corregido) ·
-    lecturas en vivo por WebSocket.</footer>
+    <button class="btn-danger finish-btn" id="bTerminar">Terminar pesaje</button>
+  </section>
+
+  <!-- ================= VISTA 3: RESULTADOS ================= -->
+  <section class="view" id="viewResultados">
+    <div class="done-head">
+      <h2>Pesaje terminado ✓</h2>
+      <div class="sub" id="doneSub"></div>
+    </div>
+
+    <div class="rcards" id="rCards"></div>
+    <div class="verdict" id="verdict" hidden></div>
+
+    <div class="count-check">
+      <div class="q">¿Tú cuántos contaste? <span style="color:var(--muted);font-weight:400">(opcional)</span></div>
+      <div class="count-row">
+        <input type="number" id="inpConteo" min="0" step="1" inputmode="numeric" placeholder="0">
+        <button id="bComparar">Comparar</button>
+      </div>
+      <p class="count-msg" id="countMsg"></p>
+    </div>
+
+    <details class="moves">
+      <summary>Ver el detalle del pesaje</summary>
+      <div class="moves-list" id="movesListDone"></div>
+    </details>
+
+    <div class="result-actions">
+      <button class="btn-primary" id="bExcel">Descargar Excel</button>
+      <button id="bOtroLote">Pesar otro lote</button>
+      <button id="bVerTodos">Ver todos los pesajes</button>
+    </div>
+  </section>
+
+  <!-- ================= VISTA 4: CONFIG (técnico) ================= -->
+  <section class="view" id="viewConfig">
+    <div class="mini-top">
+      <button class="btn-link" id="bConfigBack">◂ Volver</button>
+      <span class="title">Configurar la báscula</span>
+    </div>
+    <div class="config">
+      <p style="color:var(--muted);margin:0">Esto se hace una sola vez, cuando se instala el sistema.
+        Si no eres el técnico, mejor no cambies nada aquí.</p>
+      <label>Marca y modelo de la báscula
+        <select id="cfgProfile"><option value="">Cargando catálogo…</option></select>
+      </label>
+      <label>Puerto o dirección (opcional)
+        <input id="cfgPort" placeholder="COM3, /dev/ttyUSB0 o 192.168.0.50:8899" autocomplete="off">
+      </label>
+      <div class="config-actions">
+        <button class="btn-primary" id="bProbar">Probar conexión</button>
+        <button id="bGuardarCfg">Guardar</button>
+      </div>
+      <div class="test-result" id="testResult"></div>
+    </div>
+  </section>
+
+  <footer>PorciPeso · la báscula que te habla claro</footer>
 </div>
 
-<!-- ===== DIÁLOGO: NUEVA SESIÓN ===== -->
-<dialog id="dlgSession">
-  <form class="dlg" id="formSession" method="dialog">
-    <h2>Nueva sesión de pesaje</h2>
-    <div class="sub">Datos de cabecera del lote (SPEC §5)</div>
-    <div class="formgrid">
-      <label>Lote <input name="lote" required placeholder="L-2407" autocomplete="off"></label>
-      <label>Corral <input name="corral" required placeholder="C-14" autocomplete="off"></label>
-      <label class="full">Destino <input name="destino" placeholder="Planta Norte" autocomplete="off"></label>
-      <label>Placa vehículo <input name="placa" placeholder="ABC-123" autocomplete="off"></label>
-      <label>Conductor <input name="conductor" placeholder="Nombre" autocomplete="off"></label>
-      <label class="full">Operador <input name="operador" placeholder="Nombre del operador" autocomplete="off"></label>
-    </div>
-    <div class="actions">
-      <button type="submit" class="btn-primary">Abrir sesión</button>
-      <button type="button" id="bSessCancel">Cancelar</button>
-    </div>
-  </form>
-</dialog>
-
-<!-- ===== DIÁLOGO: CERRAR LOTE (conteo físico opcional) ===== -->
-<dialog id="dlgClose">
-  <form class="dlg" id="formClose" method="dialog">
-    <h2>Cerrar lote</h2>
-    <div class="sub">Si hizo conteo físico al embarcar, anótelo para conciliar (opcional).</div>
-    <div class="formgrid">
-      <label class="full">Conteo físico (opcional)
-        <input name="conteo_fisico" type="number" min="0" step="1" inputmode="numeric" placeholder="ej. 48">
-      </label>
-    </div>
-    <div class="actions">
-      <button type="submit" class="btn-danger">Cerrar lote</button>
-      <button type="button" id="bCloseCancel">Cancelar</button>
-    </div>
-  </form>
-</dialog>
-
-<!-- ===== DIÁLOGO: MOTIVO DE BAJADA ===== -->
-<dialog id="dlgMotivo">
+<!-- ============ OVERLAY: ¿CÓMO FUNCIONA? ============ -->
+<dialog id="dlgHowto">
   <div class="dlg">
-    <h2>Motivo de la bajada</h2>
-    <div class="sub" id="motivoSub">¿Por qué se bajó el animal?</div>
-    <div class="motivo-grid">
+    <h2>Así de fácil</h2>
+    <div class="sub">Tres cosas y ya está:</div>
+    <div class="howto-steps">
+      <div class="hstep">
+        <div class="pic">🐷</div>
+        <div><span class="n">1.</span> <p>Sube <b>un cerdo solo</b> primero — así me calibro con su peso.</p></div>
+      </div>
+      <div class="hstep">
+        <div class="pic">🐷🐷🐷</div>
+        <div><span class="n">2.</span> <p>Después sube los demás <b>como quieras</b>: de a 1, 2 o 3.</p></div>
+      </div>
+      <div class="hstep">
+        <div class="pic">🔢</div>
+        <div><span class="n">3.</span> <p><b>Yo los cuento.</b> Si dudo, te pregunto. Si uno se baja, yo lo descuento.</p></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn-primary" id="bHowtoOk">Entendido, empecemos</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ============ DIÁLOGO: ¿POR QUÉ SE BAJÓ? ============ -->
+<dialog id="dlgWhy">
+  <div class="dlg">
+    <h2>¿Por qué se bajó?</h2>
+    <div class="sub">Queda anotado en el pesaje (opcional).</div>
+    <div class="why-grid">
       <button data-motivo="estres">Estrés</button>
       <button data-motivo="lesion">Lesión</button>
       <button data-motivo="rechazo">Rechazo</button>
       <button data-motivo="muerte">Muerte</button>
     </div>
     <div class="actions">
-      <button type="button" id="bMotivoCancel">Cancelar</button>
-    </div>
-  </div>
-</dialog>
-
-<!-- ===== DIÁLOGO: TIQUETE ===== -->
-<dialog id="ticket">
-  <div class="ticket">
-    <h2>Tiquete de lote</h2>
-    <div class="sub" id="ticketSub"></div>
-    <div id="ticketBody"></div>
-    <div class="actions" style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-      <button class="btn-primary" id="bExport">Exportar Excel</button>
-      <button id="bTicketClose">Cerrar</button>
+      <button type="button" id="bWhyCancel">Cancelar</button>
     </div>
   </div>
 </dialog>
