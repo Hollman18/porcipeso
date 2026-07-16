@@ -1,0 +1,312 @@
+# Catálogo comercial de indicadores de peso (LatAm) — PorciPeso
+# Cada entrada mapea a porcipeso.core.models.ScaleProfile.
+# parser = clave en porcipeso.drivers.parsers.PARSER_REGISTRY.
+profiles:
+  - id: matrix-adr00
+    name: "Lexus / Trumax Matrix (Adr 00)"
+    brand: "Lexus / Trumax"
+    parser: matrix
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual Matrix: salida continua RS-232, trama de 8 bytes '=' + 7 chars ASCII de peso con punto decimal (ej. '= 126.35'). Adr=00 dígitos en orden normal. 9600 8N1."
+
+  - id: matrix-adr99
+    name: "Lexus / Trumax Matrix (Adr 99, invertido)"
+    brand: "Lexus / Trumax"
+    parser: matrix
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      reversed: true
+      notes: "Manual Matrix: con Adr=99 los dígitos vienen invertidos (display 126.35 -> '=53.621 '). Mismo framing de 8 bytes."
+
+  - id: yaohua-xk3190-a12e
+    name: "Yaohua XK3190-A12E"
+    brand: "Yaohua"
+    parser: xk3190_a12e
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: E
+    stopbits: 1
+    extra:
+      notes: "Manual XK3190-A12(E): stream ASCII continuo, tramas '=' + 7 chars con el peso invertido (display 0126.35 -> '=53.6210'). Paridad par (E) de fábrica."
+
+  - id: yaohua-xk3190-a9
+    name: "Yaohua XK3190-A9"
+    brand: "Yaohua"
+    parser: xk3190_a12e
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual XK3190-A9: mismo formato continuo '=' + peso invertido de la familia XK3190. Baudrate configurable 600-9600."
+
+  - id: yaohua-xk3190-a27
+    name: "Yaohua XK3190-A27"
+    brand: "Yaohua"
+    parser: xk3190_a12e
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: E
+    stopbits: 1
+    extra:
+      notes: "Manual XK3190-A27(E): salida continua idéntica a la A12E ('=' + 7 chars invertidos)."
+
+  - id: gmt-tuxon-s-ascii
+    name: "GMT Tuxon S (ASCII continuo)"
+    brand: "GMT"
+    parser: tuxon_ascii
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual Tuxon S: modo de transmisión continua ASCII, una línea por lectura con el peso decimal. extra.pattern permite ajustar el formato exacto."
+
+  - id: gmt-tuxon-s-modbus
+    name: "GMT Tuxon S (Modbus RTU)"
+    brand: "GMT"
+    parser: modbus_rtu
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      slave_addr: 1
+      register: 0
+      word_count: 1
+      scale_divisor: 10
+      notes: "Manual Tuxon S/C Modbus: peso bruto en holding register (FC03), esclavo 1, valor x10. Ajustar register/scale_divisor según mapa de registros del equipo."
+
+  - id: rhino-iqy
+    name: "Rhino I-QY / BAR-8RS"
+    brand: "Rhino"
+    parser: xk3190_a12e
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: E
+    stopbits: 1
+    extra:
+      notes: "Los indicadores Rhino I-QY (México) son placas familia XK3190 re-marcadas: stream continuo '=' + peso invertido."
+
+  - id: tscale-qw
+    name: "T-Scale QW/BW"
+    brand: "T-Scale"
+    parser: dini_argeo
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual T-Scale: stream 'ST,GS,+  123.45,kg' CRLF (mismo layout de campos que Dini/A&D extendido)."
+
+  - id: ricelake-380
+    name: "Rice Lake 380 Synergy"
+    brand: "Rice Lake"
+    parser: generic_regex
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      pattern: '([-+]?\d+\.?\d*)\s*(?:kg|lb)'
+      notes: "Manual 380: stream demand/continuo configurable; por defecto línea con peso + unidad. Ajustar extra.pattern al formato de impresión configurado."
+
+  - id: ricelake-480
+    name: "Rice Lake 480 Legend"
+    brand: "Rice Lake"
+    parser: generic_regex
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      pattern: '([-+]?\d+\.?\d*)\s*(?:kg|lb)'
+      notes: "Manual 480 Legend: salida continua tipo Consolidated Controls; línea ASCII con peso y unidad."
+
+  - id: cardinal-205
+    name: "Cardinal 205"
+    brand: "Cardinal"
+    parser: cardinal_738
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual Cardinal 205: salida demand/continua CR-terminada, peso + unidad + bruto/neto (mismo layout que el 738)."
+
+  - id: cardinal-738
+    name: "Cardinal 738"
+    brand: "Cardinal"
+    parser: cardinal_738
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual Cardinal 738: línea CR-terminada con peso, unidad (kg/lb) y estado G/N."
+
+  - id: mt-ind-sics
+    name: "Mettler-Toledo IND231/IND570 (MT-SICS)"
+    brand: "Mettler-Toledo"
+    parser: sics
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual MT-SICS: comandos SI/SIR; respuesta 'S S <peso> <unidad>' estable, 'S D ...' dinámico, CRLF."
+
+  - id: mt-toledo-continuo
+    name: "Toledo salida continua (PS/8142/IND)"
+    brand: "Mettler-Toledo"
+    parser: toledo_cont
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Protocolo Toledo Continuous Output: STX + SWA/SWB/SWC + 6 dígitos peso + 6 dígitos tara + CR; SWA codifica los decimales, SWB signo y movimiento."
+
+  - id: ohaus-defender-sics
+    name: "Ohaus Defender 3000/5000 (SICS)"
+    brand: "Ohaus"
+    parser: sics
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual Defender: protocolo MT-SICS compatible ('S S <peso> <unidad>')."
+
+  - id: and-fs-hw
+    name: "A&D FS / HW / HV (stream)"
+    brand: "A&D"
+    parser: and_stream
+    transport: serial
+    baudrate: 2400
+    bytesize: 7
+    parity: E
+    stopbits: 1
+    extra:
+      notes: "Manual A&D: formato estándar 'ST,+00123.4  kg' / 'US,...' / 'OL,...' CRLF. Serial de fábrica 2400 7E1."
+
+  - id: dini-argeo-dfw
+    name: "Dini Argeo DFW/DGT"
+    brand: "Dini Argeo"
+    parser: dini_argeo
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual Dini Argeo (protocolo REPE/estándar): 'ST,GS,   123.45,kg' CRLF; US = inestable, NT = neto."
+
+  - id: rinstrum-r320
+    name: "Rinstrum R320"
+    brand: "Rinstrum"
+    parser: rinstrum_r320
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Manual R320: formato automático A: STX + signo + peso (7 chars) + status (G/N/U/O/M/E) + ETX."
+
+  - id: sensocar-sca31
+    name: "Sensocar SCA-31"
+    brand: "Sensocar"
+    parser: generic_regex
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      pattern: '([-+]?\d+\.?\d*)'
+      notes: "Manual SCA-31: transmisión continua ASCII línea a línea con el peso; ajustar extra.pattern si el equipo antepone prefijos de estado."
+
+  - id: avery-zm201-nci
+    name: "Avery Weigh-Tronix ZM201 (NCI)"
+    brand: "Avery Weigh-Tronix"
+    parser: nci
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Protocolo NCI/SCP-01 (3835): LF + peso con decimales + CR, LF + status + CR + ETX; status bit0 = movimiento."
+
+  - id: prometalicos-generic
+    name: "Prometálicos (Colombia)"
+    brand: "Prometálicos"
+    parser: generic_regex
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      pattern: '([-+]?\d+\.?\d*)'
+      notes: "Indicadores Prometálicos con salida serial ASCII simple; capturar el primer número de cada línea. Ajustar extra.pattern al modelo."
+
+  - id: generic-serial-regex
+    name: "Genérico serial (regex)"
+    brand: "Genérico"
+    parser: generic_regex
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      pattern: '([-+]?\d+\.?\d*)'
+      notes: "Perfil comodín: cualquier indicador que emita líneas ASCII; configurar extra.pattern (grupo 1 = peso) y extra.line_terminator si no es CR/LF."
+
+  - id: generic-tcp
+    name: "Genérico TCP (regex)"
+    brand: "Genérico"
+    parser: generic_regex
+    transport: tcp
+    host: 127.0.0.1
+    tcp_port: 9101
+    extra:
+      pattern: '([-+]?\d+\.?\d*)'
+      notes: "Indicador o conversor serial→ethernet accesible por TCP; mismas opciones de regex que el genérico serial."
+
+  - id: generic-sma
+    name: "Genérico SMA (protocolo estándar)"
+    brand: "Genérico"
+    parser: sma
+    transport: serial
+    baudrate: 9600
+    bytesize: 8
+    parity: N
+    stopbits: 1
+    extra:
+      notes: "Protocolo SMA Level 1: líneas LF con status Z (centro de cero) / S (estable) / M (movimiento) + peso + unidad."

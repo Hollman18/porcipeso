@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PorciPeso — Historial de sesiones</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="banner" id="apiBanner" role="alert">
+    <span class="dot"></span><span id="apiBannerTxt">Sin conexión con el servidor — verifique que PorciPeso esté corriendo</span>
+  </div>
+  <div class="banner banner-demo" id="demoBanner">
+    <span class="dot"></span><span>MODO DEMO — datos simulados en el navegador; no hay servidor</span>
+  </div>
+
+  <!-- ===== BARRA SUPERIOR ===== -->
+  <div class="topbar">
+    <div class="brand">
+      <span class="eyebrow">Historial y analítica</span>
+      <h1>PorciPeso</h1>
+    </div>
+    <div class="grow"></div>
+    <div class="tb-group">
+      <button id="bRefresh">Actualizar</button>
+      <a class="navlink" href="index.html">◂ Pantalla del operador</a>
+    </div>
+  </div>
+
+  <!-- ===== LISTA DE SESIONES ===== -->
+  <div class="card" id="listCard">
+    <h2>Sesiones de pesaje</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Lote</th><th>Corral</th><th>Destino</th>
+            <th>Estado</th><th>Cerdos</th><th>Total kg</th><th>Promedio</th><th>Fecha</th>
+          </tr>
+        </thead>
+        <tbody id="sessRows">
+          <tr><td colspan="9" class="empty">Cargando sesiones…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===== DETALLE DE SESIÓN ===== -->
+  <div class="card" id="detailCard" hidden>
+    <div class="detail-head">
+      <div>
+        <h2 id="dTitle">Sesión</h2>
+        <div class="meta" id="dMeta"></div>
+      </div>
+      <div class="tb-group">
+        <button class="btn-primary" id="dExport">Exportar Excel</button>
+        <button id="dBack">◂ Volver a la lista</button>
+      </div>
+    </div>
+
+    <div class="stats" id="dStats"></div>
+
+    <h2 style="margin-top:8px">Eventos de la sesión</h2>
+    <div class="log" id="dLog" style="max-height:420px"></div>
+  </div>
+
+  <footer>PorciPeso MVP · analítica por sesión según SPEC §6 — total, animales, promedio, desviación estándar,
+    CV% y uniformidad (±10 % del promedio).</footer>
+</div>
+
+<script src="historial.js"></script>
+</body>
+</html>

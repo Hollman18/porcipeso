@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PorciPeso — Pantalla del operador</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Banner API caída / sin conexión -->
+  <div class="banner" id="apiBanner" role="alert">
+    <span class="dot"></span><span id="apiBannerTxt">Sin conexión con el servidor — reintentando…</span>
+  </div>
+  <!-- Banner modo demo -->
+  <div class="banner banner-demo" id="demoBanner">
+    <span class="dot"></span><span>MODO DEMO — datos simulados en el navegador; no hay báscula ni servidor</span>
+  </div>
+
+  <!-- ===== BARRA SUPERIOR ===== -->
+  <div class="topbar">
+    <div class="brand">
+      <span class="eyebrow">Modo A · Plataforma que acumula</span>
+      <h1>PorciPeso</h1>
+    </div>
+    <div class="tb-group">
+      <select id="profileSel" aria-label="Seleccionar báscula">
+        <option value="">Cargando básculas…</option>
+      </select>
+      <button class="btn-primary" id="bConnect">Conectar</button>
+      <span class="badge" id="scaleBadge">Sin báscula</span>
+    </div>
+    <div class="grow"></div>
+    <div class="tb-group">
+      <button id="bNewSession">Nueva sesión</button>
+      <button class="btn-danger" id="bCloseSession" disabled>Cerrar lote</button>
+      <a class="navlink" href="historial.html">Historial ▸</a>
+    </div>
+  </div>
+
+  <!-- ===== LAYOUT PRINCIPAL ===== -->
+  <div class="layout">
+
+    <!-- Panel del operador -->
+    <div class="op">
+      <div class="row">
+        <span class="sess" id="sessLine">Sin sesión — cree una nueva sesión para empezar</span>
+        <span class="state idle" id="state">SIN SEÑAL</span>
+      </div>
+      <div class="ledbox">
+        <div class="led" id="led">0.0 <small>kg</small></div>
+        <div class="ticker mono" id="ticker">esperando tramas…</div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="k">Cerdos</div><div class="v" id="tCount">0</div></div>
+        <div class="tile"><div class="k">Acumulado</div><div class="v" id="tTotal">0.0 <em>kg</em></div></div>
+        <div class="tile"><div class="k">Promedio</div><div class="v" id="tAvg">— <em>kg</em></div></div>
+        <div class="tile"><div class="k">Peso ref</div><div class="v" id="tRef">— <em>kg</em></div></div>
+      </div>
+      <canvas id="chart" class="livechart" width="900" height="240" role="img" aria-label="Curva de peso en vivo"></canvas>
+    </div>
+
+    <!-- Columna derecha -->
+    <div class="col">
+      <div class="card">
+        <h2>⚠ Por confirmar</h2>
+        <div class="queue" id="queue"></div>
+      </div>
+      <div class="card">
+        <h2>Eventos de la sesión</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>PorciPeso MVP · motor SPEC §4 (ventana de estabilidad 2 s, tolerancia 20 %, promedio auto-corregido) ·
+    lecturas en vivo por WebSocket.</footer>
+</div>
+
+<!-- ===== DIÁLOGO: NUEVA SESIÓN ===== -->
+<dialog id="dlgSession">
+  <form class="dlg" id="formSession" method="dialog">
+    <h2>Nueva sesión de pesaje</h2>
+    <div class="sub">Datos de cabecera del lote (SPEC §5)</div>
+    <div class="formgrid">
+      <label>Lote <input name="lote" required placeholder="L-2407" autocomplete="off"></label>
+      <label>Corral <input name="corral" required placeholder="C-14" autocomplete="off"></label>
+      <label class="full">Destino <input name="destino" placeholder="Planta Norte" autocomplete="off"></label>
+      <label>Placa vehículo <input name="placa" placeholder="ABC-123" autocomplete="off"></label>
+      <label>Conductor <input name="conductor" placeholder="Nombre" autocomplete="off"></label>
+      <label class="full">Operador <input name="operador" placeholder="Nombre del operador" autocomplete="off"></label>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn-primary">Abrir sesión</button>
+      <button type="button" id="bSessCancel">Cancelar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== DIÁLOGO: CERRAR LOTE (conteo físico opcional) ===== -->
+<dialog id="dlgClose">
+  <form class="dlg" id="formClose" method="dialog">
+    <h2>Cerrar lote</h2>
+    <div class="sub">Si hizo conteo físico al embarcar, anótelo para conciliar (opcional).</div>
+    <div class="formgrid">
+      <label class="full">Conteo físico (opcional)
+        <input name="conteo_fisico" type="number" min="0" step="1" inputmode="numeric" placeholder="ej. 48">
+      </label>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn-danger">Cerrar lote</button>
+      <button type="button" id="bCloseCancel">Cancelar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== DIÁLOGO: MOTIVO DE BAJADA ===== -->
+<dialog id="dlgMotivo">
+  <div class="dlg">
+    <h2>Motivo de la bajada</h2>
+    <div class="sub" id="motivoSub">¿Por qué se bajó el animal?</div>
+    <div class="motivo-grid">
+      <button data-motivo="estres">Estrés</button>
+      <button data-motivo="lesion">Lesión</button>
+      <button data-motivo="rechazo">Rechazo</button>
+      <button data-motivo="muerte">Muerte</button>
+    </div>
+    <div class="actions">
+      <button type="button" id="bMotivoCancel">Cancelar</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ===== DIÁLOGO: TIQUETE ===== -->
+<dialog id="ticket">
+  <div class="ticket">
+    <h2>Tiquete de lote</h2>
+    <div class="sub" id="ticketSub"></div>
+    <div id="ticketBody"></div>
+    <div class="actions" style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+      <button class="btn-primary" id="bExport">Exportar Excel</button>
+      <button id="bTicketClose">Cerrar</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
