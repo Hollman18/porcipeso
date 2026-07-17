@@ -1,7 +1,67 @@
 import React from "react";
-import { interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
+import {
+  AbsoluteFill,
+  Img,
+  interpolate,
+  spring,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
 import { C, F, AUDIO_DELAY } from "../theme";
 import { SUBS, Cue } from "../subs";
+
+/**
+ * Foto real de granja a pantalla completa con Ken Burns (zoom/pan lento)
+ * + overlay gradiente oscuro #202722 para que el texto siga reventando.
+ */
+export const FotoBg: React.FC<{
+  src: string;
+  dur: number; // duración de la escena en frames (para el ritmo del Ken Burns)
+  overlay?: number; // opacidad base del overlay (0.55–0.75)
+  zoomFrom?: number;
+  zoomTo?: number;
+  panX?: number; // px de paneo horizontal a lo largo de la escena
+  panY?: number;
+  opacity?: number;
+}> = ({
+  src,
+  dur,
+  overlay = 0.65,
+  zoomFrom = 1.06,
+  zoomTo = 1.18,
+  panX = 0,
+  panY = 0,
+  opacity = 1,
+}) => {
+  const frame = useCurrentFrame();
+  const t = interpolate(frame, [0, dur], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const s = zoomFrom + (zoomTo - zoomFrom) * t;
+  const a1 = Math.max(0, overlay - 0.12);
+  const a2 = Math.min(0.92, overlay + 0.1);
+  return (
+    <AbsoluteFill style={{ overflow: "hidden", opacity }}>
+      <Img
+        src={staticFile(src)}
+        style={{
+          position: "absolute",
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          transform: `scale(${s}) translate(${panX * t}px, ${panY * t}px)`,
+        }}
+      />
+      <AbsoluteFill
+        style={{
+          background: `linear-gradient(180deg, rgba(32,39,34,${a1}) 0%, rgba(32,39,34,${overlay}) 45%, rgba(32,39,34,${a2}) 100%)`,
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
 
 /** Entrada con spring (escala + subida) a partir del frame `at`. */
 export const Pop: React.FC<{

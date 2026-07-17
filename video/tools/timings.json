@@ -1,0 +1,2082 @@
+{
+ "e1": {
+  "dur": 6.96,
+  "frames": 209,
+  "words": [
+   {
+    "w": "Cuántos",
+    "from": 3,
+    "to": 13
+   },
+   {
+    "w": "cerdos",
+    "from": 13,
+    "to": 23
+   },
+   {
+    "w": "subieron",
+    "from": 23,
+    "to": 36
+   },
+   {
+    "w": "y",
+    "from": 44,
+    "to": 45
+   },
+   {
+    "w": "cuánto",
+    "from": 46,
+    "to": 56
+   },
+   {
+    "w": "pesan",
+    "from": 56,
+    "to": 66
+   },
+   {
+    "w": "de",
+    "from": 67,
+    "to": 69
+   },
+   {
+    "w": "verdad",
+    "from": 69,
+    "to": 83
+   },
+   {
+    "w": "Porque",
+    "from": 89,
+    "to": 94
+   },
+   {
+    "w": "si",
+    "from": 95,
+    "to": 99
+   },
+   {
+    "w": "todavía",
+    "from": 100,
+    "to": 113
+   },
+   {
+    "w": "lo",
+    "from": 113,
+    "to": 116
+   },
+   {
+    "w": "llevas",
+    "from": 116,
+    "to": 126
+   },
+   {
+    "w": "a",
+    "from": 126,
+    "to": 128
+   },
+   {
+    "w": "mano",
+    "from": 128,
+    "to": 138
+   },
+   {
+    "w": "esto",
+    "from": 146,
+    "to": 155
+   },
+   {
+    "w": "te",
+    "from": 155,
+    "to": 159
+   },
+   {
+    "w": "va",
+    "from": 159,
+    "to": 164
+   },
+   {
+    "w": "a",
+    "from": 164,
+    "to": 165
+   },
+   {
+    "w": "cambiar",
+    "from": 166,
+    "to": 178
+   },
+   {
+    "w": "la",
+    "from": 178,
+    "to": 180
+   },
+   {
+    "w": "operación",
+    "from": 181,
+    "to": 199
+   }
+  ],
+  "cues": [
+   {
+    "text": "¿Cuántos cerdos subieron",
+    "from": 3,
+    "to": 44
+   },
+   {
+    "text": "y cuánto pesan de verdad?",
+    "from": 44,
+    "to": 89
+   },
+   {
+    "text": "Porque si todavía lo llevas a mano...",
+    "from": 89,
+    "to": 146
+   },
+   {
+    "text": "esto te va a cambiar la operación.",
+    "from": 146,
+    "to": 211
+   }
+  ]
+ },
+ "e2": {
+  "dur": 8.232,
+  "frames": 247,
+  "words": [
+   {
+    "w": "El",
+    "from": 3,
+    "to": 8
+   },
+   {
+    "w": "pesaje",
+    "from": 9,
+    "to": 20
+   },
+   {
+    "w": "inteligente",
+    "from": 20,
+    "to": 38
+   },
+   {
+    "w": "tradicional",
+    "from": 38,
+    "to": 57
+   },
+   {
+    "w": "es",
+    "from": 57,
+    "to": 61
+   },
+   {
+    "w": "un",
+    "from": 61,
+    "to": 64
+   },
+   {
+    "w": "indicador",
+    "from": 64,
+    "to": 79
+   },
+   {
+    "w": "importado",
+    "from": 79,
+    "to": 98
+   },
+   {
+    "w": "costoso",
+    "from": 104,
+    "to": 120
+   },
+   {
+    "w": "con",
+    "from": 127,
+    "to": 132
+   },
+   {
+    "w": "meses",
+    "from": 133,
+    "to": 143
+   },
+   {
+    "w": "de",
+    "from": 143,
+    "to": 145
+   },
+   {
+    "w": "espera",
+    "from": 145,
+    "to": 158
+   },
+   {
+    "w": "y",
+    "from": 166,
+    "to": 169
+   },
+   {
+    "w": "que",
+    "from": 169,
+    "to": 173
+   },
+   {
+    "w": "te",
+    "from": 173,
+    "to": 176
+   },
+   {
+    "w": "amarra",
+    "from": 176,
+    "to": 187
+   },
+   {
+    "w": "a",
+    "from": 188,
+    "to": 191
+   },
+   {
+    "w": "una",
+    "from": 191,
+    "to": 198
+   },
+   {
+    "w": "sola",
+    "from": 198,
+    "to": 207
+   },
+   {
+    "w": "marca",
+    "from": 207,
+    "to": 217
+   },
+   {
+    "w": "de",
+    "from": 218,
+    "to": 220
+   },
+   {
+    "w": "báscula",
+    "from": 221,
+    "to": 236
+   }
+  ],
+  "cues": [
+   {
+    "text": "El pesaje inteligente tradicional",
+    "from": 3,
+    "to": 60
+   },
+   {
+    "text": "es un indicador importado",
+    "from": 57,
+    "to": 104
+   },
+   {
+    "text": "costoso, con meses de espera",
+    "from": 104,
+    "to": 166
+   },
+   {
+    "text": "y que te amarra a una sola marca de báscula.",
+    "from": 166,
+    "to": 248
+   }
+  ]
+ },
+ "e3": {
+  "dur": 16.2,
+  "frames": 486,
+  "words": [
+   {
+    "w": "PorciPeso",
+    "from": 3,
+    "to": 20
+   },
+   {
+    "w": "es",
+    "from": 21,
+    "to": 24
+   },
+   {
+    "w": "distinto",
+    "from": 24,
+    "to": 39
+   },
+   {
+    "w": "porque",
+    "from": 46,
+    "to": 55
+   },
+   {
+    "w": "es",
+    "from": 55,
+    "to": 58
+   },
+   {
+    "w": "software",
+    "from": 58,
+    "to": 71
+   },
+   {
+    "w": "y",
+    "from": 80,
+    "to": 81
+   },
+   {
+    "w": "se",
+    "from": 81,
+    "to": 86
+   },
+   {
+    "w": "conecta",
+    "from": 86,
+    "to": 99
+   },
+   {
+    "w": "a",
+    "from": 99,
+    "to": 100
+   },
+   {
+    "w": "cualquier",
+    "from": 101,
+    "to": 112
+   },
+   {
+    "w": "indicador",
+    "from": 112,
+    "to": 127
+   },
+   {
+    "w": "con",
+    "from": 128,
+    "to": 133
+   },
+   {
+    "w": "puerto",
+    "from": 133,
+    "to": 142
+   },
+   {
+    "w": "serial",
+    "from": 143,
+    "to": 155
+   },
+   {
+    "w": "del",
+    "from": 163,
+    "to": 166
+   },
+   {
+    "w": "más",
+    "from": 167,
+    "to": 174
+   },
+   {
+    "w": "económico",
+    "from": 174,
+    "to": 190
+   },
+   {
+    "w": "al",
+    "from": 191,
+    "to": 193
+   },
+   {
+    "w": "más",
+    "from": 194,
+    "to": 200
+   },
+   {
+    "w": "costoso",
+    "from": 201,
+    "to": 217
+   },
+   {
+    "w": "son",
+    "from": 226,
+    "to": 231
+   },
+   {
+    "w": "veinticinco",
+    "from": 231,
+    "to": 249
+   },
+   {
+    "w": "marcas",
+    "from": 250,
+    "to": 263
+   },
+   {
+    "w": "ya",
+    "from": 263,
+    "to": 266
+   },
+   {
+    "w": "integradas",
+    "from": 267,
+    "to": 287
+   },
+   {
+    "w": "así",
+    "from": 293,
+    "to": 301
+   },
+   {
+    "w": "que",
+    "from": 302,
+    "to": 306
+   },
+   {
+    "w": "usas",
+    "from": 306,
+    "to": 316
+   },
+   {
+    "w": "la",
+    "from": 316,
+    "to": 319
+   },
+   {
+    "w": "báscula",
+    "from": 319,
+    "to": 332
+   },
+   {
+    "w": "que",
+    "from": 333,
+    "to": 336
+   },
+   {
+    "w": "ya",
+    "from": 336,
+    "to": 341
+   },
+   {
+    "w": "tienes",
+    "from": 342,
+    "to": 356
+   },
+   {
+    "w": "sin",
+    "from": 361,
+    "to": 369
+   },
+   {
+    "w": "esperar",
+    "from": 369,
+    "to": 381
+   },
+   {
+    "w": "importaciones",
+    "from": 381,
+    "to": 406
+   },
+   {
+    "w": "más",
+    "from": 413,
+    "to": 420
+   },
+   {
+    "w": "barato",
+    "from": 420,
+    "to": 433
+   },
+   {
+    "w": "y",
+    "from": 440,
+    "to": 443
+   },
+   {
+    "w": "creciendo",
+    "from": 444,
+    "to": 459
+   },
+   {
+    "w": "contigo",
+    "from": 459,
+    "to": 476
+   }
+  ],
+  "cues": [
+   {
+    "text": "PorciPeso es distinto, porque es software",
+    "from": 3,
+    "to": 80
+   },
+   {
+    "text": "y se conecta a cualquier indicador con puerto serial",
+    "from": 80,
+    "to": 163
+   },
+   {
+    "text": "del más económico al más costoso...",
+    "from": 163,
+    "to": 226
+   },
+   {
+    "text": "son veinticinco marcas ya integradas",
+    "from": 226,
+    "to": 293
+   },
+   {
+    "text": "así que usas la báscula que ya tienes",
+    "from": 293,
+    "to": 361
+   },
+   {
+    "text": "sin esperar importaciones",
+    "from": 361,
+    "to": 413
+   },
+   {
+    "text": "más barato, y creciendo contigo.",
+    "from": 413,
+    "to": 488
+   }
+  ]
+ },
+ "e4": {
+  "dur": 17.184,
+  "frames": 516,
+  "words": [
+   {
+    "w": "En",
+    "from": 3,
+    "to": 8
+   },
+   {
+    "w": "el",
+    "from": 8,
+    "to": 12
+   },
+   {
+    "w": "corral",
+    "from": 12,
+    "to": 23
+   },
+   {
+    "w": "todo",
+    "from": 23,
+    "to": 31
+   },
+   {
+    "w": "pasa",
+    "from": 32,
+    "to": 40
+   },
+   {
+    "w": "en",
+    "from": 40,
+    "to": 42
+   },
+   {
+    "w": "tu",
+    "from": 43,
+    "to": 45
+   },
+   {
+    "w": "celular",
+    "from": 46,
+    "to": 59
+   },
+   {
+    "w": "subes",
+    "from": 68,
+    "to": 79
+   },
+   {
+    "w": "un",
+    "from": 79,
+    "to": 83
+   },
+   {
+    "w": "cerdo",
+    "from": 83,
+    "to": 92
+   },
+   {
+    "w": "de",
+    "from": 93,
+    "to": 96
+   },
+   {
+    "w": "prueba",
+    "from": 96,
+    "to": 106
+   },
+   {
+    "w": "y",
+    "from": 106,
+    "to": 110
+   },
+   {
+    "w": "el",
+    "from": 110,
+    "to": 113
+   },
+   {
+    "w": "sistema",
+    "from": 113,
+    "to": 125
+   },
+   {
+    "w": "se",
+    "from": 126,
+    "to": 130
+   },
+   {
+    "w": "calibra",
+    "from": 130,
+    "to": 142
+   },
+   {
+    "w": "solo",
+    "from": 142,
+    "to": 153
+   },
+   {
+    "w": "después",
+    "from": 162,
+    "to": 173
+   },
+   {
+    "w": "subes",
+    "from": 173,
+    "to": 183
+   },
+   {
+    "w": "el",
+    "from": 183,
+    "to": 186
+   },
+   {
+    "w": "lote",
+    "from": 186,
+    "to": 193
+   },
+   {
+    "w": "como",
+    "from": 194,
+    "to": 201
+   },
+   {
+    "w": "quieras",
+    "from": 201,
+    "to": 214
+   },
+   {
+    "w": "que",
+    "from": 221,
+    "to": 224
+   },
+   {
+    "w": "él",
+    "from": 224,
+    "to": 228
+   },
+   {
+    "w": "cuenta",
+    "from": 228,
+    "to": 239
+   },
+   {
+    "w": "descuenta",
+    "from": 247,
+    "to": 261
+   },
+   {
+    "w": "al",
+    "from": 262,
+    "to": 265
+   },
+   {
+    "w": "que",
+    "from": 265,
+    "to": 268
+   },
+   {
+    "w": "se",
+    "from": 268,
+    "to": 272
+   },
+   {
+    "w": "baja",
+    "from": 273,
+    "to": 283
+   },
+   {
+    "w": "y",
+    "from": 290,
+    "to": 292
+   },
+   {
+    "w": "si",
+    "from": 292,
+    "to": 296
+   },
+   {
+    "w": "duda",
+    "from": 297,
+    "to": 307
+   },
+   {
+    "w": "te",
+    "from": 315,
+    "to": 316
+   },
+   {
+    "w": "pregunta",
+    "from": 316,
+    "to": 332
+   },
+   {
+    "w": "y",
+    "from": 339,
+    "to": 342
+   },
+   {
+    "w": "al",
+    "from": 342,
+    "to": 345
+   },
+   {
+    "w": "final",
+    "from": 346,
+    "to": 356
+   },
+   {
+    "w": "te",
+    "from": 356,
+    "to": 359
+   },
+   {
+    "w": "da",
+    "from": 359,
+    "to": 363
+   },
+   {
+    "w": "total",
+    "from": 364,
+    "to": 376
+   },
+   {
+    "w": "promedio",
+    "from": 383,
+    "to": 397
+   },
+   {
+    "w": "uniformidad",
+    "from": 404,
+    "to": 423
+   },
+   {
+    "w": "y",
+    "from": 430,
+    "to": 432
+   },
+   {
+    "w": "tu",
+    "from": 432,
+    "to": 435
+   },
+   {
+    "w": "informe",
+    "from": 435,
+    "to": 447
+   },
+   {
+    "w": "en",
+    "from": 448,
+    "to": 451
+   },
+   {
+    "w": "Excel",
+    "from": 451,
+    "to": 463
+   },
+   {
+    "w": "y",
+    "from": 463,
+    "to": 465
+   },
+   {
+    "w": "PDF",
+    "from": 465,
+    "to": 482
+   },
+   {
+    "w": "con",
+    "from": 482,
+    "to": 488
+   },
+   {
+    "w": "tu",
+    "from": 489,
+    "to": 491
+   },
+   {
+    "w": "marca",
+    "from": 492,
+    "to": 505
+   }
+  ],
+  "cues": [
+   {
+    "text": "En el corral todo pasa en tu celular",
+    "from": 3,
+    "to": 68
+   },
+   {
+    "text": "subes un cerdo de prueba y el sistema se calibra solo",
+    "from": 68,
+    "to": 162
+   },
+   {
+    "text": "después subes el lote como quieras",
+    "from": 162,
+    "to": 221
+   },
+   {
+    "text": "que él cuenta, descuenta al que se baja",
+    "from": 221,
+    "to": 290
+   },
+   {
+    "text": "y si duda... te pregunta",
+    "from": 290,
+    "to": 339
+   },
+   {
+    "text": "y al final te da total, promedio, uniformidad",
+    "from": 339,
+    "to": 430
+   },
+   {
+    "text": "y tu informe en Excel y PDF con tu marca.",
+    "from": 430,
+    "to": 517
+   }
+  ]
+ },
+ "e4b": {
+  "dur": 6.888,
+  "frames": 207,
+  "words": [
+   {
+    "w": "Y",
+    "from": 3,
+    "to": 8
+   },
+   {
+    "w": "en",
+    "from": 8,
+    "to": 11
+   },
+   {
+    "w": "el",
+    "from": 11,
+    "to": 15
+   },
+   {
+    "w": "computador",
+    "from": 15,
+    "to": 33
+   },
+   {
+    "w": "tienes",
+    "from": 33,
+    "to": 44
+   },
+   {
+    "w": "toda",
+    "from": 44,
+    "to": 51
+   },
+   {
+    "w": "la",
+    "from": 52,
+    "to": 56
+   },
+   {
+    "w": "analítica",
+    "from": 56,
+    "to": 74
+   },
+   {
+    "w": "cada",
+    "from": 81,
+    "to": 87
+   },
+   {
+    "w": "lote",
+    "from": 87,
+    "to": 97
+   },
+   {
+    "w": "cada",
+    "from": 105,
+    "to": 110
+   },
+   {
+    "w": "pesaje",
+    "from": 111,
+    "to": 126
+   },
+   {
+    "w": "cada",
+    "from": 133,
+    "to": 138
+   },
+   {
+    "w": "tendencia",
+    "from": 139,
+    "to": 156
+   },
+   {
+    "w": "lista",
+    "from": 164,
+    "to": 174
+   },
+   {
+    "w": "para",
+    "from": 174,
+    "to": 180
+   },
+   {
+    "w": "decidir",
+    "from": 180,
+    "to": 198
+   }
+  ],
+  "cues": [
+   {
+    "text": "Y en el computador tienes toda la analítica",
+    "from": 3,
+    "to": 81
+   },
+   {
+    "text": "cada lote, cada pesaje, cada tendencia...",
+    "from": 81,
+    "to": 164
+   },
+   {
+    "text": "lista para decidir.",
+    "from": 164,
+    "to": 210
+   }
+  ]
+ },
+ "e5": {
+  "dur": 10.44,
+  "frames": 313,
+  "words": [
+   {
+    "w": "Se",
+    "from": 3,
+    "to": 9
+   },
+   {
+    "w": "instala",
+    "from": 10,
+    "to": 22
+   },
+   {
+    "w": "en",
+    "from": 23,
+    "to": 25
+   },
+   {
+    "w": "el",
+    "from": 25,
+    "to": 29
+   },
+   {
+    "w": "computador",
+    "from": 29,
+    "to": 46
+   },
+   {
+    "w": "de",
+    "from": 46,
+    "to": 49
+   },
+   {
+    "w": "la",
+    "from": 49,
+    "to": 52
+   },
+   {
+    "w": "granja",
+    "from": 52,
+    "to": 65
+   },
+   {
+    "w": "o",
+    "from": 65,
+    "to": 69
+   },
+   {
+    "w": "en",
+    "from": 69,
+    "to": 72
+   },
+   {
+    "w": "un",
+    "from": 73,
+    "to": 76
+   },
+   {
+    "w": "celular",
+    "from": 76,
+    "to": 90
+   },
+   {
+    "w": "conectado",
+    "from": 98,
+    "to": 113
+   },
+   {
+    "w": "por",
+    "from": 113,
+    "to": 119
+   },
+   {
+    "w": "cable",
+    "from": 119,
+    "to": 128
+   },
+   {
+    "w": "o",
+    "from": 129,
+    "to": 131
+   },
+   {
+    "w": "por",
+    "from": 131,
+    "to": 137
+   },
+   {
+    "w": "Bluetooth",
+    "from": 137,
+    "to": 148
+   },
+   {
+    "w": "y",
+    "from": 156,
+    "to": 158
+   },
+   {
+    "w": "funciona",
+    "from": 159,
+    "to": 172
+   },
+   {
+    "w": "sin",
+    "from": 173,
+    "to": 178
+   },
+   {
+    "w": "internet",
+    "from": 178,
+    "to": 194
+   },
+   {
+    "w": "en",
+    "from": 200,
+    "to": 205
+   },
+   {
+    "w": "pleno",
+    "from": 205,
+    "to": 214
+   },
+   {
+    "w": "corral",
+    "from": 214,
+    "to": 226
+   },
+   {
+    "w": "sin",
+    "from": 234,
+    "to": 239
+   },
+   {
+    "w": "señal",
+    "from": 240,
+    "to": 253
+   },
+   {
+    "w": "no",
+    "from": 261,
+    "to": 265
+   },
+   {
+    "w": "se",
+    "from": 265,
+    "to": 270
+   },
+   {
+    "w": "pierde",
+    "from": 270,
+    "to": 281
+   },
+   {
+    "w": "ni",
+    "from": 281,
+    "to": 286
+   },
+   {
+    "w": "un",
+    "from": 286,
+    "to": 291
+   },
+   {
+    "w": "kilo",
+    "from": 291,
+    "to": 303
+   }
+  ],
+  "cues": [
+   {
+    "text": "Se instala en el computador de la granja o en un celular",
+    "from": 3,
+    "to": 98
+   },
+   {
+    "text": "conectado por cable o por Bluetooth",
+    "from": 98,
+    "to": 156
+   },
+   {
+    "text": "y funciona sin internet...",
+    "from": 156,
+    "to": 200
+   },
+   {
+    "text": "en pleno corral, sin señal",
+    "from": 200,
+    "to": 261
+   },
+   {
+    "text": "no se pierde ni un kilo.",
+    "from": 261,
+    "to": 315
+   }
+  ]
+ },
+ "e6": {
+  "dur": 13.872,
+  "frames": 416,
+  "words": [
+   {
+    "w": "Y",
+    "from": 3,
+    "to": 6
+   },
+   {
+    "w": "cuando",
+    "from": 7,
+    "to": 16
+   },
+   {
+    "w": "quieras",
+    "from": 16,
+    "to": 27
+   },
+   {
+    "w": "más",
+    "from": 27,
+    "to": 39
+   },
+   {
+    "w": "Activas",
+    "from": 45,
+    "to": 57
+   },
+   {
+    "w": "la",
+    "from": 58,
+    "to": 60
+   },
+   {
+    "w": "nube",
+    "from": 60,
+    "to": 70
+   },
+   {
+    "w": "y",
+    "from": 77,
+    "to": 80
+   },
+   {
+    "w": "tienes",
+    "from": 81,
+    "to": 91
+   },
+   {
+    "w": "el",
+    "from": 91,
+    "to": 94
+   },
+   {
+    "w": "celular",
+    "from": 94,
+    "to": 107
+   },
+   {
+    "w": "en",
+    "from": 107,
+    "to": 109
+   },
+   {
+    "w": "el",
+    "from": 110,
+    "to": 113
+   },
+   {
+    "w": "corral",
+    "from": 113,
+    "to": 124
+   },
+   {
+    "w": "el",
+    "from": 133,
+    "to": 136
+   },
+   {
+    "w": "computador",
+    "from": 137,
+    "to": 154
+   },
+   {
+    "w": "en",
+    "from": 154,
+    "to": 156
+   },
+   {
+    "w": "la",
+    "from": 157,
+    "to": 158
+   },
+   {
+    "w": "oficina",
+    "from": 159,
+    "to": 174
+   },
+   {
+    "w": "y",
+    "from": 182,
+    "to": 186
+   },
+   {
+    "w": "todas",
+    "from": 186,
+    "to": 196
+   },
+   {
+    "w": "tus",
+    "from": 197,
+    "to": 202
+   },
+   {
+    "w": "granjas",
+    "from": 202,
+    "to": 214
+   },
+   {
+    "w": "en",
+    "from": 215,
+    "to": 219
+   },
+   {
+    "w": "tiempo",
+    "from": 219,
+    "to": 229
+   },
+   {
+    "w": "real",
+    "from": 229,
+    "to": 239
+   },
+   {
+    "w": "con",
+    "from": 246,
+    "to": 250
+   },
+   {
+    "w": "la",
+    "from": 251,
+    "to": 253
+   },
+   {
+    "w": "información",
+    "from": 253,
+    "to": 271
+   },
+   {
+    "w": "centralizada",
+    "from": 272,
+    "to": 296
+   },
+   {
+    "w": "PorciPeso",
+    "from": 303,
+    "to": 320
+   },
+   {
+    "w": "una",
+    "from": 328,
+    "to": 332
+   },
+   {
+    "w": "solución",
+    "from": 333,
+    "to": 347
+   },
+   {
+    "w": "ELEIA",
+    "from": 348,
+    "to": 359
+   },
+   {
+    "w": "agenda",
+    "from": 367,
+    "to": 380
+   },
+   {
+    "w": "tu",
+    "from": 380,
+    "to": 384
+   },
+   {
+    "w": "demostración",
+    "from": 384,
+    "to": 407
+   }
+  ],
+  "cues": [
+   {
+    "text": "¿Y cuando quieras más?",
+    "from": 3,
+    "to": 45
+   },
+   {
+    "text": "Activas la nube",
+    "from": 45,
+    "to": 77
+   },
+   {
+    "text": "y tienes el celular en el corral",
+    "from": 77,
+    "to": 133
+   },
+   {
+    "text": "el computador en la oficina",
+    "from": 133,
+    "to": 182
+   },
+   {
+    "text": "y todas tus granjas en tiempo real",
+    "from": 182,
+    "to": 246
+   },
+   {
+    "text": "con la información centralizada...",
+    "from": 246,
+    "to": 303
+   },
+   {
+    "text": "PorciPeso, una solución ELEIA",
+    "from": 303,
+    "to": 367
+   },
+   {
+    "text": "agenda tu demostración.",
+    "from": 367,
+    "to": 419
+   }
+  ]
+ },
+ "s1": {
+  "dur": 11.448,
+  "frames": 343,
+  "words": [
+   {
+    "w": "Cuántos",
+    "from": 3,
+    "to": 13
+   },
+   {
+    "w": "cerdos",
+    "from": 13,
+    "to": 25
+   },
+   {
+    "w": "hay",
+    "from": 25,
+    "to": 30
+   },
+   {
+    "w": "en",
+    "from": 30,
+    "to": 33
+   },
+   {
+    "w": "esta",
+    "from": 34,
+    "to": 40
+   },
+   {
+    "w": "báscula",
+    "from": 41,
+    "to": 55
+   },
+   {
+    "w": "veinte",
+    "from": 63,
+    "to": 74
+   },
+   {
+    "w": "veinticinco",
+    "from": 81,
+    "to": 102
+   },
+   {
+    "w": "treinta",
+    "from": 109,
+    "to": 121
+   },
+   {
+    "w": "El",
+    "from": 127,
+    "to": 130
+   },
+   {
+    "w": "sistema",
+    "from": 130,
+    "to": 143
+   },
+   {
+    "w": "ya",
+    "from": 143,
+    "to": 147
+   },
+   {
+    "w": "lo",
+    "from": 148,
+    "to": 151
+   },
+   {
+    "w": "sabe",
+    "from": 151,
+    "to": 162
+   },
+   {
+    "w": "son",
+    "from": 169,
+    "to": 175
+   },
+   {
+    "w": "veintisiete",
+    "from": 176,
+    "to": 196
+   },
+   {
+    "w": "PorciPeso",
+    "from": 204,
+    "to": 218
+   },
+   {
+    "w": "cuenta",
+    "from": 218,
+    "to": 227
+   },
+   {
+    "w": "por",
+    "from": 228,
+    "to": 233
+   },
+   {
+    "w": "ti",
+    "from": 233,
+    "to": 240
+   },
+   {
+    "w": "en",
+    "from": 247,
+    "to": 249
+   },
+   {
+    "w": "cualquier",
+    "from": 250,
+    "to": 262
+   },
+   {
+    "w": "báscula",
+    "from": 262,
+    "to": 275
+   },
+   {
+    "w": "con",
+    "from": 275,
+    "to": 281
+   },
+   {
+    "w": "puerto",
+    "from": 281,
+    "to": 290
+   },
+   {
+    "w": "serial",
+    "from": 290,
+    "to": 303
+   },
+   {
+    "w": "escríbenos",
+    "from": 311,
+    "to": 333
+   }
+  ]
+ },
+ "s2": {
+  "dur": 13.608,
+  "frames": 408,
+  "words": [
+   {
+    "w": "Deja",
+    "from": 3,
+    "to": 13
+   },
+   {
+    "w": "de",
+    "from": 13,
+    "to": 16
+   },
+   {
+    "w": "contar",
+    "from": 16,
+    "to": 28
+   },
+   {
+    "w": "cerdos",
+    "from": 28,
+    "to": 40
+   },
+   {
+    "w": "a",
+    "from": 41,
+    "to": 42
+   },
+   {
+    "w": "mano",
+    "from": 43,
+    "to": 53
+   },
+   {
+    "w": "eran",
+    "from": 61,
+    "to": 66
+   },
+   {
+    "w": "veintiséis",
+    "from": 66,
+    "to": 85
+   },
+   {
+    "w": "o",
+    "from": 89,
+    "to": 91
+   },
+   {
+    "w": "veintisiete",
+    "from": 92,
+    "to": 113
+   },
+   {
+    "w": "y",
+    "from": 121,
+    "to": 124
+   },
+   {
+    "w": "el",
+    "from": 124,
+    "to": 128
+   },
+   {
+    "w": "que",
+    "from": 128,
+    "to": 131
+   },
+   {
+    "w": "se",
+    "from": 131,
+    "to": 135
+   },
+   {
+    "w": "bajó",
+    "from": 136,
+    "to": 145
+   },
+   {
+    "w": "y",
+    "from": 145,
+    "to": 147
+   },
+   {
+    "w": "nadie",
+    "from": 148,
+    "to": 158
+   },
+   {
+    "w": "lo",
+    "from": 158,
+    "to": 161
+   },
+   {
+    "w": "vio",
+    "from": 162,
+    "to": 170
+   },
+   {
+    "w": "El",
+    "from": 177,
+    "to": 179
+   },
+   {
+    "w": "celular",
+    "from": 180,
+    "to": 192
+   },
+   {
+    "w": "en",
+    "from": 192,
+    "to": 195
+   },
+   {
+    "w": "el",
+    "from": 195,
+    "to": 198
+   },
+   {
+    "w": "corral",
+    "from": 199,
+    "to": 208
+   },
+   {
+    "w": "cuenta",
+    "from": 208,
+    "to": 217
+   },
+   {
+    "w": "solo",
+    "from": 218,
+    "to": 229
+   },
+   {
+    "w": "subieron",
+    "from": 236,
+    "to": 250
+   },
+   {
+    "w": "tres",
+    "from": 251,
+    "to": 261
+   },
+   {
+    "w": "uno",
+    "from": 269,
+    "to": 274
+   },
+   {
+    "w": "se",
+    "from": 275,
+    "to": 278
+   },
+   {
+    "w": "bajó",
+    "from": 279,
+    "to": 288
+   },
+   {
+    "w": "ya",
+    "from": 296,
+    "to": 299
+   },
+   {
+    "w": "lo",
+    "from": 299,
+    "to": 302
+   },
+   {
+    "w": "desconté",
+    "from": 302,
+    "to": 318
+   },
+   {
+    "w": "él",
+    "from": 325,
+    "to": 330
+   },
+   {
+    "w": "cuenta",
+    "from": 330,
+    "to": 342
+   },
+   {
+    "w": "tú",
+    "from": 349,
+    "to": 351
+   },
+   {
+    "w": "decides",
+    "from": 351,
+    "to": 367
+   },
+   {
+    "w": "escríbenos",
+    "from": 374,
+    "to": 398
+   }
+  ]
+ },
+ "s3": {
+  "dur": 15.264,
+  "frames": 458,
+  "words": [
+   {
+    "w": "No",
+    "from": 3,
+    "to": 9
+   },
+   {
+    "w": "compres",
+    "from": 9,
+    "to": 21
+   },
+   {
+    "w": "báscula",
+    "from": 21,
+    "to": 33
+   },
+   {
+    "w": "nueva",
+    "from": 33,
+    "to": 44
+   },
+   {
+    "w": "tu",
+    "from": 52,
+    "to": 52
+   },
+   {
+    "w": "indicador",
+    "from": 53,
+    "to": 68
+   },
+   {
+    "w": "tiene",
+    "from": 69,
+    "to": 77
+   },
+   {
+    "w": "este",
+    "from": 77,
+    "to": 84
+   },
+   {
+    "w": "puerto",
+    "from": 84,
+    "to": 97
+   },
+   {
+    "w": "Entonces",
+    "from": 104,
+    "to": 118
+   },
+   {
+    "w": "ya",
+    "from": 119,
+    "to": 122
+   },
+   {
+    "w": "tienes",
+    "from": 123,
+    "to": 133
+   },
+   {
+    "w": "un",
+    "from": 133,
+    "to": 136
+   },
+   {
+    "w": "sistema",
+    "from": 136,
+    "to": 148
+   },
+   {
+    "w": "inteligente",
+    "from": 148,
+    "to": 168
+   },
+   {
+    "w": "veinticinco",
+    "from": 176,
+    "to": 194
+   },
+   {
+    "w": "marcas",
+    "from": 195,
+    "to": 207
+   },
+   {
+    "w": "integradas",
+    "from": 207,
+    "to": 226
+   },
+   {
+    "w": "del",
+    "from": 233,
+    "to": 238
+   },
+   {
+    "w": "más",
+    "from": 238,
+    "to": 245
+   },
+   {
+    "w": "barato",
+    "from": 246,
+    "to": 256
+   },
+   {
+    "w": "al",
+    "from": 256,
+    "to": 259
+   },
+   {
+    "w": "más",
+    "from": 260,
+    "to": 267
+   },
+   {
+    "w": "caro",
+    "from": 267,
+    "to": 278
+   },
+   {
+    "w": "PorciPeso",
+    "from": 284,
+    "to": 299
+   },
+   {
+    "w": "convierte",
+    "from": 299,
+    "to": 314
+   },
+   {
+    "w": "la",
+    "from": 314,
+    "to": 316
+   },
+   {
+    "w": "báscula",
+    "from": 317,
+    "to": 330
+   },
+   {
+    "w": "que",
+    "from": 330,
+    "to": 334
+   },
+   {
+    "w": "ya",
+    "from": 334,
+    "to": 339
+   },
+   {
+    "w": "tienes",
+    "from": 340,
+    "to": 351
+   },
+   {
+    "w": "sin",
+    "from": 358,
+    "to": 364
+   },
+   {
+    "w": "importaciones",
+    "from": 365,
+    "to": 389
+   },
+   {
+    "w": "sin",
+    "from": 395,
+    "to": 401
+   },
+   {
+    "w": "esperas",
+    "from": 402,
+    "to": 418
+   },
+   {
+    "w": "escríbenos",
+    "from": 424,
+    "to": 448
+   }
+  ]
+ },
+ "s4": {
+  "dur": 11.952,
+  "frames": 359,
+  "words": [
+   {
+    "w": "Míralo",
+    "from": 3,
+    "to": 16
+   },
+   {
+    "w": "desde",
+    "from": 16,
+    "to": 24
+   },
+   {
+    "w": "tu",
+    "from": 25,
+    "to": 27
+   },
+   {
+    "w": "hamaca",
+    "from": 27,
+    "to": 39
+   },
+   {
+    "w": "todas",
+    "from": 47,
+    "to": 54
+   },
+   {
+    "w": "tus",
+    "from": 54,
+    "to": 60
+   },
+   {
+    "w": "granjas",
+    "from": 60,
+    "to": 72
+   },
+   {
+    "w": "en",
+    "from": 72,
+    "to": 76
+   },
+   {
+    "w": "tiempo",
+    "from": 77,
+    "to": 86
+   },
+   {
+    "w": "real",
+    "from": 87,
+    "to": 96
+   },
+   {
+    "w": "en",
+    "from": 102,
+    "to": 105
+   },
+   {
+    "w": "tu",
+    "from": 106,
+    "to": 109
+   },
+   {
+    "w": "bolsillo",
+    "from": 109,
+    "to": 125
+   },
+   {
+    "w": "tres",
+    "from": 133,
+    "to": 138
+   },
+   {
+    "w": "granjas",
+    "from": 138,
+    "to": 153
+   },
+   {
+    "w": "doce",
+    "from": 160,
+    "to": 167
+   },
+   {
+    "w": "mil",
+    "from": 168,
+    "to": 174
+   },
+   {
+    "w": "ochocientos",
+    "from": 174,
+    "to": 191
+   },
+   {
+    "w": "kilos",
+    "from": 192,
+    "to": 202
+   },
+   {
+    "w": "hoy",
+    "from": 203,
+    "to": 209
+   },
+   {
+    "w": "y",
+    "from": 217,
+    "to": 218
+   },
+   {
+    "w": "subiendo",
+    "from": 219,
+    "to": 235
+   },
+   {
+    "w": "la",
+    "from": 243,
+    "to": 245
+   },
+   {
+    "w": "nube",
+    "from": 246,
+    "to": 253
+   },
+   {
+    "w": "de",
+    "from": 254,
+    "to": 257
+   },
+   {
+    "w": "PorciPeso",
+    "from": 257,
+    "to": 278
+   },
+   {
+    "w": "una",
+    "from": 286,
+    "to": 290
+   },
+   {
+    "w": "solución",
+    "from": 290,
+    "to": 305
+   },
+   {
+    "w": "ELEIA",
+    "from": 305,
+    "to": 318
+   },
+   {
+    "w": "escríbenos",
+    "from": 324,
+    "to": 348
+   }
+  ]
+ }
+}

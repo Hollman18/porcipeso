@@ -11,6 +11,7 @@ import {
 } from "remotion";
 import { C, F } from "../theme";
 import { LedBox } from "../components/Devices";
+import { FotoBg } from "../components/Common";
 import {
   BigText,
   EndCard,
@@ -71,17 +72,18 @@ const Guess: React.FC<{ at: number; kill: number; label: string }> = ({ at, kill
 export const S1Reto: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const kg = useRoll(4, 226, 2847);
-  const reveal = frame >= 226;
-  const ring = spring({ frame: frame - 226, fps, config: { damping: 14, mass: 0.8 } });
+  const kg = useRoll(4, 180, 2847);
+  const reveal = frame >= 180;
+  const ring = spring({ frame: frame - 180, fps, config: { damping: 14, mass: 0.8 } });
 
   return (
     <AbsoluteFill
       style={{
-        background: `radial-gradient(ellipse at 50% 35%, ${C.darkCard} 0%, ${C.darkBg} 72%)`,
+        background: C.darkBg,
       }}
     >
-      <Punch beats={[75, 110, 153, 226, 273]}>
+      <FotoBg src="fotos/tres-cerdos.jpg" dur={400} overlay={0.66} zoomFrom={1.1} zoomTo={1.24} panY={-20} />
+      <Punch beats={[71, 89, 117, 180, 212]}>
         {/* HOOK — visible desde el frame 0 */}
         <div style={{ position: "absolute", top: 320, width: "100%" }}>
           <BigText size={118} shake={!reveal}>
@@ -120,9 +122,9 @@ export const S1Reto: React.FC = () => {
               gap: 70,
             }}
           >
-            <Guess at={75} kill={104} label="¿20?" />
-            <Guess at={110} kill={147} label="¿25?" />
-            <Guess at={153} kill={196} label="¿30?" />
+            <Guess at={71} kill={89} label="¿20?" />
+            <Guess at={89} kill={117} label="¿25?" />
+            <Guess at={117} kill={160} label="¿30?" />
           </div>
         ) : (
           <div
@@ -177,17 +179,17 @@ export const S1Reto: React.FC = () => {
         )}
       </Punch>
 
-      <Flash beats={[226]} color={C.eleia} peak={0.75} />
-      <Flash beats={[75, 110, 153]} color={C.led} peak={0.22} />
+      <Flash beats={[180]} color={C.eleia} peak={0.75} />
+      <Flash beats={[71, 89, 117]} color={C.led} peak={0.22} />
 
       <WordCaps
         scene="s1"
         keywords={["cerdos", "báscula", "veintisiete", "PorciPeso", "serial", "Escríbenos"]}
         y={1210}
-        hideBefore={45}
+        hideBefore={55}
       />
 
-      <EndCard at={392} />
+      <EndCard at={334} />
 
       <Sequence from={SHORT_AUDIO_DELAY}>
         <Audio src={staticFile("audio/s1.mp3")} />

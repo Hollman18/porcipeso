@@ -12,6 +12,7 @@ import {
 import { C, F } from "../theme";
 import { LedBox } from "../components/Devices";
 import { BigText, EndCard, Flash, Punch, SHORT_AUDIO_DELAY, WordCaps, useRoll } from "./ShortCommon";
+import { FotoBg } from "../components/Common";
 
 const MARCAS = [
   "Yaohua", "Trumax", "Cardinal", "Mettler", "A&D", "Ohaus",
@@ -95,16 +96,17 @@ const Stamp: React.FC<{ at: number; tilt: number; children: React.ReactNode }> =
 /** SHORT 3 — "NO COMPRES BÁSCULA NUEVA". */
 export const S3NoCompres: React.FC = () => {
   const frame = useCurrentFrame();
-  const n = useRoll(216, 268, 25);
-  const phase = frame < 64 ? 0 : frame < 205 ? 1 : frame < 312 ? 2 : 3;
+  const n = useRoll(184, 232, 25);
+  const phase = frame < 58 ? 0 : frame < 176 ? 1 : frame < 296 ? 2 : 3;
 
   return (
     <AbsoluteFill
       style={{
-        background: `radial-gradient(ellipse at 50% 35%, ${C.darkCard} 0%, ${C.darkBg} 72%)`,
+        background: C.darkBg,
       }}
     >
-      <Punch beats={[68, 129, 208, 261, 316, 406, 457]}>
+      <FotoBg src="fotos/cerdo-silos.jpg" dur={510} overlay={0.64} zoomFrom={1.04} zoomTo={1.16} panY={-18} />
+      <Punch beats={[60, 104, 184, 241, 300, 372, 408]}>
         {/* HOOK — frame 0 */}
         {phase <= 1 && (
           <div style={{ position: "absolute", top: 300, width: "100%" }}>
@@ -115,7 +117,7 @@ export const S3NoCompres: React.FC = () => {
                 <span style={{ color: C.led }}>báscula nueva</span>
               </BigText>
             ) : (
-              <BigText at={68} size={100}>
+              <BigText at={60} size={100}>
                 ¿Tu indicador tiene
                 <br />
                 <span style={{ color: C.eleia }}>ESTE puerto?</span>
@@ -137,9 +139,9 @@ export const S3NoCompres: React.FC = () => {
               gap: 20,
             }}
           >
-            <DB9 at={72} />
-            {frame >= 133 && (
-              <BigText at={133} size={130} color={C.eleia}>
+            <DB9 at={66} />
+            {frame >= 104 && (
+              <BigText at={104} size={130} color={C.eleia}>
                 ✓
               </BigText>
             )}
@@ -198,7 +200,7 @@ export const S3NoCompres: React.FC = () => {
               }}
             >
               {MARCAS.map((m, i) => {
-                const at = 212 + i * 3;
+                const at = 186 + i * 3;
                 const grow = interpolate(frame, [at, at + 7], [0.3, 1], {
                   extrapolateLeft: "clamp",
                   extrapolateRight: "clamp",
@@ -235,7 +237,7 @@ export const S3NoCompres: React.FC = () => {
         {phase === 3 && (
           <>
             <div style={{ position: "absolute", top: 320, width: "100%" }}>
-              <BigText at={316} size={92}>
+              <BigText at={300} size={92}>
                 Convierte la báscula
                 <br />
                 que <span style={{ color: C.eleia }}>YA tienes</span>
@@ -263,10 +265,10 @@ export const S3NoCompres: React.FC = () => {
                 gap: 26,
               }}
             >
-              <Stamp at={406} tilt={-5}>
+              <Stamp at={372} tilt={-5}>
                 Sin importaciones
               </Stamp>
-              <Stamp at={457} tilt={3}>
+              <Stamp at={408} tilt={3}>
                 Sin esperas
               </Stamp>
             </div>
@@ -274,8 +276,8 @@ export const S3NoCompres: React.FC = () => {
         )}
       </Punch>
 
-      <Flash beats={[68]} color={C.led} peak={0.3} />
-      <Flash beats={[129, 208]} color={C.eleia} peak={0.55} />
+      <Flash beats={[60]} color={C.led} peak={0.3} />
+      <Flash beats={[104, 184]} color={C.eleia} peak={0.55} />
 
       <WordCaps
         scene="s3"
@@ -285,10 +287,10 @@ export const S3NoCompres: React.FC = () => {
         ]}
         y={1250}
         size={70}
-        hideBefore={45}
+        hideBefore={55}
       />
 
-      <EndCard at={500} />
+      <EndCard at={447} />
 
       <Sequence from={SHORT_AUDIO_DELAY}>
         <Audio src={staticFile("audio/s3.mp3")} />

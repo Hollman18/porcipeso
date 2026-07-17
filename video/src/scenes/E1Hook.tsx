@@ -2,9 +2,9 @@ import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import { C } from "../theme";
 import { LedBox } from "../components/Devices";
-import { Lockup, Subtitles } from "../components/Common";
+import { FotoBg, Lockup, Subtitles } from "../components/Common";
 
-/** E1 — LOGO+HOOK: el LED rojo despierta en "0.0 kg" y aparece el lockup. */
+/** E1 — LOGO+HOOK: cerdo real de fondo, el LED rojo despierta y aparece el lockup. */
 export const E1Hook: React.FC = () => {
   const frame = useCurrentFrame();
 
@@ -19,16 +19,26 @@ export const E1Hook: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        background: `radial-gradient(ellipse at 50% 35%, ${C.darkCard} 0%, ${C.darkBg} 70%)`,
+        background: C.darkBg,
         justifyContent: "center",
         alignItems: "center",
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 56 }}>
+      <FotoBg src="fotos/cerdo-oscuro.jpg" dur={225} overlay={0.58} zoomFrom={1.05} zoomTo={1.16} panX={-24} />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 56,
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
         <div style={{ opacity: flicker }}>
           <LedBox value="0.0" width={620} fontSize={150} glow={glow} />
         </div>
-        <Lockup at={62} dark eleiaAt={150} />
+        <Lockup at={62} dark eleiaAt={140} />
       </div>
       <Subtitles scene="e1" />
     </AbsoluteFill>

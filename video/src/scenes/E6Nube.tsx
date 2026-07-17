@@ -1,7 +1,7 @@
 import React from "react";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { C, F } from "../theme";
-import { Fade, Lockup, Pop, Subtitles } from "../components/Common";
+import { FotoBg, Fade, Lockup, Pop, Subtitles } from "../components/Common";
 
 const Node: React.FC<{
   at: number;
@@ -86,32 +86,33 @@ export const E6Nube: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const netOut = interpolate(frame, [318, 342], [1, 0], {
+  const netOut = interpolate(frame, [300, 322], [1, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
   const cloudPulse = 1 + Math.sin(frame / 9) * 0.03;
-  const ctaS = spring({ frame: frame - 424, fps, config: { damping: 12, mass: 0.7 } });
+  const ctaS = spring({ frame: frame - 378, fps, config: { damping: 12, mass: 0.7 } });
 
   return (
     <AbsoluteFill
       style={{
-        background: `radial-gradient(ellipse at 50% 40%, ${C.darkCard} 0%, ${C.darkBg} 75%)`,
+        background: C.darkBg,
       }}
     >
+      <FotoBg src="fotos/lechones-mama.jpg" dur={470} overlay={0.72} zoomFrom={1.03} zoomTo={1.14} panX={16} />
       {/* ---- fase red: dispositivos + granjas → nube ---- */}
       <AbsoluteFill style={{ opacity: netOut }}>
         <svg width={1920} height={1080} style={{ position: "absolute", inset: 0 }}>
-          <Link x1={490} y1={430} x2={860} y2={330} at={80} frame={frame} />
-          <Link x1={1430} y1={430} x2={1060} y2={330} at={154} frame={frame} />
-          <Link x1={560} y1={790} x2={880} y2={380} at={208} frame={frame} />
-          <Link x1={960} y1={810} x2={960} y2={400} at={222} frame={frame} />
-          <Link x1={1360} y1={790} x2={1040} y2={380} at={236} frame={frame} />
+          <Link x1={490} y1={430} x2={860} y2={330} at={90} frame={frame} />
+          <Link x1={1430} y1={430} x2={1060} y2={330} at={145} frame={frame} />
+          <Link x1={560} y1={790} x2={880} y2={380} at={195} frame={frame} />
+          <Link x1={960} y1={810} x2={960} y2={400} at={207} frame={frame} />
+          <Link x1={1360} y1={790} x2={1040} y2={380} at={219} frame={frame} />
         </svg>
 
         {/* nube central */}
         <Pop
-          at={64}
+          at={56}
           style={{ position: "absolute", left: 960 - 130, top: 150, width: 260, textAlign: "center" }}
         >
           <div
@@ -138,23 +139,23 @@ export const E6Nube: React.FC = () => {
         </Pop>
 
         <div style={{ position: "absolute", left: 360, top: 360 }}>
-          <Node at={80} icon="📱" label="El celular" sub="en el corral" />
+          <Node at={90} icon="📱" label="El celular" sub="en el corral" />
         </div>
         <div style={{ position: "absolute", left: 1300, top: 360 }}>
-          <Node at={154} icon="💻" label="El computador" sub="en la oficina" />
+          <Node at={145} icon="💻" label="El computador" sub="en la oficina" />
         </div>
         <div style={{ position: "absolute", left: 430, top: 790 }}>
-          <Node at={208} icon="🐷" label="Granja La María" />
+          <Node at={195} icon="🐷" label="Granja La María" />
         </div>
         <div style={{ position: "absolute", left: 830, top: 810 }}>
-          <Node at={222} icon="🐷" label="Granja El Roble" />
+          <Node at={207} icon="🐷" label="Granja El Roble" />
         </div>
         <div style={{ position: "absolute", left: 1230, top: 790 }}>
-          <Node at={236} icon="🐷" label="Granja Santa Ana" />
+          <Node at={219} icon="🐷" label="Granja Santa Ana" />
         </div>
 
         {/* tarjeta en vivo */}
-        <Pop at={270} fromY={24} style={{ position: "absolute", right: 150, top: 130 }}>
+        <Pop at={258} fromY={24} style={{ position: "absolute", right: 150, top: 130 }}>
           <div
             style={{
               background: "rgba(255,255,255,0.06)",
@@ -206,8 +207,8 @@ export const E6Nube: React.FC = () => {
       </AbsoluteFill>
 
       {/* ---- cierre ---- */}
-      {frame > 330 && (
-        <Fade at={334} dur={16}>
+      {frame > 305 && (
+        <Fade at={310} dur={16}>
           <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
             <div
               style={{
@@ -218,8 +219,8 @@ export const E6Nube: React.FC = () => {
                 marginTop: -30,
               }}
             >
-              <Lockup at={336} dark />
-              <Fade at={352}>
+              <Lockup at={312} dark />
+              <Fade at={322}>
                 <div
                   style={{
                     fontFamily: F.body,
@@ -235,7 +236,7 @@ export const E6Nube: React.FC = () => {
               <div
                 style={{
                   transform: `scale(${0.8 + ctaS * 0.2})`,
-                  opacity: interpolate(frame, [424, 434], [0, 1], {
+                  opacity: interpolate(frame, [378, 388], [0, 1], {
                     extrapolateLeft: "clamp",
                     extrapolateRight: "clamp",
                   }),

@@ -9,20 +9,21 @@ import { E4bAnalitica } from "./scenes/E4bAnalitica";
 import { E5Instalacion } from "./scenes/E5Instalacion";
 import { E6Nube } from "./scenes/E6Nube";
 
-// Duración de cada escena en frames (30 fps). La voz arranca en AUDIO_DELAY (15).
-// Duraciones de los mp3 (ffprobe): e1 7.82s, e2 8.76s, e3 17.66s, e4 18.79s,
-// e4b 7.30s, e5 11.06s, e6 15.58s — cada escena deja aire después de la voz.
+// Duración de cada escena en frames (30 fps). La voz arranca en AUDIO_DELAY (8).
+// Audios JorgeNeural +5% con silencios comprimidos (tools/gen_audio.py):
+// e1 209f, e2 247f, e3 486f, e4 516f, e4b 207f, e5 313f, e6 416f.
+// Cada escena = 8f de entrada + voz + ~8f de aire (e6 sostiene el cierre CTA).
 export const SCENES = [
-  { key: "e1", frames: 285, Comp: E1Hook },
-  { key: "e2", frames: 315, Comp: E2Problema },
-  { key: "e3", frames: 585, Comp: E3Solucion },
-  { key: "e4", frames: 600, Comp: E4Celular },
-  { key: "e4b", frames: 270, Comp: E4bAnalitica },
-  { key: "e5", frames: 390, Comp: E5Instalacion },
-  { key: "e6", frames: 540, Comp: E6Nube },
+  { key: "e1", frames: 225, Comp: E1Hook },
+  { key: "e2", frames: 264, Comp: E2Problema },
+  { key: "e3", frames: 502, Comp: E3Solucion },
+  { key: "e4", frames: 532, Comp: E4Celular },
+  { key: "e4b", frames: 224, Comp: E4bAnalitica },
+  { key: "e5", frames: 330, Comp: E5Instalacion },
+  { key: "e6", frames: 470, Comp: E6Nube },
 ] as const;
 
-export const TOTAL_FRAMES = SCENES.reduce((a, s) => a + s.frames, 0); // 2985 = 99.5s
+export const TOTAL_FRAMES = SCENES.reduce((a, s) => a + s.frames, 0); // 2547 = 84.9s
 
 export const Main: React.FC = () => (
   <AbsoluteFill style={{ background: "#0F1411" }}>

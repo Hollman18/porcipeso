@@ -29,4 +29,4 @@ export const F = {
   mono: '"SF Mono",Menlo,Consolas,monospace',
 };
 
-export const AUDIO_DELAY = 15; // frames antes de que arranque la voz en cada escena
+export const AUDIO_DELAY = 8; // frames antes de que arranque la voz en cada escena

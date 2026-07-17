@@ -1,0 +1,11 @@
+Fotos de granja/cerdos — descargadas vía API de Openverse (api.openverse.org).
+Todas en dominio público (PDM) o CC0 — no requieren atribución; se listan por transparencia.
+
+cerdo-oscuro.jpg      | PDM | USDA "20171027-AMS-LSC-0828"  | https://live.staticflickr.com/4477/26291823499_e18f9333ff_b.jpg
+tres-cerdos.jpg       | PDM | USDA "20110506-RD-LSC-1391"   | https://live.staticflickr.com/2670/5708342186_0765a3d2ca_b.jpg
+corral-viejo.jpg      | PDM | Flickr "Easy... Like a Sunday Morning" | https://live.staticflickr.com/1885/43554208064_a7c1b80027_b.jpg
+granjero-comedero.jpg | PDM | USDA "20110506-RD-LSC-1500"   | https://live.staticflickr.com/3551/5708351886_bca3c12c01_b.jpg
+nina-cerdo.jpg        | PDM | USDA "20170806-OSEC-LSC-0427" | https://live.staticflickr.com/4379/36607695325_43672d872f_b.jpg
+cerdo-silos.jpg       | PDM | USDA "20110506-RD-LSC-1295"   | https://live.staticflickr.com/2606/5708331566_4d56bb4126_b.jpg
+trompa-sol.jpg        | PDM | USDA "20171027-AMS-LSC-1532"  | https://live.staticflickr.com/4452/38036921062_803ecca4b7_b.jpg
+lechones-mama.jpg     | CC0 | Wikimedia "Jinhua sow with piglets" (reescalada 2200px) | https://upload.wikimedia.org/wikipedia/commons/3/3e/Jinhua_sow_with_piglets.jpg

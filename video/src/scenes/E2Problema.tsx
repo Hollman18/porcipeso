@@ -1,7 +1,7 @@
 import React from "react";
 import { AbsoluteFill } from "remotion";
 import { C, F } from "../theme";
-import { Pop, SceneTitle, Subtitles } from "../components/Common";
+import { FotoBg, Pop, SceneTitle, Subtitles } from "../components/Common";
 
 const PainCard: React.FC<{
   at: number;
@@ -40,9 +40,10 @@ const PainCard: React.FC<{
   </Pop>
 );
 
-/** E2 — EL PROBLEMA: indicadores importados costosos, lentos y amarrados. */
+/** E2 — EL PROBLEMA: corral real de fondo; indicadores importados, lentos y amarrados. */
 export const E2Problema: React.FC = () => (
-  <AbsoluteFill style={{ background: C.hueso, justifyContent: "center", alignItems: "center" }}>
+  <AbsoluteFill style={{ background: C.darkBg, justifyContent: "center", alignItems: "center" }}>
+    <FotoBg src="fotos/corral-viejo.jpg" dur={264} overlay={0.62} zoomFrom={1.14} zoomTo={1.04} panX={18} />
     <div
       style={{
         display: "flex",
@@ -52,12 +53,12 @@ export const E2Problema: React.FC = () => (
         marginTop: -40,
       }}
     >
-      <SceneTitle at={8} size={64}>
+      <SceneTitle at={8} size={64} dark>
         El pesaje &ldquo;inteligente&rdquo; tradicional…
       </SceneTitle>
       <div style={{ display: "flex", gap: 44, alignItems: "center" }}>
         <PainCard
-          at={30}
+          at={62}
           icon="💸"
           title="Indicador importado"
           sub="Hardware especializado que cuesta una fortuna"
@@ -65,7 +66,7 @@ export const E2Problema: React.FC = () => (
           accent={C.red}
         />
         <PainCard
-          at={150}
+          at={120}
           icon="⏳"
           title="Meses de espera"
           sub="Importación, aduana, instalación…"
@@ -73,7 +74,7 @@ export const E2Problema: React.FC = () => (
           accent={C.amber}
         />
         <PainCard
-          at={208}
+          at={176}
           icon="🔒"
           title="Atado a una marca"
           sub="Solo funciona con SU báscula"

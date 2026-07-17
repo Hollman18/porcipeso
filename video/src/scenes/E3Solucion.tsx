@@ -15,16 +15,16 @@ const MARCAS = [
 /** Fase A: cable RS-232 animado del indicador al computador/celular. */
 const CablePhase: React.FC = () => {
   const frame = useCurrentFrame();
-  const draw = interpolate(frame, [46, 116], [1200, 0], {
+  const draw = interpolate(frame, [40, 104], [1200, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
   const pulse = (offset: number) =>
-    interpolate((frame - 120 + offset) % 60, [0, 60], [0, 1], {
+    interpolate((frame - 108 + offset) % 60, [0, 60], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
     });
-  const fadeOut = interpolate(frame, [242, 258], [1, 0], {
+  const fadeOut = interpolate(frame, [218, 236], [1, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -135,7 +135,7 @@ const CablePhase: React.FC = () => {
           <rect x={1058} y={458} width={56} height={40} rx={8} fill={C.panelEdge} stroke={C.panel} strokeWidth={3} />
         </g>
         {/* pulsos de datos viajando por el cable */}
-        {frame > 122 &&
+        {frame > 110 &&
           [0, 20, 40].map((o) => {
             const t = pulse(o);
             const x = 470 + t * 615;
@@ -145,7 +145,7 @@ const CablePhase: React.FC = () => {
       </svg>
 
       {/* etiqueta del cable */}
-      <Fade at={116} style={{ position: "absolute", top: 700, width: "100%", textAlign: "center" }}>
+      <Fade at={106} style={{ position: "absolute", top: 700, width: "100%", textAlign: "center" }}>
         <Chip>🔌 RS-232 · puerto serial · Conectado ✓</Chip>
       </Fade>
     </AbsoluteFill>
@@ -155,12 +155,12 @@ const CablePhase: React.FC = () => {
 /** Fase B: lluvia de marcas integradas. */
 const BrandsPhase: React.FC = () => {
   const frame = useCurrentFrame();
-  const n = useCount(258, 320, 0, 25);
-  const inOp = interpolate(frame, [252, 266], [0, 1], {
+  const n = useCount(236, 290, 0, 25);
+  const inOp = interpolate(frame, [230, 244], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  if (frame < 250) return null;
+  if (frame < 228) return null;
   return (
     <AbsoluteFill style={{ opacity: inOp, alignItems: "center" }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 24, marginTop: 66 }}>
@@ -191,7 +191,7 @@ const BrandsPhase: React.FC = () => {
         }}
       >
         {MARCAS.map((m, i) => (
-          <Pop key={m} at={268 + i * 5} fromY={-70}>
+          <Pop key={m} at={244 + i * 4} fromY={-70}>
             <div
               style={{
                 background: i === MARCAS.length - 1 ? C.verdeSoft : C.card,
@@ -212,17 +212,17 @@ const BrandsPhase: React.FC = () => {
         ))}
       </div>
 
-      <Fade at={345} style={{ marginTop: 48, textAlign: "center" }}>
+      <Fade at={305} style={{ marginTop: 48, textAlign: "center" }}>
         <div style={{ fontFamily: F.body, fontSize: 34, fontWeight: 600, color: C.muted }}>
           Usa la báscula que <b style={{ color: C.verdeInk }}>ya tienes</b> — sin esperar
           importaciones
         </div>
       </Fade>
       <div style={{ display: "flex", gap: 26, marginTop: 30 }}>
-        <Pop at={462}>
+        <Pop at={421}>
           <Chip size={30}>💰 Más barato</Chip>
         </Pop>
-        <Pop at={478}>
+        <Pop at={452}>
           <Chip size={30}>📈 Crece contigo</Chip>
         </Pop>
       </div>

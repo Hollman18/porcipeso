@@ -5,9 +5,9 @@ import { LedBox, PhoneFrame } from "../components/Devices";
 import { Pop, Subtitles } from "../components/Common";
 
 // ---- línea de tiempo de la demo dentro del celular (frames de escena) ----
-// P0 0-92: listo, PASO 1 · P1 92-200: cerdo de prueba + calibrado
-// P2 200-300: sube el lote, cuenta solo · P3 300-395: duda → pregunta [1][2]
-// P4 400-600: pesaje terminado + informe
+// Voz nueva (arranca en 8): P1 76-170 cerdo de prueba + calibrado ·
+// P2 170-296 sube el lote, cuenta solo · P3 296-347 duda → pregunta [1][2] ·
+// P4 350-532 pesaje terminado + informe
 
 const lerp = (frame: number, r: [number, number], v: [number, number]) =>
   interpolate(frame, r, v, { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -15,31 +15,31 @@ const lerp = (frame: number, r: [number, number], v: [number, number]) =>
 const useDemo = (f: number) => {
   // peso en el LED
   let kg = 0;
-  if (f < 100) kg = 0;
-  else if (f < 145) kg = lerp(f, [100, 138], [0, 102.5]);
-  else if (f < 215) kg = 102.5;
-  else if (f < 250) kg = lerp(f, [215, 232], [102.5, 208.0]);
-  else if (f < 305) kg = lerp(f, [250, 266], [208.0, 312.4]);
-  else kg = lerp(f, [305, 318], [312.4, 521.6]);
+  if (f < 84) kg = 0;
+  else if (f < 125) kg = lerp(f, [84, 118], [0, 102.5]);
+  else if (f < 185) kg = 102.5;
+  else if (f < 240) kg = lerp(f, [185, 200], [102.5, 208.0]);
+  else if (f < 296) kg = lerp(f, [240, 254], [208.0, 312.4]);
+  else kg = lerp(f, [296, 308], [312.4, 521.6]);
 
-  const cerdos = f < 150 ? 0 : f < 232 ? 1 : f < 266 ? 2 : f < 372 ? 3 : 5;
-  const total = f < 150 ? 0 : f < 232 ? 102.5 : f < 266 ? 208.0 : f < 372 ? 312.4 : 521.6;
+  const cerdos = f < 125 ? 0 : f < 200 ? 1 : f < 254 ? 2 : f < 340 ? 3 : 5;
+  const total = f < 125 ? 0 : f < 200 ? 102.5 : f < 254 ? 208.0 : f < 340 ? 312.4 : 521.6;
 
   let paso = { n: "PASO 1", t: "Sube UN cerdo de prueba, solo" };
-  if (f >= 200) paso = { n: "PASO 2", t: "Sube el lote como quieras" };
+  if (f >= 170) paso = { n: "PASO 2", t: "Sube el lote como quieras" };
 
   let narr: { txt: string; mode: "calm" | "busy" | "ask" } = {
     txt: "Listo. Espero el cerdo de prueba…",
     mode: "busy",
   };
-  if (f >= 100 && f < 150) narr = { txt: "Pesando…", mode: "busy" };
-  else if (f >= 150 && f < 215)
+  if (f >= 84 && f < 125) narr = { txt: "Pesando…", mode: "busy" };
+  else if (f >= 125 && f < 185)
     narr = { txt: "Cerdo de prueba: 102,5 kg. Quedé calibrado ✓", mode: "calm" };
-  else if (f >= 215 && f < 250) narr = { txt: "Subió 1 cerdo más ✓ Van 2.", mode: "calm" };
-  else if (f >= 250 && f < 305) narr = { txt: "Subió otro ✓ Van 3.", mode: "calm" };
-  else if (f >= 305 && f < 372)
+  else if (f >= 185 && f < 240) narr = { txt: "Subió 1 cerdo más ✓ Van 2.", mode: "calm" };
+  else if (f >= 240 && f < 296) narr = { txt: "Subió otro ✓ Van 3.", mode: "calm" };
+  else if (f >= 296 && f < 340)
     narr = { txt: "Subieron varios de golpe… ¿cuántos fueron?", mode: "ask" };
-  else if (f >= 372) narr = { txt: "Anotado ✓ Van 5 cerdos.", mode: "calm" };
+  else if (f >= 340) narr = { txt: "Anotado ✓ Van 5 cerdos.", mode: "calm" };
 
   return { kg, cerdos, total, paso, narr };
 };
@@ -50,7 +50,7 @@ const NARR_COLOR = { calm: C.calm, busy: C.amberTxt, ask: C.amber } as const;
 const MobileWeighUI: React.FC<{ f: number }> = ({ f }) => {
   const { kg, cerdos, total, paso, narr } = useDemo(f);
   const prom = cerdos > 0 ? total / cerdos : null;
-  const btn2Press = f >= 356 && f < 372;
+  const btn2Press = f >= 324 && f < 340;
 
   return (
     <div
@@ -266,10 +266,10 @@ const MobileDoneUI: React.FC<{ f: number }> = ({ f }) => (
 
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
       {[
-        { v: "27", k: "cerdos", at: 415 },
-        { v: "2.812", k: "kg en total", at: 430 },
-        { v: "104,1", k: "kg promedio", at: 445 },
-        { v: "92%", k: "uniformidad", at: 460 },
+        { v: "27", k: "cerdos", at: 372 },
+        { v: "2.812", k: "kg en total", at: 388 },
+        { v: "104,1", k: "kg promedio", at: 404 },
+        { v: "92%", k: "uniformidad", at: 420 },
       ].map((c) => (
         <Pop key={c.k} at={c.at} fromY={22}>
           <div
@@ -298,7 +298,7 @@ const MobileDoneUI: React.FC<{ f: number }> = ({ f }) => (
       ))}
     </div>
 
-    <Pop at={470} fromY={16}>
+    <Pop at={438} fromY={16}>
       <div
         style={{
           background: C.verdeSoft,
@@ -315,7 +315,7 @@ const MobileDoneUI: React.FC<{ f: number }> = ({ f }) => (
       </div>
     </Pop>
 
-    <Pop at={492} fromY={16}>
+    <Pop at={458} fromY={16}>
       <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 6 }}>
         <div
           style={{
@@ -345,7 +345,7 @@ const MobileDoneUI: React.FC<{ f: number }> = ({ f }) => (
       </div>
     </Pop>
     <div style={{ flexGrow: 1 }} />
-    <div style={{ textAlign: "center", fontSize: 14, color: C.muted, opacity: f > 500 ? 1 : 0 }}>
+    <div style={{ textAlign: "center", fontSize: 14, color: C.muted, opacity: f > 495 ? 1 : 0 }}>
       PorciPeso · la báscula que te habla claro
     </div>
   </div>
@@ -376,7 +376,7 @@ const Callout: React.FC<{ at: number; icon: string; text: string }> = ({ at, ico
 /** E4 — CÓMO FUNCIONA: la pantalla del operador DENTRO de un celular. */
 export const E4Celular: React.FC = () => {
   const frame = useCurrentFrame();
-  const toDone = interpolate(frame, [398, 412], [0, 1], {
+  const toDone = interpolate(frame, [352, 366], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -408,7 +408,7 @@ export const E4Celular: React.FC = () => {
             <MobileWeighUI f={frame} />
           </div>
           <div style={{ position: "absolute", inset: 0, opacity: toDone }}>
-            {frame > 396 && <MobileDoneUI f={frame} />}
+            {frame > 350 && <MobileDoneUI f={frame} />}
           </div>
         </PhoneFrame>
       </div>
@@ -424,10 +424,10 @@ export const E4Celular: React.FC = () => {
           gap: 30,
         }}
       >
-        <Callout at={150} icon="🎯" text="Se calibra solo" />
-        <Callout at={230} icon="🔢" text="Cuenta y descuenta solo" />
-        <Callout at={315} icon="🙋" text="Si duda… te pregunta" />
-        <Callout at={490} icon="📄" text="Informe Excel y PDF con tu marca" />
+        <Callout at={140} icon="🎯" text="Se calibra solo" />
+        <Callout at={232} icon="🔢" text="Cuenta y descuenta solo" />
+        <Callout at={300} icon="🙋" text="Si duda… te pregunta" />
+        <Callout at={442} icon="📄" text="Informe Excel y PDF con tu marca" />
       </div>
 
       <Subtitles scene="e4" />

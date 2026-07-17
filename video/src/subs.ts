@@ -1,183 +1,208 @@
-// AUTO-GENERADO por gen_subs.py — cues en frames (30fps), relativos al inicio del AUDIO
+// AUTO-GENERADO por tools/gen_audio.py — cues en frames (30fps), relativos al inicio del AUDIO
 export type Cue = { from: number; to: number; text: string };
 export const SUBS: Record<string, Cue[]> = {
-  "e1": [
-    {
-      "from": 3,
-      "to": 60,
-      "text": "¿Cuántos cerdos subieron?"
-    },
-    {
-      "from": 60,
-      "to": 116,
-      "text": "¿Cuánto pesan de verdad?"
-    },
-    {
-      "from": 116,
-      "to": 168,
-      "text": "Si todavía lo llevas a mano,"
-    },
-    {
-      "from": 168,
-      "to": 233,
-      "text": "esto te va a cambiar la operación."
-    }
-  ],
-  "e2": [
-    {
-      "from": 3,
-      "to": 63,
-      "text": "Los sistemas de pesaje inteligentes"
-    },
-    {
-      "from": 63,
-      "to": 134,
-      "text": "tradicionales son indicadores importados:"
-    },
-    {
-      "from": 134,
-      "to": 190,
-      "text": "costosos, con meses de espera..."
-    },
-    {
-      "from": 190,
-      "to": 262,
-      "text": "y te amarran a una sola marca de báscula."
-    }
-  ],
-  "e3": [
-    {
-      "from": 3,
-      "to": 91,
-      "text": "PorciPeso es distinto: es software."
-    },
-    {
-      "from": 91,
-      "to": 181,
-      "text": "Se conecta a cualquier indicador con puerto serial —"
-    },
-    {
-      "from": 181,
-      "to": 240,
-      "text": "del más económico al más costoso."
-    },
-    {
-      "from": 240,
-      "to": 322,
-      "text": "Veinticinco marcas ya integradas."
-    },
-    {
-      "from": 322,
-      "to": 446,
-      "text": "Usa la báscula que ya tienes, sin esperar importaciones."
-    },
-    {
-      "from": 446,
-      "to": 528,
-      "text": "Más barato, y crece contigo."
-    }
-  ],
-  "e4": [
-    {
-      "from": 3,
-      "to": 77,
-      "text": "En el corral, todo pasa en tu celular:"
-    },
-    {
-      "from": 77,
-      "to": 183,
-      "text": "subes un cerdo de prueba y el sistema se calibra solo."
-    },
-    {
-      "from": 183,
-      "to": 274,
-      "text": "Después subes el lote como quieras: él cuenta,"
-    },
-    {
-      "from": 274,
-      "to": 376,
-      "text": "descuenta al que se baja, y si duda... te pregunta."
-    },
-    {
-      "from": 376,
-      "to": 466,
-      "text": "Al final: total, promedio, uniformidad,"
-    },
-    {
-      "from": 466,
-      "to": 562,
-      "text": "y tu informe en Excel y PDF con tu marca."
-    }
-  ],
-  "e4b": [
-    {
-      "from": 3,
-      "to": 110,
-      "text": "Y en el computador, toda la analítica: cada lote,"
-    },
-    {
-      "from": 110,
-      "to": 219,
-      "text": "cada pesaje, cada tendencia — lista para decidir."
-    }
-  ],
-  "e5": [
-    {
-      "from": 3,
-      "to": 107,
-      "text": "Se instala en el computador de la granja o en un celular,"
-    },
-    {
-      "from": 107,
-      "to": 166,
-      "text": "conectado por cable o Bluetooth."
-    },
-    {
-      "from": 166,
-      "to": 254,
-      "text": "Y funciona sin internet: en pleno corral,"
-    },
-    {
-      "from": 254,
-      "to": 330,
-      "text": "sin señal, no se pierde ni un kilo."
-    }
-  ],
-  "e6": [
-    {
-      "from": 3,
-      "to": 61,
-      "text": "¿Y cuando quieras más?"
-    },
-    {
-      "from": 61,
-      "to": 135,
-      "text": "Activa la nube: el celular en el corral,"
-    },
-    {
-      "from": 135,
-      "to": 188,
-      "text": "el computador en la oficina,"
-    },
-    {
-      "from": 188,
-      "to": 253,
-      "text": "y todas tus granjas en tiempo real,"
-    },
-    {
-      "from": 253,
-      "to": 314,
-      "text": "con la información centralizada."
-    },
-    {
-      "from": 314,
-      "to": 401,
-      "text": "PorciPeso, una solución ELEIA."
-    },
-    {
-      "from": 401,
-      "to": 466,
-      "text": "Agenda tu demostración."
-    }
-  ]
+ "e1": [
+  {
+   "from": 3,
+   "to": 44,
+   "text": "¿Cuántos cerdos subieron"
+  },
+  {
+   "from": 44,
+   "to": 89,
+   "text": "y cuánto pesan de verdad?"
+  },
+  {
+   "from": 89,
+   "to": 146,
+   "text": "Porque si todavía lo llevas a mano..."
+  },
+  {
+   "from": 146,
+   "to": 211,
+   "text": "esto te va a cambiar la operación."
+  }
+ ],
+ "e2": [
+  {
+   "from": 3,
+   "to": 60,
+   "text": "El pesaje inteligente tradicional"
+  },
+  {
+   "from": 57,
+   "to": 104,
+   "text": "es un indicador importado"
+  },
+  {
+   "from": 104,
+   "to": 166,
+   "text": "costoso, con meses de espera"
+  },
+  {
+   "from": 166,
+   "to": 248,
+   "text": "y que te amarra a una sola marca de báscula."
+  }
+ ],
+ "e3": [
+  {
+   "from": 3,
+   "to": 80,
+   "text": "PorciPeso es distinto, porque es software"
+  },
+  {
+   "from": 80,
+   "to": 163,
+   "text": "y se conecta a cualquier indicador con puerto serial"
+  },
+  {
+   "from": 163,
+   "to": 226,
+   "text": "del más económico al más costoso..."
+  },
+  {
+   "from": 226,
+   "to": 293,
+   "text": "son veinticinco marcas ya integradas"
+  },
+  {
+   "from": 293,
+   "to": 361,
+   "text": "así que usas la báscula que ya tienes"
+  },
+  {
+   "from": 361,
+   "to": 413,
+   "text": "sin esperar importaciones"
+  },
+  {
+   "from": 413,
+   "to": 488,
+   "text": "más barato, y creciendo contigo."
+  }
+ ],
+ "e4": [
+  {
+   "from": 3,
+   "to": 68,
+   "text": "En el corral todo pasa en tu celular"
+  },
+  {
+   "from": 68,
+   "to": 162,
+   "text": "subes un cerdo de prueba y el sistema se calibra solo"
+  },
+  {
+   "from": 162,
+   "to": 221,
+   "text": "después subes el lote como quieras"
+  },
+  {
+   "from": 221,
+   "to": 290,
+   "text": "que él cuenta, descuenta al que se baja"
+  },
+  {
+   "from": 290,
+   "to": 339,
+   "text": "y si duda... te pregunta"
+  },
+  {
+   "from": 339,
+   "to": 430,
+   "text": "y al final te da total, promedio, uniformidad"
+  },
+  {
+   "from": 430,
+   "to": 517,
+   "text": "y tu informe en Excel y PDF con tu marca."
+  }
+ ],
+ "e4b": [
+  {
+   "from": 3,
+   "to": 81,
+   "text": "Y en el computador tienes toda la analítica"
+  },
+  {
+   "from": 81,
+   "to": 164,
+   "text": "cada lote, cada pesaje, cada tendencia..."
+  },
+  {
+   "from": 164,
+   "to": 210,
+   "text": "lista para decidir."
+  }
+ ],
+ "e5": [
+  {
+   "from": 3,
+   "to": 98,
+   "text": "Se instala en el computador de la granja o en un celular"
+  },
+  {
+   "from": 98,
+   "to": 156,
+   "text": "conectado por cable o por Bluetooth"
+  },
+  {
+   "from": 156,
+   "to": 200,
+   "text": "y funciona sin internet..."
+  },
+  {
+   "from": 200,
+   "to": 261,
+   "text": "en pleno corral, sin señal"
+  },
+  {
+   "from": 261,
+   "to": 315,
+   "text": "no se pierde ni un kilo."
+  }
+ ],
+ "e6": [
+  {
+   "from": 3,
+   "to": 45,
+   "text": "¿Y cuando quieras más?"
+  },
+  {
+   "from": 45,
+   "to": 77,
+   "text": "Activas la nube"
+  },
+  {
+   "from": 77,
+   "to": 133,
+   "text": "y tienes el celular en el corral"
+  },
+  {
+   "from": 133,
+   "to": 182,
+   "text": "el computador en la oficina"
+  },
+  {
+   "from": 182,
+   "to": 246,
+   "text": "y todas tus granjas en tiempo real"
+  },
+  {
+   "from": 246,
+   "to": 303,
+   "text": "con la información centralizada..."
+  },
+  {
+   "from": 303,
+   "to": 367,
+   "text": "PorciPeso, una solución ELEIA"
+  },
+  {
+   "from": 367,
+   "to": 419,
+   "text": "agenda tu demostración."
+  }
+ ]
 };

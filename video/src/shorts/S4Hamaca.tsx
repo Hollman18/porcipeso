@@ -12,6 +12,7 @@ import {
 import { C, F } from "../theme";
 import { PhoneFrame } from "../components/Devices";
 import { BigText, EndCard, Flash, Punch, SHORT_AUDIO_DELAY, WordCaps, useRoll } from "./ShortCommon";
+import { FotoBg } from "../components/Common";
 
 const Stat: React.FC<{ label: string; value: string; big?: boolean }> = ({
   label,
@@ -57,13 +58,13 @@ const Stat: React.FC<{ label: string; value: string; big?: boolean }> = ({
 export const S4Hamaca: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const kgHoy = useRoll(174, 250, 12845);
-  const cerdos = useRoll(174, 250, 214);
-  const hookOut = interpolate(frame, [50, 64], [1, 0], {
+  const kgHoy = useRoll(160, 235, 12845);
+  const cerdos = useRoll(160, 235, 214);
+  const hookOut = interpolate(frame, [46, 60], [1, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const cloudS = spring({ frame: frame - 286, fps, config: { damping: 12, mass: 0.7 } });
+  const cloudS = spring({ frame: frame - 250, fps, config: { damping: 12, mass: 0.7 } });
   const palmSway = Math.sin(frame / 11) * 4;
 
   return (
@@ -72,6 +73,7 @@ export const S4Hamaca: React.FC = () => {
         background: `linear-gradient(180deg, #0E1A12 0%, ${C.darkBg} 55%, ${C.darkCard} 100%)`,
       }}
     >
+      <FotoBg src="fotos/trompa-sol.jpg" dur={410} overlay={0.6} zoomFrom={1.05} zoomTo={1.18} panY={12} />
       {/* palmera decorativa que se mece */}
       <div
         style={{
@@ -86,7 +88,7 @@ export const S4Hamaca: React.FC = () => {
         🌴
       </div>
 
-      <Punch beats={[66, 174, 286, 339]}>
+      <Punch beats={[60, 141, 254, 294]}>
         {/* HOOK */}
         <div style={{ position: "absolute", top: 320, width: "100%", opacity: hookOut }}>
           <BigText size={122} shake>
@@ -106,7 +108,7 @@ export const S4Hamaca: React.FC = () => {
               display: "flex",
               justifyContent: "center",
               transform: `translateY(${
-                interpolate(frame, [20, 66], [1250, 0], {
+                interpolate(frame, [20, 60], [1250, 0], {
                   extrapolateLeft: "clamp",
                   extrapolateRight: "clamp",
                 })
@@ -168,7 +170,7 @@ export const S4Hamaca: React.FC = () => {
                 {/* barras subiendo */}
                 <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexGrow: 1, padding: "6px 8px 4px" }}>
                   {[0.45, 0.7, 0.55, 0.85, 0.65, 1].map((h, i) => {
-                    const grow = interpolate(frame, [190 + i * 8, 226 + i * 8], [0, h], {
+                    const grow = interpolate(frame, [168 + i * 8, 204 + i * 8], [0, h], {
                       extrapolateLeft: "clamp",
                       extrapolateRight: "clamp",
                     });
@@ -191,7 +193,7 @@ export const S4Hamaca: React.FC = () => {
         )}
 
         {/* nube */}
-        {frame >= 286 && (
+        {frame >= 250 && (
           <div
             style={{
               position: "absolute",
@@ -213,7 +215,7 @@ export const S4Hamaca: React.FC = () => {
         )}
       </Punch>
 
-      <Flash beats={[66, 286]} color={C.eleia} peak={0.5} />
+      <Flash beats={[60, 250]} color={C.eleia} peak={0.5} />
 
       <WordCaps
         scene="s4"
@@ -223,7 +225,7 @@ export const S4Hamaca: React.FC = () => {
         hideBefore={48}
       />
 
-      <EndCard at={399} />
+      <EndCard at={347} />
 
       <Sequence from={SHORT_AUDIO_DELAY}>
         <Audio src={staticFile("audio/s4.mp3")} />

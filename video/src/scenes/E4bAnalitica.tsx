@@ -22,12 +22,12 @@ const LOTES = [
 export const E4bAnalitica: React.FC = () => {
   const frame = useCurrentFrame();
   const stats = [
-    { k: "Pesajes", v: useCount(35, 115, 0, 128), fmt: (n: number) => fmtMiles(n) },
-    { k: "Cerdos", v: useCount(35, 115, 0, 3442), fmt: (n: number) => fmtMiles(n) },
-    { k: "Kg totales", v: useCount(35, 115, 0, 356900), fmt: (n: number) => fmtMiles(n) },
+    { k: "Pesajes", v: useCount(30, 100, 0, 128), fmt: (n: number) => fmtMiles(n) },
+    { k: "Cerdos", v: useCount(30, 100, 0, 3442), fmt: (n: number) => fmtMiles(n) },
+    { k: "Kg totales", v: useCount(30, 100, 0, 356900), fmt: (n: number) => fmtMiles(n) },
     {
       k: "Promedio",
-      v: useCount(35, 115, 0, 103.7),
+      v: useCount(30, 100, 0, 103.7),
       fmt: (n: number) => n.toFixed(1).replace(".", ",") + " kg",
     },
   ];
@@ -131,7 +131,7 @@ export const E4bAnalitica: React.FC = () => {
                   <span>Promedio</span><span>Uniformidad</span><span>Estado</span>
                 </div>
                 {ROWS.map((r, i) => (
-                  <Fade key={r.lote} at={120 + i * 18} dur={10}>
+                  <Fade key={r.lote} at={95 + i * 15} dur={10}>
                     <div
                       style={{
                         display: "grid",
@@ -170,7 +170,7 @@ export const E4bAnalitica: React.FC = () => {
                   Por lote · promedio
                 </div>
                 {LOTES.map((l, i) => {
-                  const w = interpolate(frame, [140 + i * 12, 185 + i * 12], [0, l.pct], {
+                  const w = interpolate(frame, [120 + i * 10, 160 + i * 10], [0, l.pct], {
                     extrapolateLeft: "clamp",
                     extrapolateRight: "clamp",
                   });
@@ -211,7 +211,7 @@ export const E4bAnalitica: React.FC = () => {
                     </div>
                   );
                 })}
-                <Fade at={200} style={{ marginTop: "auto" }}>
+                <Fade at={175} style={{ marginTop: "auto" }}>
                   <div
                     style={{
                       background: C.verdeSoft,

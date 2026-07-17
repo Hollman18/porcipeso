@@ -2,7 +2,7 @@ import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import { C, F } from "../theme";
 import { Indicator, MonitorFrame, PhoneFrame } from "../components/Devices";
-import { Chip, Pop, Subtitles } from "../components/Common";
+import { Chip, FotoBg, Pop, Subtitles } from "../components/Common";
 
 const Half: React.FC<{
   at: number;
@@ -22,7 +22,7 @@ const Half: React.FC<{
     }}
   >
     <Pop at={at} fromY={18}>
-      <div style={{ fontFamily: F.title, fontWeight: 700, fontSize: 50, color: C.ink }}>
+      <div style={{ fontFamily: F.title, fontWeight: 700, fontSize: 50, color: "#fff", textShadow: "0 3px 12px rgba(0,0,0,0.55)" }}>
         {title}
       </div>
     </Pop>
@@ -39,15 +39,16 @@ const Half: React.FC<{
 export const E5Instalacion: React.FC = () => {
   const frame = useCurrentFrame();
   const wave = (i: number) =>
-    interpolate((frame - 130 + i * 14) % 42, [0, 42], [0, 1], {
+    interpolate((frame - 120 + i * 14) % 42, [0, 42], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
     });
 
   return (
-    <AbsoluteFill style={{ background: C.hueso }}>
-      <div style={{ display: "flex", height: "100%" }}>
-        <Half at={26} title="En el computador de la granja" chipAt={128} chip="🔌 Por cable">
+    <AbsoluteFill style={{ background: C.darkBg }}>
+      <FotoBg src="fotos/granjero-comedero.jpg" dur={330} overlay={0.68} zoomFrom={1.04} zoomTo={1.15} panY={-16} />
+      <div style={{ display: "flex", height: "100%", position: "relative", zIndex: 1 }}>
+        <Half at={20} title="En el computador de la granja" chipAt={112} chip="🔌 Por cable">
           <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
             <Indicator value="104.1" scale={0.72} />
             {/* cable */}
@@ -59,7 +60,7 @@ export const E5Instalacion: React.FC = () => {
                 fill="none"
                 strokeLinecap="round"
                 strokeDasharray={220}
-                strokeDashoffset={interpolate(frame, [64, 110], [220, 0], {
+                strokeDashoffset={interpolate(frame, [70, 105], [220, 0], {
                   extrapolateLeft: "clamp",
                   extrapolateRight: "clamp",
                 })}
@@ -90,9 +91,9 @@ export const E5Instalacion: React.FC = () => {
         </Half>
 
         {/* divisor */}
-        <div style={{ width: 2, background: C.border, margin: "120px 0 200px" }} />
+        <div style={{ width: 2, background: "rgba(255,255,255,0.28)", margin: "120px 0 200px" }} />
 
-        <Half at={70} title="…o en tu celular" chipAt={140} chip="📶 Por Bluetooth">
+        <Half at={60} title="…o en tu celular" chipAt={132} chip="📶 Por Bluetooth">
           <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
             <Indicator value="104.1" scale={0.72} />
             {/* ondas bluetooth */}
@@ -109,7 +110,7 @@ export const E5Instalacion: React.FC = () => {
                     strokeWidth={7}
                     fill="none"
                     strokeLinecap="round"
-                    opacity={frame > 130 ? 0.85 * (1 - t) : 0}
+                    opacity={frame > 120 ? 0.85 * (1 - t) : 0}
                   />
                 );
               })}
@@ -139,7 +140,7 @@ export const E5Instalacion: React.FC = () => {
 
       {/* banner sin internet */}
       <Pop
-        at={192}
+        at={170}
         fromY={50}
         style={{
           position: "absolute",

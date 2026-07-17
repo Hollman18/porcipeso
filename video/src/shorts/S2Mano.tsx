@@ -12,6 +12,7 @@ import {
 import { C, F } from "../theme";
 import { PhoneFrame } from "../components/Devices";
 import { BigText, EndCard, Flash, Punch, SHORT_AUDIO_DELAY, WordCaps } from "./ShortCommon";
+import { FotoBg } from "../components/Common";
 
 const PainCard: React.FC<{ at: number; tilt: number; children: React.ReactNode }> = ({
   at,
@@ -76,14 +77,23 @@ const FeedCard: React.FC<{ at: number; good?: boolean; children: React.ReactNode
 /** SHORT 2 — "DEJA DE CONTAR A MANO". */
 export const S2Mano: React.FC = () => {
   const frame = useCurrentFrame();
-  const toPhone = interpolate(frame, [198, 212], [0, 1], {
+  const toPhone = interpolate(frame, [180, 194], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
   return (
-    <AbsoluteFill style={{ background: C.hueso }}>
-      {/* fondo oscuro entra con la fase del celular */}
+    <AbsoluteFill style={{ background: C.darkBg }}>
+      {/* foto real detrás del hook; el fondo oscuro entra con la fase del celular */}
+      <FotoBg
+        src="fotos/nina-cerdo.jpg"
+        dur={460}
+        overlay={0.62}
+        zoomFrom={1.06}
+        zoomTo={1.18}
+        panY={-14}
+        opacity={1 - toPhone}
+      />
       <AbsoluteFill
         style={{
           background: `radial-gradient(ellipse at 50% 40%, ${C.darkCard} 0%, ${C.darkBg} 75%)`,
@@ -91,16 +101,16 @@ export const S2Mano: React.FC = () => {
         }}
       />
 
-      <Punch beats={[74, 141, 202, 265, 293, 351, 390]}>
+      <Punch beats={[51, 144, 182, 244, 277, 333, 357]}>
         {/* HOOK */}
         <div style={{ position: "absolute", top: 300, width: "100%", opacity: 1 - toPhone }}>
-          <BigText size={124} color={C.ink} shake style={{ textShadow: "0 4px 0 rgba(0,0,0,0.15)" }}>
-            Deja de contar <span style={{ color: C.red }}>a mano</span> ✋
+          <BigText size={124} shake>
+            Deja de contar <span style={{ color: C.led }}>a mano</span> ✋
           </BigText>
         </div>
 
         {/* dolor: papelitos */}
-        {frame < 200 && (
+        {frame < 180 && (
           <div
             style={{
               position: "absolute",
@@ -112,10 +122,10 @@ export const S2Mano: React.FC = () => {
               gap: 44,
             }}
           >
-            <PainCard at={74} tilt={-3}>
+            <PainCard at={66} tilt={-3}>
               📝 ¿Eran <s>26</s>… <s>27</s>… <span style={{ color: C.red }}>28?</span>
             </PainCard>
-            <PainCard at={141} tilt={2.5}>
+            <PainCard at={126} tilt={2.5}>
               🐷💨 Se te bajó UNO…
               <br />y nadie lo vio
             </PainCard>
@@ -123,10 +133,10 @@ export const S2Mano: React.FC = () => {
         )}
 
         {/* alivio: el celular cuenta solo */}
-        {frame >= 200 && (
+        {frame >= 180 && (
           <>
             <div style={{ position: "absolute", top: 300, width: "100%" }}>
-              <BigText at={202} size={92}>
+              <BigText at={182} size={92}>
                 El celular cuenta <span style={{ color: C.eleia }}>solo</span>
               </BigText>
             </div>
@@ -172,16 +182,16 @@ export const S2Mano: React.FC = () => {
                         fontWeight: 700,
                       }}
                     >
-                      {frame < 265 ? 2 : frame < 317 ? 5 : 4} 🐷
+                      {frame < 252 ? 2 : frame < 310 ? 5 : 4} 🐷
                     </span>
                   </div>
-                  <FeedCard at={265} good>
+                  <FeedCard at={244} good>
                     ✓ Subieron 3 — van 5
                   </FeedCard>
-                  <FeedCard at={293} good={false}>
+                  <FeedCard at={277} good={false}>
                     ↩ Uno se bajó…
                   </FeedCard>
-                  <FeedCard at={317} good>
+                  <FeedCard at={304} good>
                     ✓ Ya lo desconté — van 4
                   </FeedCard>
                 </div>
@@ -191,20 +201,20 @@ export const S2Mano: React.FC = () => {
         )}
       </Punch>
 
-      <Flash beats={[141]} color={C.led} peak={0.28} />
-      <Flash beats={[202]} color={C.eleia} peak={0.55} />
+      <Flash beats={[144]} color={C.led} peak={0.28} />
+      <Flash beats={[182]} color={C.eleia} peak={0.55} />
 
       <WordCaps
         scene="s2"
         keywords={["mano", "bajó", "celular", "solo", "desconté", "cuenta", "decides", "Escríbenos"]}
         y={1250}
         size={72}
-        hideBefore={48}
-        keyColor={frame < 198 ? C.red : C.eleia}
-        color={frame < 198 ? C.ink : "#fff"}
+        hideBefore={62}
+        keyColor={frame < 180 ? C.led : C.eleia}
+        color={"#fff"}
       />
 
-      <EndCard at={434} />
+      <EndCard at={397} />
 
       <Sequence from={SHORT_AUDIO_DELAY}>
         <Audio src={staticFile("audio/s2.mp3")} />
