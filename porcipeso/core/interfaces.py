@@ -57,7 +57,9 @@ class Engine(ABC):
     def feed(self, reading: Reading) -> None: ...
 
     @abstractmethod
-    def open_session(self, session_id: int) -> None: ...
+    def open_session(self, session_id: int, modo: str = "lote") -> None:
+        """modo: 'lote' (acumulado con cerdo de prueba) | 'unidades' (uno a uno,
+        cada peso estable es un animal; sin calibración)."""
 
     @abstractmethod
     def confirm(self, event_id: int, n: int) -> Optional[WeighEvent]: ...

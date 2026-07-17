@@ -110,6 +110,7 @@ class SessionBody(BaseModel):
     operador: Optional[str] = None
     bascula_id: Optional[str] = None
     peso_ref_inicial: Optional[float] = None
+    modo: Optional[str] = None            # "lote" (default) | "unidades"
 
 
 class CloseBody(BaseModel):
@@ -238,12 +239,15 @@ def create_app(
         if now - st.last_reading_broadcast >= READING_BROADCAST_MIN_S:
             st.last_reading_broadcast = now
             state = "idle"
+            fase = "lote"
             if engine is not None:
                 with contextlib.suppress(Exception):
-                    state = _snapshot_dict(engine.snapshot())["state"]
+                    snap = _snapshot_dict(engine.snapshot())
+                    state = snap["state"]
+                    fase = snap.get("fase", "lote")
             hub.broadcast(
                 {"type": "reading", "kg": reading.kg,
-                 "ts_ms": reading.ts_ms, "state": state}
+                 "ts_ms": reading.ts_ms, "state": state, "fase": fase}
             )
 
     def stop_driver() -> None:
@@ -395,9 +399,20 @@ def create_app(
         if "corral" in data and "corral_origen" not in data:
             data["corral_origen"] = data.pop("corral")
         data.pop("corral", None)
-        session_id = repo.create_session(data)
+        modo = data.get("modo") or "lote"
+        if modo not in ("lote", "unidades"):
+            # mismo contrato que engine.open_session (ValueError → 400),
+            # validado ANTES de insertar la fila para no dejar huérfanas
+            raise HTTPException(
+                400, f"modo desconocido: {modo!r} (esperado: ('lote', 'unidades'))"
+            )
+        data["modo"] = modo
         engine = ensure_engine()
-        engine.open_session(session_id)
+        session_id = repo.create_session(data)
+        try:
+            engine.open_session(session_id, modo=modo)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
         st.current_session_id = session_id
         broadcast_snapshot()
         session = repo.get_session(session_id)
@@ -453,7 +468,7 @@ def create_app(
                        "avg_kg": closed["promedio_final"],
                        "count": closed["total_animales"] or 0,
                        "total_kg": closed["total_kg"] or 0.0,
-                       "pending": 0})
+                       "pending": 0, "fase": "lote"})
         return closed
 
     @app.get("/api/sessions/{session_id}/events")
@@ -546,6 +561,7 @@ RESUMEN_ROWS = [
     ("Granja", "granja"), ("Lote", "lote"), ("Corral origen", "corral_origen"),
     ("Destino", "destino"), ("Placa", "placa"), ("Conductor", "conductor"),
     ("Operador", "operador"), ("Báscula", "bascula_id"),
+    ("Modo", "modo"),
     ("Peso ref. inicial (kg)", "peso_ref_inicial"),
     ("Hora entrada", "hora_entrada"), ("Hora salida", "hora_salida"),
     ("Total kg", "total_kg"), ("Total animales", "total_animales"),
@@ -556,7 +572,11 @@ RESUMEN_ROWS = [
 ]
 
 STATS_ROWS = [
-    ("Desviación estándar (kg)", "desviacion_std"),
+    ("N muestras", "n_muestras"),
+    ("Tipo de muestra", "tipo_muestra"),
+    ("Mediana (kg)", "mediana"),
+    ("Desviación estándar muestral (kg)", "desviacion_std"),
+    ("Varianza muestral (kg²)", "varianza"),
     ("CV %", "cv_pct"),
     ("Uniformidad ±10% (%)", "uniformidad_pct"),
     ("Delta mínimo (kg)", "min_delta"),

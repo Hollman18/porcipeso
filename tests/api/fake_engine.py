@@ -33,6 +33,7 @@ class FakeEngine(Engine):
         self.on_event = on_event
         self.on_state = on_state
         self.session_id: Optional[int] = None
+        self.modo: Optional[str] = None
         self.fed: list[Reading] = []
         self.confirmed: list[tuple[int, int]] = []
         self.closed = False
@@ -46,9 +47,13 @@ class FakeEngine(Engine):
     def feed(self, reading: Reading) -> None:
         self.fed.append(reading)
 
-    def open_session(self, session_id: int) -> None:
+    def open_session(self, session_id: int, modo: str = "lote") -> None:
+        if modo not in ("lote", "unidades"):
+            raise ValueError(f"modo desconocido: {modo!r}")
         self.session_id = session_id
-        self.set_snapshot(state=EngineState.ESTABLE)
+        self.modo = modo
+        fase = "calibracion" if modo == "lote" else "unidades"
+        self.set_snapshot(state=EngineState.ESTABLE, fase=fase)
 
     def confirm(self, event_id: int, n: int) -> Optional[WeighEvent]:
         self.confirmed.append((event_id, n))

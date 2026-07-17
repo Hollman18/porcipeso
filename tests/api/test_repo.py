@@ -40,10 +40,19 @@ def test_create_get_list_session(repo):
     assert s["lote"] == "L-42"
     assert s["corral_origen"] == "C3"
     assert s["estado"] == "abierta"
+    assert s["modo"] == "lote"                  # default v2
     assert s["uuid"]
     assert s["hora_entrada"]
     assert repo.get_session(9999) is None
     assert [x["id"] for x in repo.list_sessions()] == [sid]
+
+
+def test_create_session_modo_unidades_persiste(repo):
+    sid = repo.create_session({"lote": "L-U", "modo": "unidades"})
+    assert repo.get_session(sid)["modo"] == "unidades"
+    assert repo.list_sessions()[0]["modo"] == "unidades"
+    assert repo.stats(sid)["modo"] == "unidades"
+    assert repo.stats(sid)["tipo_muestra"] == "completa"
 
 
 def test_close_session_con_conciliacion(repo):
@@ -154,7 +163,8 @@ def test_prune_no_borra_si_todo_es_sesion_abierta(tmp_path):
 
 def test_stats_con_datos_conocidos(repo):
     """Subidas de 1 animal: 100, 110, 90, 120 · ambigua confirmada en 3 (250 kg)
-    · bajada de 95. Dispersión SOLO sobre las cuatro individuales."""
+    · bajada de 95. Dispersión MUESTRAL (n-1) SOLO sobre las cuatro
+    individuales."""
     sid = repo.create_session({"lote": "L-1"})
     w = 0.0
     singles = [100.0, 110.0, 90.0, 120.0]
@@ -171,19 +181,28 @@ def test_stats_con_datos_conocidos(repo):
     repo.update_event_confirm(amb_id, 3, "op")
 
     stats = repo.stats(sid)
-    assert stats["total_kg"] == pytest.approx(100 + 110 + 90 + 120 + 250 - 95)
-    assert stats["total_animales"] == 1 + 1 + 1 + 1 + 3 - 1  # == 6
-    assert stats["promedio"] == pytest.approx(575.0 / 6, abs=1e-3)
-    assert stats["n_muestras_individuales"] == 4
+    # v2: la REFERENCIA (100 kg, cerdo de prueba que se bajó) NO integra
+    # los totales, pero sí la muestra individual.
+    assert stats["total_kg"] == pytest.approx(110 + 90 + 120 + 250 - 95)
+    assert stats["total_animales"] == 1 + 1 + 1 + 3 - 1  # == 5
+    assert stats["promedio"] == pytest.approx(475.0 / 5, abs=1e-3)
+    assert stats["n_muestras"] == 4
+    assert stats["n_muestras_individuales"] == 4    # alias legado
     assert stats["min_delta"] == 90.0
     assert stats["max_delta"] == 120.0
+    assert stats["mediana"] == pytest.approx(105.0)  # (100+110)/2
 
     media = statistics.fmean(singles)                       # 105.0
-    std = statistics.pstdev(singles)                        # ~11.1803
+    std = statistics.stdev(singles)                         # muestral ~12.9099
     assert stats["desviacion_std"] == pytest.approx(std, abs=1e-3)
+    assert stats["varianza"] == pytest.approx(statistics.variance(singles),
+                                              abs=1e-3)
+    assert stats["varianza"] == pytest.approx(std ** 2, abs=1e-2)
     assert stats["cv_pct"] == pytest.approx(std / media * 100, abs=1e-2)
     # banda ±10%: [94.5, 115.5] → dentro: 100 y 110 → 50%
     assert stats["uniformidad_pct"] == pytest.approx(50.0)
+    assert stats["modo"] == "lote"
+    assert stats["tipo_muestra"] == "estimada"
 
 
 def test_stats_sesion_vacia(repo):
@@ -192,6 +211,25 @@ def test_stats_sesion_vacia(repo):
     assert stats["total_kg"] == 0.0
     assert stats["total_animales"] == 0
     assert stats["promedio"] is None
-    assert stats["desviacion_std"] is None
+    assert stats["n_muestras"] == 0
+    assert stats["mediana"] is None
+    assert stats["desviacion_std"] == 0.0    # n < 2 → 0 por contrato
+    assert stats["varianza"] == 0.0
     assert stats["cv_pct"] is None
     assert stats["uniformidad_pct"] is None
+
+
+def test_stats_una_sola_muestra_sin_dispersion(repo):
+    """Con n=1 la desviación/varianza muestral no existe (n-1=0): 0.
+    Además la REFERENCIA v2 no suma a los totales (el de prueba se bajó)."""
+    sid = repo.create_session({"lote": "L-1"})
+    repo.insert_event(_event(sid, 1000, 0.0, 102.5, 1, EventType.REFERENCIA))
+    stats = repo.stats(sid)
+    assert stats["total_animales"] == 0
+    assert stats["total_kg"] == 0.0
+    assert stats["n_muestras"] == 1
+    assert stats["desviacion_std"] == 0.0
+    assert stats["varianza"] == 0.0
+    assert stats["mediana"] == pytest.approx(102.5)
+    assert stats["cv_pct"] == pytest.approx(0.0)
+    assert stats["uniformidad_pct"] == pytest.approx(100.0)

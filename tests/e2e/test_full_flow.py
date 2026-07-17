@@ -1,7 +1,9 @@
 """E2E completo SIN hardware: simulador TCP → drivers → engine.
 
-Guion (SPEC §4 y §4.1): referencia con 1 cerdo, suben 2, se devuelve 1
-(BAJADA), reingresa (REINGRESO), sube 1 más → conteo neto final = 4.
+Guion v2 (SPEC §4 y §4.1): CALIBRACIÓN con cerdo de prueba que se baja
+(sube 102.5 y baja → evento REFERENCIA, fase "lote", count 0), luego el
+lote: sube 1, suben 2, se devuelve 1 (BAJADA), reingresa (REINGRESO),
+sube 1 más → conteo neto final = 4.
 
 Los módulos hermanos (porcipeso.drivers.*, porcipeso.engine.*) se construyen
 en paralelo: si aún no existen, estos tests se SALTAN (importorskip) y quedan
@@ -99,18 +101,23 @@ def test_contrato_transporte_y_parser_matrix():
 
 
 def test_flujo_completo_con_bajada_y_reingreso():
-    """Guion completo: ref → suben 2 → se devuelve 1 → reingresa → sube 1 más.
+    """Guion completo v2: calibración (cerdo de prueba sube Y BAJA) → lote:
+    sube 1 → suben 2 → se devuelve 1 → reingresa → sube 1 más.
 
-    Conteo neto: 1 + 2 − 1 + 1 + 1 = 4 (el guion del plan añade un cuarto
-    cerdo al final para que el neto sea 4 manteniendo exactamente una BAJADA
-    y un REINGRESO).
+    Conteo neto tras la calibración: 1 + 2 − 1 + 1 + 1 = 4 (el guion añade
+    un cuarto cerdo al final para que el neto sea 4 manteniendo exactamente
+    una BAJADA y un REINGRESO; la bajada del cerdo de prueba NO cuenta).
     """
     scenario = Scenario(
         [
             ("wait", 4.0),                       # línea base estable en 0
                                                  # (>2 s: la ventana de 20
                                                  # lecturas debe llenarse)
-            ("pigs_on", 1, 102.5),               # referencia
+            ("pigs_on", 1, 102.5),               # sube el cerdo de prueba
+            ("wait", 3.0),
+            ("pig_off", None),                   # se baja → REFERENCIA, fase lote
+            ("wait", 3.0),
+            ("pigs_on", 1, 102.5),               # el de prueba vuelve con el lote
             ("wait", 3.0),
             ("pigs_on", 2, (103.9, 103.1)),      # suben 2
             ("wait", 3.0),
@@ -127,7 +134,7 @@ def test_flujo_completo_con_bajada_y_reingreso():
     try:
         ok = _wait_until(
             lambda: scenario.done and engine.snapshot().count == 4,
-            timeout_s=40.0,
+            timeout_s=50.0,
         )
         # margen corto para que el último evento termine de persistirse
         _wait_until(lambda: engine.snapshot().pending == 0, timeout_s=3.0)
@@ -138,6 +145,15 @@ def test_flujo_completo_con_bajada_y_reingreso():
             f"{[(e.tipo, e.animales_estimados, round(e.delta_kg, 1)) for e in events]}"
         )
         tipos = [e.tipo for e in events]
+        # calibración v2: el primer evento es la REFERENCIA (peak del cerdo
+        # de prueba) y su bajada NO genera BAJADA
+        assert tipos[0] == EventType.REFERENCIA, f"tipos={tipos}"
+        assert tipos.count(EventType.REFERENCIA) == 1, f"tipos={tipos}"
+        assert abs(events[0].delta_kg - 102.5) <= 1.5, (
+            f"referencia {events[0].delta_kg:.1f} != ~102.5"
+        )
+        assert snap.fase == "lote"
+        assert snap.ref_kg is not None and abs(snap.ref_kg - 102.5) <= 1.5
         assert tipos.count(EventType.BAJADA) == 1, f"esperaba 1 BAJADA, tipos={tipos}"
         assert EventType.REINGRESO in tipos, f"esperaba un REINGRESO, tipos={tipos}"
 

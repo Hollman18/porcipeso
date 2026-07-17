@@ -24,7 +24,7 @@
       <button class="navbtn" data-mod="datos"><span class="ic">📊</span> Datos</button>
       <button class="navbtn" data-mod="bascula"><span class="ic">⚙</span> Báscula</button>
     </nav>
-    <div class="sidefoot">PorciPeso · pesaje por lote</div>
+    <div class="sidefoot">PorciPeso · pesaje porcino</div>
   </aside>
 
   <!-- ===== CONTENIDO ===== -->
@@ -41,7 +41,7 @@
       <!-- inicio del módulo -->
       <div class="subview active" id="pvHome">
         <div class="hero">
-          <h2>Pesar un lote</h2>
+          <h2>Pesar cerdos</h2>
           <p class="tag">Sube los cerdos a la plataforma. Yo los peso, los cuento y te aviso si tengo dudas.</p>
           <span class="chip" id="scaleChip">Sin báscula</span>
           <button class="btn-primary hero-btn" id="bStart">Empezar a pesar</button>
@@ -53,17 +53,42 @@
         </div>
       </div>
 
+      <!-- elegir MODO de pesaje -->
+      <div class="subview" id="pvMode">
+        <div class="mini-top">
+          <button class="btn-link" id="bModeBack">◂ Volver</button>
+        </div>
+        <div class="modehead">
+          <h2>¿Cómo vas a pesar hoy?</h2>
+          <p class="tag">Elige la forma que más te sirva. Las dos quedan guardadas igual.</p>
+        </div>
+        <div class="modegrid">
+          <button class="modecard" id="bModeLote">
+            <span class="mc-ic">⚖</span>
+            <span class="mc-t">Por lote</span>
+            <span class="mc-d">Muchos cerdos seguidos. Primero subes un cerdo de prueba y luego todo el lote.</span>
+          </button>
+          <button class="modecard" id="bModeUnidades">
+            <span class="mc-ic">🐷</span>
+            <span class="mc-t">Por unidades</span>
+            <span class="mc-d">De a un cerdo a la vez: sube, peso, baja… y sigues con el siguiente.</span>
+          </button>
+        </div>
+      </div>
+
       <!-- preparar pesaje -->
       <div class="subview" id="pvSetup">
         <div class="mini-top">
           <button class="btn-link" id="bSetupBack">◂ Volver</button>
           <div class="grow"></div>
+          <span class="chip" id="chipMode" hidden></span>
           <span class="chip sim" id="chipSim1" hidden>Simulador</span>
         </div>
         <form class="setup" id="formSetup">
-          <label class="big">¿Cómo llamamos este pesaje?
-            <input class="name" name="nombre" id="inpNombre" required autocomplete="off">
+          <label class="big">Nombre del lote
+            <input class="name" name="nombre" id="inpNombre" placeholder="Ej: Lote 47 — corral C-2" autocomplete="off">
           </label>
+          <p class="save-when">Se guardará: <b id="saveWhen"></b></p>
           <details class="more">
             <summary>Más datos (opcional)</summary>
             <div class="fields">
@@ -98,7 +123,7 @@
           </div>
 
           <!-- guía de pasos explícita y persistente -->
-          <div class="stepguide" id="stepGuide"><b>PASO 1</b> · Sube UN cerdo solo — es el cerdo de prueba para calibrar</div>
+          <div class="stepguide" id="stepGuide"><b>PASO 1</b> · Sube UN cerdo de prueba, solo</div>
 
           <!-- LA FIRMA: la báscula que te habla claro -->
           <div class="narration" id="narration" role="status" aria-live="polite">
@@ -180,30 +205,33 @@
         <form class="filters" id="formFilters">
           <label>Desde <input type="date" name="desde"></label>
           <label>Hasta <input type="date" name="hasta"></label>
-          <label class="fq">Buscar lote <input type="search" name="q" placeholder="ej. Lote 16 jul" autocomplete="off"></label>
+          <label class="fq">Buscar lote <input type="search" name="q" placeholder="Ej: Lote 47" autocomplete="off"></label>
           <button type="submit" class="btn-sm">Filtrar</button>
         </form>
 
-        <div class="tablewrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Fecha</th><th>Lote</th><th>Cerdos</th><th>Kg</th>
-                <th>Promedio</th><th>Uniformidad</th><th>Estado</th>
-              </tr>
-            </thead>
-            <tbody id="dataRows">
-              <tr><td colspan="7" class="empty">Cargando pesajes…</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <details class="collap" id="colPesajes">
+          <summary><span class="ct" id="sumPesajes">Pesajes</span><span class="caret" aria-hidden="true">▸</span></summary>
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th><th>Lote</th><th>Cerdos</th><th>Kg</th>
+                  <th>Promedio</th><th>Uniformidad</th><th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="dataRows">
+                <tr><td colspan="7" class="empty">Cargando pesajes…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
 
-        <div class="card">
-          <h2>Por lote</h2>
+        <details class="collap" id="colLotes">
+          <summary><span class="ct" id="sumPorLote">Por lote</span><span class="caret" aria-hidden="true">▸</span></summary>
           <div class="lotegrid" id="porLote">
             <div class="empty">Sin datos todavía.</div>
           </div>
-        </div>
+        </details>
       </div>
 
       <div class="subview" id="dvDetail">
@@ -226,24 +254,66 @@
       </div>
     </section>
 
-    <!-- ================= MÓDULO BÁSCULA (técnico) ================= -->
+    <!-- ================= MÓDULO BÁSCULA: WIZARD DE CONEXIÓN ================= -->
     <section class="mod" id="modBascula">
-      <div class="modhead"><h2>Báscula</h2></div>
-      <div class="config">
-        <p style="color:var(--muted);margin:0">Esto se configura una sola vez, cuando se instala el sistema.
-          Si no eres el técnico, mejor no cambies nada aquí.</p>
-        <label>Marca y modelo de la báscula
-          <select id="cfgProfile"><option value="">Cargando catálogo…</option></select>
-        </label>
-        <label>Puerto o dirección (opcional)
-          <input id="cfgPort" placeholder="COM3, /dev/ttyUSB0 o 192.168.0.50:8899" autocomplete="off">
-        </label>
-        <div class="config-actions">
-          <button class="btn-primary" id="bProbar">Probar conexión</button>
-          <button id="bGuardarCfg">Guardar</button>
+      <div class="modhead"><h2>Conectar la báscula</h2></div>
+      <div class="wizard" id="wizard">
+
+        <ol class="wizsteps" aria-label="Pasos">
+          <li class="ws active" id="wsDot1"><span class="n">1</span> Conexión</li>
+          <li class="ws" id="wsDot2"><span class="n">2</span> Báscula</li>
+          <li class="ws" id="wsDot3"><span class="n">3</span> Dirección</li>
+        </ol>
+
+        <!-- PASO 1: método -->
+        <div class="wizpane active" id="wizPane1">
+          <h3 class="wizq">¿Cómo se conecta tu báscula?</h3>
+          <p class="wizsub">Si no estás seguro, mira qué sale del indicador de peso.</p>
+          <div class="methodgrid">
+            <button class="methodcard" data-method="bluetooth">
+              <span class="m-ic">📶</span><span class="m-t">Bluetooth</span>
+              <span class="m-d">Con adaptador BLU2 — sin cables hasta el teléfono o computador</span>
+            </button>
+            <button class="methodcard" data-method="cable">
+              <span class="m-ic">🔌</span><span class="m-t">Cable</span>
+              <span class="m-d">Cable USB-serial directo al computador</span>
+            </button>
+            <button class="methodcard" data-method="red">
+              <span class="m-ic">🌐</span><span class="m-t">Red</span>
+              <span class="m-d">Conversor ethernet o wifi — la báscula tiene una dirección IP</span>
+            </button>
+            <button class="methodcard" data-method="sim">
+              <span class="m-ic">🎛</span><span class="m-t">Simulada</span>
+              <span class="m-d">Para practicar sin báscula — todo funciona igual</span>
+            </button>
+          </div>
         </div>
-        <div class="test-result" id="testResult"></div>
-        <button class="sim-btn" id="bUseSim2">🎛 Usar báscula simulada</button>
+
+        <!-- PASO 2: marca y modelo -->
+        <div class="wizpane" id="wizPane2">
+          <div class="mini-top"><button class="btn-link" id="bWizBack2">◂ Atrás</button></div>
+          <h3 class="wizq">¿Qué báscula es?</h3>
+          <p class="wizsub">Estas son las más comunes. Si no está la tuya, mira el catálogo completo.</p>
+          <div class="commons" id="wizCommons"></div>
+          <button class="btn-link allbrands" id="bWizAll">Ver todas las marcas ▾</button>
+          <div class="catalog" id="wizCatalog" hidden>
+            <div class="empty">Cargando catálogo…</div>
+          </div>
+        </div>
+
+        <!-- PASO 3: dirección + probar + guardar -->
+        <div class="wizpane" id="wizPane3">
+          <div class="mini-top"><button class="btn-link" id="bWizBack3">◂ Atrás</button></div>
+          <h3 class="wizq" id="wizQ3">¿Dónde la encuentro?</h3>
+          <p class="wizsel" id="wizSel"></p>
+          <div class="addr" id="wizAddr"></div>
+          <div class="config-actions">
+            <button class="btn-primary" id="bProbar">Probar conexión</button>
+            <button id="bGuardarCfg">Guardar</button>
+          </div>
+          <div class="test-result" id="testResult"></div>
+        </div>
+
       </div>
     </section>
 
@@ -266,7 +336,7 @@
     <div class="howto-steps">
       <div class="hstep" style="border:1px dashed var(--amber)">
         <div class="pic">🔌</div>
-        <div><span class="n">Antes de empezar (una sola vez)</span> <p>Conecta tu báscula en <b>⚙ Báscula</b>: elige la marca, el puerto y toca "Probar conexión". ¿Aún no tienes el equipo? Toca <b>"Usar báscula simulada"</b> y practica sin nada.</p></div>
+        <div><span class="n">Antes de empezar (una sola vez)</span> <p>Conecta tu báscula en <b>⚙ Báscula</b>: el asistente te pregunta cómo se conecta y te guía. ¿Aún no tienes el equipo? Elige <b>"Simulada"</b> y practica sin nada.</p></div>
       </div>
       <div class="hstep">
         <div class="pic">🐷</div>
@@ -300,6 +370,53 @@
     </div>
     <div class="actions">
       <button type="button" id="bWhyCancel">Cancelar</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ============ ONBOARDING: PRIMERA VEZ ============ -->
+<dialog id="dlgOnboard" aria-label="Bienvenida">
+  <div class="dlg ob">
+    <div class="ob-viewport">
+
+      <div class="ob-slide active" data-ob="0">
+        <div class="ob-pic">🐷</div>
+        <h2>Bienvenido a PorciPeso</h2>
+        <p class="ob-txt">La báscula que te habla claro: pesa tus cerdos, los cuenta sola y te avisa si tiene dudas.</p>
+      </div>
+
+      <div class="ob-slide" data-ob="1">
+        <div class="ob-pic">🔌</div>
+        <h2>¿Cómo se conecta?</h2>
+        <p class="ob-txt">Conectar tu báscula toma un minuto — el asistente te guía paso a paso.</p>
+        <div class="ob-choices">
+          <button class="btn-primary" id="obConnect">Conectar mi báscula</button>
+          <button id="obLater">Después — practicar sin báscula</button>
+        </div>
+      </div>
+
+      <div class="ob-slide" data-ob="2">
+        <h2>Pesar es así de fácil</h2>
+        <div class="ob-steps">
+          <div class="ob-step"><span class="pic">🐷</span><p><b>1.</b> Sube un cerdo de prueba, solo.</p></div>
+          <div class="ob-step"><span class="pic">🐷🐷🐷</span><p><b>2.</b> Luego sube los demás como quieras.</p></div>
+          <div class="ob-step"><span class="pic">🔢</span><p><b>3.</b> Yo los cuento y te aviso si dudo.</p></div>
+        </div>
+      </div>
+
+      <div class="ob-slide" data-ob="3">
+        <div class="ob-pic">🎉</div>
+        <h2>¡Listo!</h2>
+        <p class="ob-txt">Cuando quieras, toca <b>"Empezar a pesar"</b>. Y si algo no cuadra, siempre puedes tocar "¿Cómo funciona?".</p>
+      </div>
+
+    </div>
+    <div class="ob-foot">
+      <button class="btn-link" id="obSkip">Saltar</button>
+      <div class="ob-dots" id="obDots" aria-hidden="true">
+        <span class="d active"></span><span class="d"></span><span class="d"></span><span class="d"></span>
+      </div>
+      <button class="btn-primary ob-next" id="obNext">Siguiente</button>
     </div>
   </div>
 </dialog>

@@ -252,9 +252,12 @@ export class LocalBackend {
     if (now - this.lastReadingBroadcast >= READING_BROADCAST_MIN_S) {
       this.lastReadingBroadcast = now;
       let state = "idle";
+      let fase = "lote";
       if (this.engine !== null) {
         try {
-          state = this.engine.snapshot().state;
+          const snap = this.engine.snapshot();
+          state = snap.state;
+          fase = snap.fase ?? "lote";
         } catch {
           /* estado por defecto */
         }
@@ -264,6 +267,7 @@ export class LocalBackend {
         kg: reading.kg,
         ts_ms: reading.ts_ms,
         state,
+        fase,
       });
     }
   };
@@ -530,9 +534,15 @@ export class LocalBackend {
       data["corral_origen"] = data["corral"];
     }
     delete data["corral"];
-    const sessionId = await this.repo.createSession(data);
+    const modo = String(data["modo"] ?? "") || "lote";
+    if (modo !== "lote" && modo !== "unidades") {
+      // mismo contrato que app.py: validado ANTES de insertar la fila
+      return err(400, `modo desconocido: '${modo}' (esperado: ('lote', 'unidades'))`);
+    }
+    data["modo"] = modo;
     const engine = this.ensureEngine();
-    engine.openSession(sessionId);
+    const sessionId = await this.repo.createSession(data);
+    engine.openSession(sessionId, modo);
     this.currentSessionId = sessionId;
     this.broadcastSnapshot();
     const session = await this.repo.getSession(sessionId);
@@ -570,6 +580,7 @@ export class LocalBackend {
       count: (closed?.["total_animales"] as number) ?? 0,
       total_kg: (closed?.["total_kg"] as number) ?? 0.0,
       pending: 0,
+      fase: "lote",
     });
     return ok(closed);
   }

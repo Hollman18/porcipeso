@@ -79,7 +79,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     await backend.repo.close();
   });
 
-  it("ciclo completo: sim → sesión → referencia/subida/bajada/reingreso → cierre + export CSV", async () => {
+  it("ciclo lote v2: calibración → bajar_prueba → REFERENCIA al vaciar → lote → cierre + export CSV", async () => {
     // WS conectado desde el arranque (como app.js)
     const ws = new ShimWebSocket(backend.hub, "/ws");
     const messages: any[] = [];
@@ -98,7 +98,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(status.json.profile_id).toBe("simulador");
     expect(status.json.last_kg).not.toBeNull();
 
-    // 2) crear la sesión (queda 'abierta' en la DB, misma forma que FastAPI)
+    // 2) crear la sesión (modo default 'lote', persistido en la fila)
     const created = await call(backend, "POST", "/api/sessions", {
       lote: "Lote test",
       corral: "C-4",
@@ -106,27 +106,50 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
       operador: "",
     });
     expect(created.status).toBe(201);
-    expect(created.json).toMatchObject({ lote: "Lote test", corral_origen: "C-4", estado: "abierta" });
+    expect(created.json).toMatchObject({
+      lote: "Lote test",
+      corral_origen: "C-4",
+      estado: "abierta",
+      modo: "lote",
+    });
     expect(created.json.uuid).toBeTruthy();
     const sid = created.json.id as number;
+    await run(backend, 3000); // base de calibración: la sesión limpia la ventana, necesita 2 s de lecturas frescas
 
-    // 3) cerdo de prueba: 100 kg exactos → REFERENCIA
+    // 3) cerdo de prueba: 100 kg → candidato (fase bajar_prueba), SIN evento aún
     const on1 = await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 100 });
     expect(on1.status).toBe(200);
     expect(on1.json).toMatchObject({ action: "pigs_on", pigs_fisicos: 1 });
     await run(backend, 4000);
+    let events = await call(backend, "GET", `/api/sessions/${sid}/events`);
+    expect(events.json).toHaveLength(0); // peak hold: todavía NO hay REFERENCIA
+    // la fase viva viaja en los mensajes reading (los snapshot se emiten
+    // en el cambio de estado, ANTES de que la fase avance — igual que app.py)
+    const bajarReading = [...messages].reverse().find((m) => m.type === "reading");
+    expect(bajarReading.fase).toBe("bajar_prueba");
 
-    // 4) suben 2 de golpe (+200) → SUBIDA n=2
+    // 4) se baja el de prueba → al vaciar se emite REFERENCIA (count sigue 0)
+    await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
+    await run(backend, 4000);
+    events = await call(backend, "GET", `/api/sessions/${sid}/events`);
+    expect(events.json.map((e: any) => e.tipo)).toEqual(["referencia"]);
+    const refSnap = [...messages].reverse().find((m) => m.type === "snapshot");
+    expect(refSnap.fase).toBe("lote");
+    expect(refSnap.count).toBe(0); // la REFERENCIA no suma al conteo
+    expect(refSnap.total_kg).toBe(0);
+    expect(Math.abs(refSnap.ref_kg - 100)).toBeLessThan(3);
+
+    // 5) fase lote clásica: suben 2 de golpe (+200) → SUBIDA n=2
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 2, kg_each: 100 });
     await run(backend, 4000);
 
-    // 5) se baja 1 (-100) → BAJADA; vuelve a subir → REINGRESO
+    // 6) se baja 1 (-100) → BAJADA; vuelve a subir → REINGRESO
     await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
     await run(backend, 4000);
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 100 });
     await run(backend, 4000);
 
-    const events = await call(backend, "GET", `/api/sessions/${sid}/events`);
+    events = await call(backend, "GET", `/api/sessions/${sid}/events`);
     expect(events.status).toBe(200);
     expect(events.json.map((e: any) => e.tipo)).toEqual(["referencia", "subida", "bajada", "reingreso"]);
     const [ref, subida, bajada] = events.json;
@@ -151,24 +174,33 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     // lecturas crudas persistidas para la sesión
     expect(await backend.repo.countReadings(sid)).toBeGreaterThan(50);
 
-    // 6) cerrar con conteo físico
-    const closed = await call(backend, "POST", `/api/sessions/${sid}/close`, { conteo_fisico: 3 });
+    // 7) cerrar con conteo físico: 2 en plataforma (la ref NO cuenta)
+    const closed = await call(backend, "POST", `/api/sessions/${sid}/close`, { conteo_fisico: 2 });
     expect(closed.status).toBe(200);
     expect(closed.json.estado).toBe("cerrada");
-    expect(closed.json.total_animales).toBe(3);
-    expect(closed.json.conteo_fisico).toBe(3);
+    expect(closed.json.total_animales).toBe(2);
+    expect(closed.json.conteo_fisico).toBe(2);
     expect(closed.json.diferencia_conciliacion).toBe(0);
     expect(closed.json.hora_salida).toBeTruthy();
-    expect(Math.abs(closed.json.total_kg - 300)).toBeLessThan(6);
+    expect(Math.abs(closed.json.total_kg - 200)).toBeLessThan(6);
 
-    // 7) estadística de sesión y global (SQL local)
+    // 8) estadística de sesión (métricas muestrales v2) y global
     const stats = await call(backend, "GET", `/api/sessions/${sid}/stats`);
-    expect(stats.json.total_animales).toBe(3);
+    expect(stats.json.total_animales).toBe(2);
     expect(stats.json.n_eventos).toBe(4);
+    expect(stats.json.modo).toBe("lote");
+    expect(stats.json.tipo_muestra).toBe("estimada");
+    // muestras individuales: la REFERENCIA (~100) + el reingreso n=1 (~100)
+    expect(stats.json.n_muestras).toBe(2);
+    expect(stats.json.n_muestras_individuales).toBe(2);
+    expect(stats.json.mediana).not.toBeNull();
+    expect(Math.abs(stats.json.mediana - 100)).toBeLessThan(3);
+    expect(typeof stats.json.varianza).toBe("number");
+    expect(typeof stats.json.desviacion_std).toBe("number");
 
     const globalStats = await call(backend, "GET", "/api/stats/global");
     expect(globalStats.json.sesiones).toBe(1);
-    expect(globalStats.json.total_animales).toBe(3);
+    expect(globalStats.json.total_animales).toBe(2);
     expect(globalStats.json.por_lote[0].lote).toBe("Lote test");
 
     const list = await call(backend, "GET", "/api/sessions?q=Lote");
@@ -176,7 +208,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     const miss = await call(backend, "GET", "/api/sessions?q=NoExiste");
     expect(miss.json).toHaveLength(0);
 
-    // 8) export: CSV en lugar de xlsx (diferencia documentada del móvil)
+    // 9) export: CSV en lugar de xlsx (diferencia documentada del móvil)
     const exp = await call(backend, "GET", `/api/sessions/${sid}/export.xlsx`);
     expect(exp.status).toBe(200);
     expect(exp.res.headers.get("Content-Type")).toContain("text/csv");
@@ -184,7 +216,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(exp.json).toContain("Lote test");
     expect(exp.json).toContain("referencia");
 
-    // 9) mensajes WS con el contrato de app.py
+    // 10) mensajes WS con el contrato de app.py (v2: fase incluida)
     await run(backend, 10);
     const types = new Set(messages.map((m) => m.type));
     expect(types).toContain("reading");
@@ -194,22 +226,102 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(reading).toHaveProperty("kg");
     expect(reading).toHaveProperty("ts_ms");
     expect(reading).toHaveProperty("state");
+    expect(reading).toHaveProperty("fase");
     const snap = messages.find((m) => m.type === "snapshot");
-    for (const k of ["state", "kg_now", "ref_kg", "avg_kg", "count", "total_kg", "pending"]) {
+    for (const k of ["state", "kg_now", "ref_kg", "avg_kg", "count", "total_kg", "pending", "fase"]) {
       expect(snap).toHaveProperty(k);
     }
+    // el stream de readings atraviesa las fases del flujo v2
+    const fasesVistas = new Set(
+      messages.filter((m) => m.type === "reading").map((m) => m.fase),
+    );
+    expect(fasesVistas).toContain("calibracion");
+    expect(fasesVistas).toContain("bajar_prueba");
+    expect(fasesVistas).toContain("lote");
     const evMsg = messages.find((m) => m.type === "event");
     expect(evMsg).toHaveProperty("tipo");
     expect(evMsg).toHaveProperty("delta_kg");
-    // el último snapshot tras cerrar es idle con los totales
+    // el último snapshot tras cerrar es idle con los totales (fase lote)
     const lastSnap = [...messages].reverse().find((m) => m.type === "snapshot");
     expect(lastSnap.state).toBe("idle");
-    expect(lastSnap.count).toBe(3);
+    expect(lastSnap.count).toBe(2);
+    expect(lastSnap.fase).toBe("lote");
 
-    // 10) sim/stop
+    // 11) sim/stop
     const stop = await call(backend, "POST", "/api/sim/stop", {});
     expect(stop.json).toEqual({ connected: false, stopped: true });
     ws.close();
+  });
+
+  it("modo unidades: cada estable ≥ min_delta = SUBIDA n=1; vacío sin evento; dos sin vaciar", async () => {
+    const ws = new ShimWebSocket(backend.hub, "/ws");
+    const messages: any[] = [];
+    ws.onmessage = (e) => messages.push(JSON.parse(e.data));
+
+    await call(backend, "POST", "/api/sim/start", {});
+    await run(backend, 2500);
+
+    const created = await call(backend, "POST", "/api/sessions", {
+      lote: "Unidades",
+      modo: "unidades",
+    });
+    expect(created.status).toBe(201);
+    expect(created.json.modo).toBe("unidades");
+    const sid = created.json.id as number;
+    await run(backend, 3000); // base (ventana fresca de la sesión: 2 s de lecturas)
+
+    // animal 1: sube 100 → SUBIDA n=1 con su peso
+    await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 100 });
+    await run(backend, 4000);
+    // baja → SIN evento
+    await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
+    await run(backend, 4000);
+    // animal 2: sube 95 → SUBIDA
+    await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 95 });
+    await run(backend, 4000);
+    // animal 3 SIN vaciar (se monta encima): +110 → SUBIDA con la diferencia
+    await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 110 });
+    await run(backend, 4000);
+
+    const events = await call(backend, "GET", `/api/sessions/${sid}/events`);
+    expect(events.json.map((e: any) => e.tipo)).toEqual(["subida", "subida", "subida"]);
+    expect(events.json.every((e: any) => e.animales_estimados === 1)).toBe(true);
+    expect(events.json.every((e: any) => e.ambiguo === false)).toBe(true);
+    expect(Math.abs(events.json[0].delta_kg - 100)).toBeLessThan(3);
+    expect(Math.abs(events.json[1].delta_kg - 95)).toBeLessThan(3);
+    expect(Math.abs(events.json[2].delta_kg - 110)).toBeLessThan(4);
+
+    // fase 'unidades' en readings y snapshots
+    const fases = new Set(messages.filter((m) => m.type === "reading").map((m) => m.fase));
+    expect(fases).toContain("unidades");
+    const snap = [...messages].reverse().find((m) => m.type === "snapshot");
+    expect(snap.fase).toBe("unidades");
+    expect(snap.count).toBe(3);
+
+    const closed = await call(backend, "POST", `/api/sessions/${sid}/close`, { conteo_fisico: 3 });
+    expect(closed.json.total_animales).toBe(3);
+    expect(Math.abs(closed.json.total_kg - 305)).toBeLessThan(8);
+
+    // stats v2: muestra COMPLETA (censo), desviación muestral n-1
+    const stats = await call(backend, "GET", `/api/sessions/${sid}/stats`);
+    expect(stats.json.modo).toBe("unidades");
+    expect(stats.json.tipo_muestra).toBe("completa");
+    expect(stats.json.n_muestras).toBe(3);
+    expect(stats.json.total_animales).toBe(3);
+    expect(stats.json.mediana).not.toBeNull();
+    expect(stats.json.varianza).toBeGreaterThan(0);
+    expect(stats.json.desviacion_std).toBeGreaterThan(0);
+    // paridad con statistics.stdev: sqrt(varianza) == desviacion_std (±redondeo)
+    expect(Math.abs(Math.sqrt(stats.json.varianza) - stats.json.desviacion_std)).toBeLessThan(0.05);
+    ws.close();
+  });
+
+  it("POST /api/sessions rechaza modo desconocido con 400 (sin fila huérfana)", async () => {
+    const bad = await call(backend, "POST", "/api/sessions", { lote: "X", modo: "turbo" });
+    expect(bad.status).toBe(400);
+    expect(bad.json.detail).toContain("modo desconocido");
+    const list = await call(backend, "GET", "/api/sessions");
+    expect(list.json).toHaveLength(0);
   });
 
   it("evento ambiguo → pregunta con opciones → confirm actualiza engine + DB", async () => {
@@ -218,9 +330,13 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     await run(backend, 2500);
     const created = await call(backend, "POST", "/api/sessions", { lote: "Ambiguo" });
     const sid = created.json.id as number;
+    await run(backend, 3000); // base de calibración (ventana fresca)
 
+    // calibración v2: cerdo de prueba sube y SE BAJA → REFERENCIA 100
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 100 });
-    await run(backend, 4000); // referencia 100
+    await run(backend, 4000);
+    await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
+    await run(backend, 4000);
 
     // +150 sobre promedio 100 → n_raw 1.5 → AMBIGUO opciones [1,2]
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 150 });
@@ -241,9 +357,9 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(confirmed.json.animales_confirmados).toBe(1);
 
     const closed = await call(backend, "POST", `/api/sessions/${sid}/close`, {});
-    expect(closed.json.total_animales).toBe(2); // 1 ref + 1 confirmado
-    expect(Math.abs(closed.json.total_kg - 250)).toBeLessThan(6);
-    expect(Math.abs(closed.json.promedio_final - 125)).toBeLessThan(3);
+    expect(closed.json.total_animales).toBe(1); // la REFERENCIA no suma (v2)
+    expect(Math.abs(closed.json.total_kg - 150)).toBeLessThan(6);
+    expect(Math.abs(closed.json.promedio_final - 150)).toBeLessThan(4);
   });
 
   it("silence del sim dispara SIN_SENAL en el estado", async () => {
@@ -312,6 +428,37 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(status.json.last_kg).toBeCloseTo(126.35, 2);
     await bt.stopDriver();
     await bt.repo.close();
+  });
+
+  it("GET /api/bt/devices responde la forma que espera fillBtDevices() de app.js", async () => {
+    // app.js: const arr = Array.isArray(d) ? d : (d?.devices ?? null);
+    //         name = dev?.name; addr = dev?.address ?? dev?.addr ?? …
+    const btmod = await import("../src/bluetooth");
+    const spy = vi
+      .spyOn(btmod.BluetoothScaleDriver, "listDevices")
+      .mockResolvedValue([{ name: "BLU2", address: "00:14:03:05:59:02" }]);
+    try {
+      const res = await call(backend, "GET", "/api/bt/devices");
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.json)).toBe(true);
+      expect(res.json[0]).toEqual({ name: "BLU2", address: "00:14:03:05:59:02" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("GET /api/bt/devices sin plugin BT responde 503 (la UI cae al campo manual)", async () => {
+    const btmod = await import("../src/bluetooth");
+    const spy = vi
+      .spyOn(btmod.BluetoothScaleDriver, "listDevices")
+      .mockRejectedValue(new Error("no plugin"));
+    try {
+      const res = await call(backend, "GET", "/api/bt/devices");
+      expect(res.status).toBe(503);
+      expect(res.json.detail).toContain("Bluetooth no disponible");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("profiles marca los parsers aún no portados", async () => {

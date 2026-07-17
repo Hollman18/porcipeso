@@ -18,6 +18,7 @@ interface FixtureAction {
   op: "feed" | "open_session" | "confirm";
   readings?: Array<[number, number]>;
   session_id?: number;
+  modo?: string;
   event_index?: number;
   n?: number;
 }
@@ -54,8 +55,22 @@ function expectMatch(actual: Record<string, unknown>, expected: Record<string, u
 describe("paridad engine.ts vs engine.py (fixtures del engine real)", () => {
   const cases = fixtures.cases as unknown as FixtureCase[];
 
-  it("hay suficientes escenarios (≥8)", () => {
-    expect(cases.length).toBeGreaterThanOrEqual(8);
+  it("hay suficientes escenarios (≥12) y cubren ambos modos", () => {
+    expect(cases.length).toBeGreaterThanOrEqual(12);
+    const modos = new Set(
+      cases.flatMap((c) =>
+        c.actions.filter((a) => a.op === "open_session").map((a) => a.modo ?? "lote"),
+      ),
+    );
+    expect(modos).toContain("lote");
+    expect(modos).toContain("unidades");
+    // los escenarios v2 deben ejercitar la REFERENCIA de calibración
+    const tipos = new Set(
+      cases.flatMap((c) => c.expected.events.map((e) => e["tipo"] as string)),
+    );
+    for (const t of ["referencia", "subida", "bajada", "reingreso"]) {
+      expect(tipos).toContain(t);
+    }
   });
 
   for (const c of cases) {
@@ -83,7 +98,7 @@ describe("paridad engine.ts vs engine.py (fixtures del engine real)", () => {
             engine.feed({ ts_ms, kg, scale_id: "default", stable_flag: null });
           }
         } else if (action.op === "open_session") {
-          engine.openSession(action.session_id!);
+          engine.openSession(action.session_id!, action.modo ?? "lote");
         } else {
           const target = emitted[action.event_index!];
           const result = engine.confirm(target.id as number, action.n!);

@@ -1,8 +1,13 @@
-"""Tests del motor de pesaje (SPEC §4 y §4.1) con streams sintéticos a 10 Hz.
+"""Tests del motor de pesaje v2 (SPEC §4 y §4.1) con streams sintéticos a 10 Hz.
 
 El helper `feed_level` emite lecturas con ts_ms incrementales de 100 ms (10 Hz).
 Los timestamps parten de time.time()*1000 para que el watchdog de snapshot()
 (que compara contra el reloj de pared) no dispare SIN_SENAL en falso.
+
+Flujo v2 modo "lote": la sesión arranca en fase "calibracion"; la referencia
+exige subir el cerdo de prueba Y BAJARLO (el peak estable sostenido es la ref).
+El helper `calibrar` recorre ese ciclo completo (0 → ref → 0) y deja el motor
+en fase "lote" con ref_kg fijada y count=0.
 """
 from __future__ import annotations
 
@@ -43,16 +48,35 @@ def feed_level(eng: WeighingEngine, ts: int, kg: float, n: int = 25,
     return ts
 
 
-# ---------------------------------------------------------------- caso 1
+def calibrar(eng: WeighingEngine, ts: int, ref: float = 102.5) -> int:
+    """Ciclo de calibración completo: vacío → cerdo de prueba → vacío."""
+    ts = feed_level(eng, ts, 0.0)     # base vacía
+    ts = feed_level(eng, ts, ref)     # sube el cerdo de prueba
+    ts = feed_level(eng, ts, 0.0)     # se baja → REFERENCIA, fase "lote"
+    return ts
 
-def test_referencia_limpia():
-    """0 → 102.5: primer escalón de la sesión fija la referencia."""
+
+# ------------------------------------------------------- calibración (lote)
+
+def test_calibracion_referencia_exige_subir_y_bajar():
+    """0 → 102.5 → 0: la REFERENCIA solo se emite al bajar el cerdo de prueba."""
     eng, events, _ = make_engine()
     eng.open_session(1)
+    assert eng.snapshot().fase == "calibracion"
+
     ts = now_ms()
     ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)
+    assert eng.snapshot().fase == "calibracion"  # base vacía, sin candidato
 
+    ts = feed_level(eng, ts, 102.5)
+    # candidato capturado, esperando la bajada: SIN evento todavía
+    assert events == []
+    snap = eng.snapshot()
+    assert snap.fase == "bajar_prueba"
+    assert snap.ref_kg is None
+    assert snap.count == 0
+
+    ts = feed_level(eng, ts, 0.0)     # se baja el cerdo de prueba
     assert len(events) == 1
     ev = events[0]
     assert ev.tipo == EventType.REFERENCIA
@@ -67,25 +91,120 @@ def test_referencia_limpia():
 
     snap = eng.snapshot()
     assert snap.state == EngineState.ESTABLE
+    assert snap.fase == "lote"
     assert snap.ref_kg == pytest.approx(102.5)
     assert snap.avg_kg == pytest.approx(102.5)
-    assert snap.count == 1
-    assert snap.total_kg == pytest.approx(102.5)
+    assert snap.count == 0                      # el de prueba se bajó
+    assert snap.total_kg == pytest.approx(0.0)
     assert snap.pending == 0
 
 
-# ---------------------------------------------------------------- caso 2
+def test_calibracion_peak_hold_cerdo_inquieto():
+    """Niveles estables 98 → 102 → 100 y se baja → ref = 102 (peak estable)."""
+    eng, events, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 98.0)
+    assert eng.snapshot().fase == "bajar_prueba"
+    ts = feed_level(eng, ts, 102.0)   # se acomoda: +4 < min_delta → mismo cerdo
+    assert eng.snapshot().fase == "bajar_prueba"
+    ts = feed_level(eng, ts, 100.0)   # peak hold: el candidato no baja
+    assert eng.snapshot().fase == "bajar_prueba"
+    assert events == []               # nada de eventos durante la calibración
+
+    ts = feed_level(eng, ts, 0.0)     # se baja
+    assert len(events) == 1
+    assert events[0].tipo == EventType.REFERENCIA
+    assert events[0].delta_kg == pytest.approx(102.0)
+    snap = eng.snapshot()
+    assert snap.fase == "lote"
+    assert snap.ref_kg == pytest.approx(102.0)
+    assert snap.count == 0
+
+
+def test_calibracion_doble_monta_vuelve_a_calibracion():
+    """A4: montaron otro sin bajar el primero → fase vuelve a 'calibracion'
+    con el nuevo máximo; el motor no se rompe y al vaciar emite REFERENCIA."""
+    eng, events, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 100.0)   # cerdo de prueba
+    assert eng.snapshot().fase == "bajar_prueba"
+    ts = feed_level(eng, ts, 205.0)   # +105 ≥ min_delta: se montó otro
+    assert eng.snapshot().fase == "calibracion"
+    assert events == []
+
+    ts = feed_level(eng, ts, 0.0)     # bajan ambos → termina con el máximo
+    assert len(events) == 1
+    assert events[0].tipo == EventType.REFERENCIA
+    assert events[0].delta_kg == pytest.approx(205.0)
+    snap = eng.snapshot()
+    assert snap.fase == "lote"
+    assert snap.ref_kg == pytest.approx(205.0)
+    assert snap.count == 0
+    assert snap.total_kg == pytest.approx(0.0)
+
+
+def test_calibracion_bajada_inicial_no_fija_candidato():
+    """Base con peso ya en plataforma: una bajada inicial no es candidato;
+    la subida ≥ min_delta sobre la base sí, y al volver a la base → REFERENCIA."""
+    eng, events, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = feed_level(eng, ts, 200.0)   # base (había peso muerto en plataforma)
+    ts = feed_level(eng, ts, 90.0)    # quitan peso: rel negativo → ignorado
+    assert events == []
+    assert eng.snapshot().fase == "calibracion"
+    assert eng.snapshot().ref_kg is None
+
+    ts = feed_level(eng, ts, 302.5)   # +102.5 sobre la base → candidato
+    assert eng.snapshot().fase == "bajar_prueba"
+    ts = feed_level(eng, ts, 195.0)   # vuelve ~a la base → calibración lista
+    assert len(events) == 1
+    assert events[0].tipo == EventType.REFERENCIA
+    assert events[0].delta_kg == pytest.approx(102.5)
+    assert eng.snapshot().fase == "lote"
+    assert eng.snapshot().count == 0
+
+
+def test_lote_completo_tras_calibracion():
+    """Tras calibrar, suben los cerdos (incluido el de prueba de nuevo):
+    el conteo arranca en 0 y cuenta cada subida normal."""
+    eng, events, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = calibrar(eng, ts, 102.5)
+
+    ts = feed_level(eng, ts, 102.5)   # vuelve a subir el cerdo de prueba
+    ts = feed_level(eng, ts, 205.0)   # sube otro (+102.5)
+    ts = feed_level(eng, ts, 309.5)   # sube otro (+104.5)
+
+    tipos = [e.tipo for e in events]
+    assert tipos == [EventType.REFERENCIA, EventType.SUBIDA,
+                     EventType.SUBIDA, EventType.SUBIDA]
+    assert all(e.animales_estimados == 1 for e in events[1:])
+    snap = eng.snapshot()
+    assert snap.fase == "lote"
+    assert snap.count == 3
+    assert snap.total_kg == pytest.approx(309.5)
+    assert snap.avg_kg == pytest.approx(309.5 / 3)
+    assert snap.ref_kg == pytest.approx(102.5)   # la referencia no cambia
+
+
+# ------------------------------------------------------------- fase "lote"
 
 def test_suben_dos_promedio_autocorregido():
     """+207 con avg 102.5 → n=2; el promedio se auto-corrige a total/count."""
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)
-    ts = feed_level(eng, ts, 309.5)  # delta +207
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)   # sube 1 (count=1)
+    ts = feed_level(eng, ts, 309.5)   # delta +207
 
-    assert len(events) == 2
+    assert len(events) == 3           # REFERENCIA + SUBIDA + SUBIDA
     ev = events[-1]
     assert ev.tipo == EventType.SUBIDA
     assert ev.animales_estimados == 2
@@ -98,15 +217,13 @@ def test_suben_dos_promedio_autocorregido():
     assert snap.ref_kg == pytest.approx(102.5)      # la referencia no cambia
 
 
-# ---------------------------------------------------------------- caso 3
-
 def test_bajada_reingreso_neto_una_vez():
     """SPEC §4.1: bajada -101 descuenta; reingreso +101 suma. Neto = 1 vez."""
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)   # referencia
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)   # sube 1 → count 1
     ts = feed_level(eng, ts, 309.5)   # +207 → count 3
     ts = feed_level(eng, ts, 208.5)   # -101 → bajada
     snap = eng.snapshot()
@@ -124,18 +241,15 @@ def test_bajada_reingreso_neto_una_vez():
     assert events[-1].animales_estimados == 1
 
 
-# ---------------------------------------------------------------- caso 4
-
 def test_ambiguo_opciones_y_confirm():
     """+155 con avg 102.5 → residuo > 20% → ambiguo [1,2]; confirm aplica."""
     eng, events, _ = make_engine()
     eng.open_session(7)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)   # referencia
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)   # sube 1 → count 1, avg 102.5
     ts = feed_level(eng, ts, 257.5)   # delta +155 → n_raw 1.512 → ambiguo
 
-    assert len(events) == 2
     ev = events[-1]
     assert ev.ambiguo is True
     assert ev.opciones == [1, 2]
@@ -165,15 +279,13 @@ def test_confirm_id_inexistente_retorna_none():
     assert eng.confirm(999, 1) is None
 
 
-# ---------------------------------------------------------------- caso 5
-
 def test_cerdo_inquieto_un_solo_evento():
     """8 s de ruido ±14 kg y luego estabiliza → UN solo evento."""
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)          # referencia
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)          # sube 1 → count 1
     n_before = len(events)
     ts = feed_level(eng, ts, 205.0, n=80, noise=14.0)  # 8 s de ruido, nunca estable
     assert len(events) == n_before            # sin eventos durante el ruido
@@ -187,15 +299,13 @@ def test_cerdo_inquieto_un_solo_evento():
     assert eng.snapshot().count == 2
 
 
-# ---------------------------------------------------------------- caso 6
-
 def test_vibracion_menor_a_min_delta_no_genera_evento():
     """Escalón estable de 27.5 kg (< min_delta 40) → ni evento ni cambio."""
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)   # referencia
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)   # sube 1 → count 1
     n_before = len(events)
     ts = feed_level(eng, ts, 130.0)   # +27.5 < min_delta_kg
     ts = feed_level(eng, ts, 102.5)   # regresa
@@ -206,35 +316,38 @@ def test_vibracion_menor_a_min_delta_no_genera_evento():
     assert snap.total_kg == pytest.approx(102.5)
 
 
-# ---------------------------------------------------------------- caso 7
-
 def test_transiciones_on_state():
     """on_state se dispara exactamente en cada transición, con los valores del enum."""
     eng, _, states = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)
-    assert states == ["movimiento", "estable", "movimiento", "estable"]
+    ts = calibrar(eng, ts, 102.5)     # 0 → 102.5 → 0: tres estabilizaciones
+    assert states == ["movimiento", "estable",
+                      "movimiento", "estable",
+                      "movimiento", "estable"]
 
     eng.close_session()
     assert states[-1] == "idle"
 
 
-# ---------------------------------------------------------------- caso 8
-
 def test_invariante_total_igual_suma_de_deltas():
-    """Tras cada evento aplicado, |total - Σ deltas aplicados| < 0.01."""
+    """Tras cada evento aplicado, |total - Σ deltas aplicados| < 0.01.
+
+    v2: la REFERENCIA de calibración NO se aplica al total (el cerdo de
+    prueba se bajó); el invariante suma solo SUBIDA/BAJADA/REINGRESO.
+    """
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
 
     def check():
-        aplicados = [e for e in events if not e.ambiguo]
+        aplicados = [e for e in events
+                     if not e.ambiguo and e.tipo != EventType.REFERENCIA]
         assert abs(eng.snapshot().total_kg
                    - sum(e.delta_kg for e in aplicados)) < 0.01
 
-    for kg in (0.0, 102.5, 309.5, 208.5, 309.5, 514.5):
+    # calibración + lote: sube 1, suben 2, baja 1, reingresa, suben 2
+    for kg in (0.0, 102.5, 0.0, 102.5, 309.5, 208.5, 309.5, 514.5):
         ts = feed_level(eng, ts, kg)
         check()
 
@@ -252,10 +365,14 @@ def test_sin_senal_por_hueco_entre_lecturas():
     ts = now_ms()
     ts = feed_level(eng, ts, 0.0)
     ts += 5000                       # 5 s sin señal (> 3 s)
-    ts = feed_level(eng, ts, 102.5)  # vuelve la señal, ya con un cerdo arriba
+    ts = feed_level(eng, ts, 102.5)  # vuelve la señal, ya con el de prueba arriba
 
     assert "sin_senal" in states
-    # el escalón ocurrido durante el apagón igual se detecta al reestabilizar
+    # el nivel alcanzado durante el apagón igual se captura como candidato
+    assert events == []
+    assert eng.snapshot().fase == "bajar_prueba"
+
+    ts = feed_level(eng, ts, 0.0)    # se baja → referencia
     assert len(events) == 1
     assert events[0].tipo == EventType.REFERENCIA
     assert events[0].delta_kg == pytest.approx(102.5)
@@ -273,24 +390,94 @@ def test_sin_senal_watchdog_en_snapshot():
     assert states[-1] == "sin_senal"
 
 
-# ---------------------------------------------------------------- bordes
+# ------------------------------------------------------------ modo unidades
 
-def test_referencia_negativa_se_ignora():
-    """El primer delta debe ser positivo; una bajada inicial no fija referencia."""
+def test_unidades_ciclo_cinco_animales():
+    """Cinco ciclos vacío→animal→vacío: 5 SUBIDAS n=1 con el peso de cada uno."""
+    pesos = (95.0, 110.0, 102.5, 87.0, 120.0)
     eng, events, _ = make_engine()
-    eng.open_session(1)
+    eng.open_session(3, modo="unidades")
+    assert eng.snapshot().fase == "unidades"
+
     ts = now_ms()
-    ts = feed_level(eng, ts, 200.0)   # baseline con peso ya en plataforma
-    ts = feed_level(eng, ts, 90.0)    # delta -110: negativo → ignorado
-    assert events == []
-    assert eng.snapshot().ref_kg is None
+    ts = feed_level(eng, ts, 0.0)     # base vacía
+    for peso in pesos:
+        ts = feed_level(eng, ts, peso)
+        ts = feed_level(eng, ts, 0.0)  # el animal sale: NO es evento
 
-    ts = feed_level(eng, ts, 192.5)   # +102.5 desde el nuevo nivel → referencia
+    assert len(events) == len(pesos)
+    for ev, peso in zip(events, pesos):
+        assert ev.tipo == EventType.SUBIDA
+        assert ev.animales_estimados == 1
+        assert ev.ambiguo is False
+        assert ev.delta_kg == pytest.approx(peso)
+        assert ev.session_id == 3
+
+    snap = eng.snapshot()
+    assert snap.fase == "unidades"    # siempre, en todo momento
+    assert snap.count == 5
+    assert snap.total_kg == pytest.approx(sum(pesos))
+    assert snap.avg_kg == pytest.approx(sum(pesos) / 5)
+    assert snap.ref_kg is None        # sin calibración ni referencia
+    assert snap.pending == 0          # jamás ambiguos en este modo
+
+
+def test_unidades_bajada_parcial_se_ignora_hasta_vaciar():
+    """Animal de 100 que baja a 55 sin vaciar: se ignora; al vaciar, listo."""
+    eng, events, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 100.0)   # SUBIDA 100
     assert len(events) == 1
-    assert events[0].tipo == EventType.REFERENCIA
-    assert events[0].delta_kg == pytest.approx(102.5)
+    ts = feed_level(eng, ts, 55.0)    # bajada parcial extraña → ignorada
+    assert len(events) == 1
     assert eng.snapshot().count == 1
+    ts = feed_level(eng, ts, 0.0)     # vacía: sin evento
+    assert len(events) == 1
+    ts = feed_level(eng, ts, 90.0)    # siguiente animal
+    assert len(events) == 2
+    assert events[-1].delta_kg == pytest.approx(90.0)
 
+    snap = eng.snapshot()
+    assert snap.count == 2
+    assert snap.total_kg == pytest.approx(190.0)
+    assert snap.fase == "unidades"
+
+
+def test_unidades_dos_sin_vaciar_cuenta_la_diferencia():
+    """Se monta otro encima sin pasar por vacío: la diferencia ≥ min_delta
+    es otra SUBIDA n=1; cambios menores al min_delta se ignoran."""
+    eng, events, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 100.0)   # animal 1
+    ts = feed_level(eng, ts, 195.0)   # animal 2 encima: diferencia +95
+    assert len(events) == 2
+    assert events[-1].tipo == EventType.SUBIDA
+    assert events[-1].delta_kg == pytest.approx(95.0)
+    assert events[-1].peso_antes == pytest.approx(100.0)
+    assert events[-1].peso_despues == pytest.approx(195.0)
+
+    ts = feed_level(eng, ts, 210.0)   # +15 < min_delta: acomodo, se ignora
+    assert len(events) == 2
+
+    ts = feed_level(eng, ts, 0.0)     # salen ambos: sin evento
+    assert len(events) == 2
+    snap = eng.snapshot()
+    assert snap.count == 2
+    assert snap.total_kg == pytest.approx(195.0)
+    assert snap.avg_kg == pytest.approx(97.5)
+
+
+def test_modo_desconocido_lanza_valueerror():
+    eng, _, _ = make_engine()
+    with pytest.raises(ValueError):
+        eng.open_session(1, modo="granel")
+
+
+# ------------------------------------------------------------------- bordes
 
 def test_escalon_parcial_n_cero_se_acumula():
     """delta ≥ min_delta pero n=0 → se ignora SIN avanzar el nivel base,
@@ -298,8 +485,8 @@ def test_escalon_parcial_n_cero_se_acumula():
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)   # referencia
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)   # sube 1 → count 1
     n_before = len(events)
     ts = feed_level(eng, ts, 147.5)   # +45: n_raw 0.44 → n=0 → ignorado
     assert len(events) == n_before
@@ -317,23 +504,34 @@ def test_close_session_resetea_y_queda_idle():
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
-    ts = feed_level(eng, ts, 0.0)
-    ts = feed_level(eng, ts, 102.5)
+    ts = calibrar(eng, ts, 102.5)
+    ts = feed_level(eng, ts, 102.5)   # sube 1 → count 1
 
     final = eng.close_session()
     assert final.count == 1
     assert final.total_kg == pytest.approx(102.5)
+    assert final.fase == "lote"
 
     snap = eng.snapshot()
     assert snap.state == EngineState.IDLE
     assert snap.count == 0
     assert snap.ref_kg is None
     assert snap.total_kg == pytest.approx(0.0)
+    assert snap.fase == "lote"        # C: close_session resetea la fase
 
     # sin sesión abierta no se generan eventos
     n_before = len(events)
     ts = feed_level(eng, ts, 309.5)
     assert len(events) == n_before
+
+
+def test_close_session_resetea_fase_unidades():
+    eng, _, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    assert eng.snapshot().fase == "unidades"
+    final = eng.close_session()
+    assert final.fase == "unidades"
+    assert eng.snapshot().fase == "lote"   # reset al default del contrato
 
 
 def test_sin_sesion_no_emite_eventos_pero_trackea_kg():

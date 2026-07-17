@@ -71,6 +71,11 @@ class EngineSnapshot:
     count: int
     total_kg: float
     pending: int                     # eventos ambiguos sin confirmar
+    # Fase del pesaje (v2, flujo cerdo de prueba):
+    #   calibracion    → esperando que suba el cerdo de prueba (solo)
+    #   bajar_prueba   → referencia capturada (peak estable); esperando que se baje
+    #   lote           → plataforma vacía de nuevo; "sube todo el lote"
+    fase: str = "lote"
 
 
 @dataclass

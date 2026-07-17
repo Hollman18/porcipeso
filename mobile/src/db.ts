@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS sesiones (
   conteo_fisico            INTEGER,
   diferencia_conciliacion  INTEGER,
   estado                   TEXT NOT NULL DEFAULT 'abierta'
-                           CHECK (estado IN ('abierta', 'cerrada', 'anulada'))
+                           CHECK (estado IN ('abierta', 'cerrada', 'anulada')),
+  modo                     TEXT NOT NULL DEFAULT 'lote'
 );
 
 CREATE TABLE IF NOT EXISTS eventos_pesaje (
@@ -266,6 +267,13 @@ export class Repo {
 
   static async create(drv: SqlDriver, opts: RepoOptions = {}): Promise<Repo> {
     await drv.executeScript(SCHEMA_SQL);
+    // Migración v2 (espejo de repo.init_db): DBs creadas antes del motor
+    // v2 no tienen sesiones.modo (el CREATE usa IF NOT EXISTS y no la
+    // agrega); se detecta con PRAGMA table_info y se agrega con ALTER.
+    const cols = await drv.query("PRAGMA table_info(sesiones)");
+    if (!cols.some((c) => c["name"] === "modo")) {
+      await drv.run("ALTER TABLE sesiones ADD COLUMN modo TEXT NOT NULL DEFAULT 'lote'");
+    }
     return new Repo(drv, opts);
   }
 
@@ -278,6 +286,7 @@ export class Repo {
   async createSession(data: Record<string, unknown>): Promise<number> {
     const cols: Record<string, unknown> = {};
     for (const k of SESSION_FIELDS) cols[k] = data[k] ?? null;
+    cols["modo"] = (data["modo"] as string) || "lote";
     const uuid = (data["uuid"] as string) || uuid4();
     cols["uuid"] = uuid;
     cols["hora_entrada"] = (data["hora_entrada"] as string) || nowIso();
@@ -516,14 +525,31 @@ export class Repo {
     };
   }
 
-  /** Estadística por sesión — port de Repo.stats (SPEC §6). */
+  /** Estadística por sesión — port EXACTO de Repo.stats (SPEC §6, v2).
+   *
+   * Totales sobre TODOS los eventos (con signo). La dispersión
+   * (desviación estándar MUESTRAL n-1, varianza muestral, mediana, CV%,
+   * uniformidad ±10 %) se calcula sobre los pesos individuales conocidos:
+   * - modo "unidades": todos los eventos son SUBIDA n=1 → muestra COMPLETA.
+   * - modo "lote": subidas de 1 animal + la REFERENCIA → ESTIMADA.
+   */
   async stats(sessionId: number): Promise<Record<string, unknown>> {
+    const session = await this.getSession(sessionId);
+    const modo = (session?.["modo"] as string) || "lote";
     const events = await this.listEvents(sessionId);
     let totalKg = 0.0;
     let totalAnimales = 0;
     const singles: number[] = [];
     for (const ev of events) {
       if (ev["tipo"] === "ajuste" && Number(ev["delta_kg"]) === 0) continue;
+      if (ev["tipo"] === "referencia") {
+        // Motor v2: la REFERENCIA es el cerdo de prueba que se BAJÓ al
+        // terminar la calibración — no integra los totales del lote
+        // (count arranca en 0), pero su peso SÍ es una muestra
+        // individual conocida.
+        singles.push(Number(ev["delta_kg"]));
+        continue;
+      }
       let n = ev["animales_confirmados"] as number | null;
       if (n === null || n === undefined) n = ev["animales_estimados"] as number;
       n = Math.abs(Math.trunc(Number(n)));
@@ -535,16 +561,25 @@ export class Repo {
     }
     const promedio = totalAnimales ? totalKg / totalAnimales : null;
 
-    let desviacionStd: number | null = null;
+    const nMuestras = singles.length;
+    // Desviación estándar / varianza MUESTRALES (n-1, Bessel):
+    // 0 si n < 2 (con una sola muestra no hay dispersión medible).
+    let desviacionStd = 0.0;
+    let varianza = 0.0;
+    if (nMuestras >= 2) {
+      const media = singles.reduce((a, b) => a + b, 0) / nMuestras;
+      varianza = singles.reduce((a, b) => a + (b - media) ** 2, 0) / (nMuestras - 1);
+      desviacionStd = Math.sqrt(varianza);
+    }
+    const mediana = nMuestras ? median(singles) : null;
+
     let cvPct: number | null = null;
     let uniformidadPct: number | null = null;
     if (singles.length) {
-      const media = singles.reduce((a, b) => a + b, 0) / singles.length;
-      const varianza = singles.reduce((a, b) => a + (b - media) ** 2, 0) / singles.length;
-      desviacionStd = Math.sqrt(varianza);
-      if (media) {
-        cvPct = (desviacionStd / media) * 100.0;
-        const dentro = singles.filter((kg) => Math.abs(kg - media) <= 0.1 * media);
+      const mediaSingles = singles.reduce((a, b) => a + b, 0) / singles.length;
+      if (mediaSingles) {
+        cvPct = (desviacionStd / mediaSingles) * 100.0;
+        const dentro = singles.filter((kg) => Math.abs(kg - mediaSingles) <= 0.1 * mediaSingles);
         uniformidadPct = (dentro.length / singles.length) * 100.0;
       }
     }
@@ -554,14 +589,30 @@ export class Repo {
       total_animales: totalAnimales,
       promedio: promedio !== null ? round3(promedio) : null,
       n_eventos: events.length,
-      n_muestras_individuales: singles.length,
+      n_muestras: nMuestras,
+      // alias legado (pre-v2); mismo valor que n_muestras
+      n_muestras_individuales: nMuestras,
       min_delta: singles.length ? Math.min(...singles) : null,
       max_delta: singles.length ? Math.max(...singles) : null,
-      desviacion_std: desviacionStd !== null ? round3(desviacionStd) : null,
+      mediana: mediana !== null ? round3(mediana) : null,
+      varianza: round3(varianza),
+      desviacion_std: round3(desviacionStd),
       cv_pct: cvPct !== null ? round2(cvPct) : null,
       uniformidad_pct: uniformidadPct !== null ? round2(uniformidadPct) : null,
+      modo,
+      // completa = cada animal pesado individualmente (unidades);
+      // estimada = solo las subidas de 1 animal aportan muestra (lote)
+      tipo_muestra: modo === "unidades" ? "completa" : "estimada",
     };
   }
+}
+
+/** statistics.median de Python: mediana clásica (promedio de las dos
+ *  centrales con n par). */
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
 function round3(x: number): number {

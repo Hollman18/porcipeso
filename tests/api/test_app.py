@@ -79,8 +79,10 @@ def test_ciclo_completo(ctx):
     sid = session["id"]
     assert session["estado"] == "abierta"
     assert session["corral_origen"] == "C3"
+    assert session["modo"] == "lote"          # default v2
     engine = holder["engine"]
     assert engine.session_id == sid
+    assert engine.modo == "lote"
 
     # 2) eventos emitidos por el engine → persistidos vía on_event
     _feed_standard_events(engine)
@@ -109,17 +111,26 @@ def test_ciclo_completo(ctx):
     assert resp.status_code == 200
     assert resp.json()["motivo_bajada"] == "lesion"
 
-    # 5) stats con datos conocidos (dispersión sobre las 4 individuales)
+    # 5) stats con datos conocidos (dispersión MUESTRAL sobre las 4
+    #    individuales: n-1)
     stats = client.get(f"/api/sessions/{sid}/stats").json()
     singles = [100.0, 110.0, 90.0, 120.0]
     media = statistics.fmean(singles)
-    std = statistics.pstdev(singles)
-    assert stats["total_kg"] == pytest.approx(575.0)
-    assert stats["total_animales"] == 6
-    assert stats["promedio"] == pytest.approx(575.0 / 6, abs=1e-3)
+    std = statistics.stdev(singles)                 # muestral (n-1)
+    # v2: la REFERENCIA (100 kg) es el cerdo de prueba que se bajó: no
+    # suma a los totales pero sí a la muestra individual.
+    assert stats["total_kg"] == pytest.approx(475.0)
+    assert stats["total_animales"] == 5
+    assert stats["promedio"] == pytest.approx(475.0 / 5, abs=1e-3)
+    assert stats["n_muestras"] == 4
+    assert stats["mediana"] == pytest.approx(statistics.median(singles))
     assert stats["desviacion_std"] == pytest.approx(std, abs=1e-3)
+    assert stats["varianza"] == pytest.approx(statistics.variance(singles),
+                                              abs=1e-3)
     assert stats["cv_pct"] == pytest.approx(std / media * 100, abs=1e-2)
     assert stats["uniformidad_pct"] == pytest.approx(50.0)
+    assert stats["modo"] == "lote"
+    assert stats["tipo_muestra"] == "estimada"
 
     # 6) cerrar con conteo físico → conciliación
     engine.set_snapshot(kg_now=0.0, ref_kg=100.0, avg_kg=575.0 / 6,
@@ -147,10 +158,19 @@ def test_ciclo_completo(ctx):
     resumen = {row[0]: row[1] for row in wb["Resumen"].iter_rows(values_only=True)
                if row and row[0]}
     assert resumen["Lote"] == "L-42"
+    assert resumen["Modo"] == "lote"
     assert resumen["Total animales"] == 6
     assert resumen["Conteo físico"] == 7
     assert resumen["Diferencia conciliación"] == 1
     assert resumen["Estado"] == "cerrada"
+    # métricas v2 en la hoja Resumen
+    assert resumen["N muestras"] == 4
+    assert resumen["Tipo de muestra"] == "estimada"
+    assert resumen["Mediana (kg)"] == pytest.approx(105.0)
+    assert resumen["Varianza muestral (kg²)"] == pytest.approx(
+        statistics.variance([100.0, 110.0, 90.0, 120.0]), abs=1e-3)
+    assert resumen["Desviación estándar muestral (kg)"] == pytest.approx(
+        statistics.stdev([100.0, 110.0, 90.0, 120.0]), abs=1e-3)
     rows = list(wb["Eventos"].iter_rows(values_only=True))
     assert len(rows) == 1 + 6  # header + eventos
     header = list(rows[0])
@@ -170,6 +190,34 @@ def test_listar_y_obtener_sesiones(ctx):
     listado = client.get("/api/sessions").json()
     assert [s["id"] for s in listado] == [session["id"]]
     assert client.get(f"/api/sessions/{session['id']}").json()["lote"] == "L-42"
+
+
+def test_crear_sesion_modo_unidades(ctx):
+    client, holder = ctx
+    resp = client.post("/api/sessions",
+                       json={**SESSION_PAYLOAD, "modo": "unidades"})
+    assert resp.status_code == 201
+    session = resp.json()
+    assert session["modo"] == "unidades"
+    engine = holder["engine"]
+    assert engine.modo == "unidades"
+    # el modo persiste y viaja en list/get
+    sid = session["id"]
+    assert client.get(f"/api/sessions/{sid}").json()["modo"] == "unidades"
+    listado = client.get("/api/sessions").json()
+    assert [s["modo"] for s in listado if s["id"] == sid] == ["unidades"]
+    stats = client.get(f"/api/sessions/{sid}/stats").json()
+    assert stats["modo"] == "unidades"
+    assert stats["tipo_muestra"] == "completa"
+
+
+def test_crear_sesion_modo_invalido_400(ctx):
+    client, _ = ctx
+    resp = client.post("/api/sessions",
+                       json={**SESSION_PAYLOAD, "modo": "turbo"})
+    assert resp.status_code == 400
+    assert "modo" in resp.json()["detail"]
+    assert client.get("/api/sessions").json() == []  # sin fila huérfana
 
 
 def test_404s(ctx):
@@ -217,3 +265,20 @@ def test_ws_recibe_evento_y_snapshot(ctx):
         assert snap_msg["total_kg"] == pytest.approx(102.5)
         assert snap_msg["state"] == "estable"
         assert snap_msg["pending"] == 0
+        # v2: la fase SIEMPRE viaja en los snapshot del WS
+        assert snap_msg["fase"] == "calibracion"
+
+
+def test_ws_snapshot_cierre_incluye_fase(ctx):
+    """El broadcast sintético al cerrar también lleva 'fase'."""
+    client, holder = ctx
+    session = _open_session(client)
+    engine = holder["engine"]
+    engine.set_snapshot(kg_now=0.0, avg_kg=100.0, count=1, total_kg=100.0)
+    with client.websocket_connect("/ws") as ws:
+        resp = client.post(f"/api/sessions/{session['id']}/close", json={})
+        assert resp.status_code == 200
+        snap_msg = json.loads(ws.receive_text())
+        assert snap_msg["type"] == "snapshot"
+        assert snap_msg["state"] == "idle"
+        assert snap_msg["fase"] == "lote"

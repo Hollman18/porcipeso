@@ -57,6 +57,14 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   no_signal_after_s: 3.0,
 };
 
+/** Fases del pesaje (motor v2). */
+export type FaseT = "calibracion" | "bajar_prueba" | "lote" | "unidades";
+
+/** Modos de sesión (motor v2). */
+export type ModoT = "lote" | "unidades";
+
+export const MODOS: readonly ModoT[] = ["lote", "unidades"];
+
 export interface EngineSnapshot {
   state: EngineStateT;
   kg_now: number;
@@ -65,6 +73,7 @@ export interface EngineSnapshot {
   count: number;
   total_kg: number;
   pending: number; // eventos ambiguos sin confirmar
+  fase: FaseT; // calibracion | bajar_prueba | lote | unidades (v2)
 }
 
 export interface ScaleProfile {

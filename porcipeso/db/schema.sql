@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS sesiones (
   conteo_fisico            INTEGER,
   diferencia_conciliacion  INTEGER,
   estado                   TEXT NOT NULL DEFAULT 'abierta'
-                           CHECK (estado IN ('abierta', 'cerrada', 'anulada'))
+                           CHECK (estado IN ('abierta', 'cerrada', 'anulada')),
+  -- Modo de pesaje del motor v2: 'lote' (acumulado con cerdo de prueba)
+  -- o 'unidades' (uno a uno). En DBs viejas la columna se agrega en
+  -- init_db() vía PRAGMA table_info + ALTER TABLE (ver repo.init_db).
+  modo                     TEXT NOT NULL DEFAULT 'lote'
 );
 
 CREATE TABLE IF NOT EXISTS eventos_pesaje (

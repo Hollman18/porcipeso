@@ -96,8 +96,10 @@ class Script:
 
     # ------------------------------------------------ acciones
 
-    def open_session(self, session_id: int = 1) -> "Script":
-        self.actions.append({"op": "open_session", "session_id": session_id})
+    def open_session(self, session_id: int = 1, modo: str = "lote") -> "Script":
+        self.actions.append(
+            {"op": "open_session", "session_id": session_id, "modo": modo}
+        )
         return self
 
     def confirm(self, event_index: int, n: int) -> "Script":
@@ -132,7 +134,8 @@ def run_case(script: Script) -> dict:
                 fake.now_ms = float(ts_ms)
                 engine.feed(Reading(ts_ms=int(ts_ms), kg=float(kg)))
         elif action["op"] == "open_session":
-            engine.open_session(action["session_id"])
+            engine.open_session(action["session_id"],
+                                modo=action.get("modo", "lote"))
         elif action["op"] == "confirm":
             target = emitted[action["event_index"]]
             result = engine.confirm(target.id, action["n"])
@@ -168,88 +171,133 @@ def run_case(script: Script) -> dict:
 def build_cases() -> list[Script]:
     cases: list[Script] = []
 
-    s = Script("referencia_simple", "báscula vacía, sube el cerdo de prueba (100 kg)")
-    s.plateau(0.0).open_session(1).ramp(0, 100).plateau(100.0)
+    # ------------------------------------------------ modo lote (v2)
+
+    s = Script("calibracion_simple",
+               "cerdo de prueba 100 kg sube y SE BAJA -> REFERENCIA 100, count 0")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)          # candidato 100 -> bajar_prueba
+      .ramp(100, 0).plateau(0.0))           # vacío -> REFERENCIA 100, fase lote
     cases.append(s)
 
-    s = Script("subidas_multiples", "ref 100, luego 1 cerdo de 105 y 2 de 205 en total")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia 100
-      .ramp(100, 205).plateau(205.0)        # +105 -> n=1 (residuo .05)
-      .ramp(205, 410).plateau(410.0))       # +205 -> n=2 (avg 102.5)
+    s = Script("calibracion_peak_hold",
+               "peak hold sobre niveles ESTABLES: 98 -> 102 -> 100 -> vacío = REFERENCIA 102")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 98).plateau(98.0)            # candidato 98
+      .ramp(98, 102).plateau(102.0)         # se acomoda: peak 102 (< min_delta, sigue bajar_prueba)
+      .ramp(102, 100).plateau(100.0)        # más liviano: peak hold, nada
+      .ramp(100, 0).plateau(0.0))           # vacío -> REFERENCIA 102
     cases.append(s)
 
-    s = Script("dos_de_una", "ref 100, suben 2 exactos (+200), luego 1 (+98)")
-    (s.plateau(0.0).open_session(1)
+    s = Script("calibracion_doble_monta",
+               "montan otro sin bajar el 1º (100 -> 205): recalibra con el máximo; REFERENCIA 205")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)          # candidato 100 -> bajar_prueba
+      .ramp(100, 205).plateau(205.0)        # +105 >= min_delta -> vuelve a calibracion, peak 205
+      .ramp(205, 103).plateau(103.0)        # se baja uno: peak hold, nada
+      .ramp(103, 0).plateau(0.0))           # vacío -> REFERENCIA 205
+    cases.append(s)
+
+    s = Script("lote_completo_post_calibracion",
+               "calibración -> lote clásico: subida n=1, subida n=2, bajada, reingreso")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)          # candidato 100
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100 (evento 0), count 0
+      .ramp(0, 105).plateau(105.0)          # +105 -> subida n=1
+      .ramp(105, 310).plateau(310.0)        # +205 -> subida n=2 (avg 105)
+      .ramp(310, 209).plateau(209.0)        # -101 -> bajada
+      .ramp(209, 311).plateau(311.0))       # +102 -> reingreso
+    cases.append(s)
+
+    s = Script("lote_ambiguo_confirm",
+               "post-calibración: +145 sobre avg 100 -> ambiguo [1,2], confirma 1; luego +145 n=1")
+    (s.open_session(1).plateau(0.0)
       .ramp(0, 100).plateau(100.0)
-      .ramp(100, 300).plateau(300.0)        # +200 -> n=2 residuo 0
-      .ramp(300, 398).plateau(398.0))       # +98  -> n=1
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100 (evento 0)
+      .ramp(0, 145).plateau(145.0)          # +145 -> n_raw 1.45 ambiguo (evento 1)
+      .confirm(1, 1)                        # avg pasa a 145
+      .ramp(145, 290).plateau(290.0))       # +145 sobre avg 145 -> n=1 residuo 0
     cases.append(s)
 
-    s = Script("bajada_reingreso", "sube 1, se baja, vuelve a subir = reingreso pareado")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia
-      .ramp(100, 202).plateau(202.0)        # +102 subida
-      .ramp(202, 101).plateau(101.0)        # -101 bajada (sin emparejar)
-      .ramp(101, 204).plateau(204.0))       # +103 reingreso
-    cases.append(s)
-
-    s = Script("ambiguo_confirm", "escalón +145 sobre avg 100 -> ambiguo [1,2], confirma 1")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia (evento 0)
-      .ramp(100, 245).plateau(245.0)        # +145 -> n_raw 1.45 ambiguo (evento 1)
-      .confirm(1, 1)
-      .ramp(245, 390).plateau(390.0))       # +145 sobre avg 122.5 -> n=1 residuo .18
-    cases.append(s)
-
-    s = Script("ambiguo_mitad_banquero",
+    s = Script("lote_ambiguo_mitad_banquero",
                "delta 250 sobre avg 100: n_raw 2.5 -> round banquero 2, ambiguo [2,3], confirma 3")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia (evento 0)
-      .ramp(100, 350).plateau(350.0)        # +250 -> ambiguo opciones [2,3] (evento 1)
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100 (evento 0)
+      .ramp(0, 250).plateau(250.0)          # +250 -> ambiguo opciones [2,3] (evento 1)
       .confirm(1, 3))
     cases.append(s)
 
-    s = Script("sin_senal_gap", "gap de 4 s en plena sesión: SIN_SENAL y ventana limpia")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia
+    s = Script("sin_senal_gap",
+               "gap de 4 s tras la calibración: SIN_SENAL, ventana limpia; reaparece con +205 n=2")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100
       .gap(4000)                            # apagón -> sin_senal
-      .plateau(205.0))                      # reaparece con +105 -> subida n=1
-    cases.append(s)
-
-    s = Script("bajada_primero_ignorada",
-               "sesión abre con plataforma cargada; se vacía (ref negativa ignorada) y luego ref real")
-    (s.plateau(150.0).open_session(1)
-      .ramp(150, 0).plateau(0.0)            # delta -150 sin ref -> se ignora, base avanza
-      .ramp(0, 98).plateau(98.0))           # +98 -> referencia
+      .plateau(205.0))                      # reaparece con +205 -> subida n=2
     cases.append(s)
 
     s = Script("escalon_parcial_y_deriva",
-               "deriva <40 kg no es evento (base quieta); parcial n=0 tampoco avanza la base")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia 100
-      .ramp(100, 130).plateau(130.0)        # +30 < min_delta -> nada, base sigue 100
-      .ramp(130, 145).plateau(145.0)        # +45 >= min_delta, n_raw .45 -> 0: nada, base 100
-      .ramp(145, 200).plateau(200.0))       # +100 desde base 100 -> n=1
+               "post-ref: deriva <40 kg no es evento; parcial n=0 tampoco avanza la base")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100, base 0
+      .ramp(0, 30).plateau(30.0)            # +30 < min_delta -> nada, base sigue 0
+      .ramp(30, 45).plateau(45.0)           # +45 >= min_delta, n_raw .45 -> 0: nada, base 0
+      .ramp(45, 100).plateau(100.0))        # +100 desde base 0 -> n=1
     cases.append(s)
 
-    s = Script("cerdo_inquieto", "ruido largo (nunca estable) y al calmarse un solo evento")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia
-      .noise(203.0, 3.0, 60)                # inquieto: rango 6 kg > 2 kg
-      .plateau(203.0))                      # se calma -> +103 n=1
+    s = Script("cerdo_inquieto",
+               "calibración con ruido largo (nunca estable); al calmarse un solo nivel estable")
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100
+      .noise(103.0, 3.0, 60)                # inquieto: rango 6 kg > 2 kg
+      .plateau(103.0))                      # se calma -> +103 n=1
     cases.append(s)
 
-    s = Script("bajadas_multiples_pareo_fifo",
+    s = Script("lote_bajadas_fifo",
                "dos bajadas sin emparejar; dos subidas siguientes son reingresos FIFO")
-    (s.plateau(0.0).open_session(1)
-      .ramp(0, 100).plateau(100.0)          # referencia
-      .ramp(100, 201).plateau(201.0)        # +101 subida
-      .ramp(201, 302).plateau(302.0)        # +101 subida
-      .ramp(302, 201).plateau(201.0)        # -101 bajada A
-      .ramp(201, 100).plateau(100.0)        # -101 bajada B
-      .ramp(100, 202).plateau(202.0)        # +102 reingreso (parea A)
-      .ramp(202, 303).plateau(303.0))       # +101 reingreso (parea B)
+    (s.open_session(1).plateau(0.0)
+      .ramp(0, 100).plateau(100.0)
+      .ramp(100, 0).plateau(0.0)            # REFERENCIA 100
+      .ramp(0, 101).plateau(101.0)          # +101 subida
+      .ramp(101, 202).plateau(202.0)        # +101 subida
+      .ramp(202, 101).plateau(101.0)        # -101 bajada A
+      .ramp(101, 0).plateau(0.0)            # -101 bajada B
+      .ramp(0, 102).plateau(102.0)          # +102 reingreso (parea A)
+      .ramp(102, 203).plateau(203.0))       # +101 reingreso (parea B)
+    cases.append(s)
+
+    s = Script("arranque_cargado_sin_eventos",
+               "sesión abre con plataforma cargada: la base de calibración es 150 y nada supera el umbral")
+    (s.plateau(150.0).open_session(1)
+      .ramp(150, 0).plateau(0.0)            # rel -150 < min_delta -> nada
+      .ramp(0, 98).plateau(98.0))           # rel -52 < min_delta -> nada (sigue calibracion)
+    cases.append(s)
+
+    # -------------------------------------------- modo unidades (v2)
+
+    s = Script("unidades_5_animales",
+               "uno a uno: 100/98/105, dos-sin-vaciar (+110), bajada parcial ignorada, y 102")
+    (s.plateau(0.0).open_session(1, modo="unidades")
+      .ramp(0, 100).plateau(100.0)          # SUBIDA n=1 (100)
+      .ramp(100, 0).plateau(0.0)            # salió: SIN evento
+      .ramp(0, 98).plateau(98.0)            # SUBIDA n=1 (98)
+      .ramp(98, 0).plateau(0.0)
+      .ramp(0, 105).plateau(105.0)          # SUBIDA n=1 (105)
+      .ramp(105, 215).plateau(215.0)        # otro encima sin vaciar: SUBIDA n=1 (110)
+      .ramp(215, 160).plateau(160.0)        # bajada parcial extraña: se ignora
+      .ramp(160, 0).plateau(0.0)            # vacío: SIN evento
+      .ramp(0, 102).plateau(102.0))         # SUBIDA n=1 (102)
+    cases.append(s)
+
+    s = Script("unidades_retorno_vacio",
+               "un animal sube y baja; vibraciones < min_delta no son eventos")
+    (s.plateau(0.0).open_session(1, modo="unidades")
+      .ramp(0, 90).plateau(90.0)            # SUBIDA n=1 (90)
+      .ramp(90, 30).plateau(30.0)           # < min_delta: salió, SIN evento
+      .ramp(30, 0).plateau(0.0))            # vacío, nada
     cases.append(s)
 
     return cases

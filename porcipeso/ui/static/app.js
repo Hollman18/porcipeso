@@ -5,9 +5,13 @@
 
    Backend:
      WS   /ws → {"type":"reading","kg","ts_ms","state"} | {"type":"event",…} | {"type":"snapshot",…}
+            el snapshot puede traer "fase": calibracion|bajar_prueba|lote|unidades
+            (si no viene, la UI degrada al comportamiento clásico)
      GET  /api/profiles · POST /api/scale/connect · GET /api/scale/status
+     GET  /api/bt/devices (opcional: lista Bluetooth emparejados)
      POST /api/sim/start · POST /api/sim/action {action,n,kg_each,seconds} · POST /api/sim/stop
-     POST /api/sessions · GET /api/sessions?desde&hasta&q · GET /api/sessions/{id}
+     POST /api/sessions {lote, modo: "lote"|"unidades", …}
+     GET  /api/sessions?desde&hasta&q · GET /api/sessions/{id}
      GET  /api/sessions/{id}/events · GET /api/sessions/{id}/stats (opcional)
      POST /api/sessions/{id}/close · GET /api/sessions/{id}/export.xlsx
      POST /api/events/{id}/confirm · POST /api/events/{id}/motivo
@@ -40,12 +44,19 @@ const fechaLarga = ts => {
   try { return new Date(t).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }); }
   catch { return ''; }
 };
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 /* ---------------- estado global ---------------- */
 const APP = {
   session: null,       // {id, nombre}
+  mode: 'lote',        // 'lote' | 'unidades'
+  fase: null,          // calibracion | bajar_prueba | lote | unidades (si el backend la manda)
+  faseSupported: false,
+  loteAnnounced: false,
+  unitCount: 0,        // modo unidades: cerdos ya pesados
   snapshot: null,
   refKg: null,
+  candKg: null,        // peso del cerdo de prueba mientras espera bajarse
   weights: [],         // pesos individuales estimados → parejo/disparejo
   moves: [],
   lastReadingAt: 0,
@@ -68,7 +79,7 @@ function setModule(mod) {
   }
   try { history.replaceState(null, '', '#' + mod); } catch { /* sin history */ }
   if (mod === 'datos') refreshDatos().catch(() => {});
-  if (mod === 'bascula') initConfig();
+  if (mod === 'bascula') initWizard();
   window.scrollTo({ top: 0 });
 }
 for (const b of document.querySelectorAll('[data-mod]')) {
@@ -127,6 +138,7 @@ async function scaleStatus() {
     APP.scaleConnected = connected;
     const pid = st?.profile_id ?? st?.profile ?? '';
     if (connected && /sim/i.test(String(pid) + String(st?.profile_name ?? ''))) APP.simActive = true;
+    if (st?.fase) { APP.faseSupported = true; if (APP.session) applyFase(st.fase, st); }
     return st;
   } catch {
     APP.scaleConnected = false;
@@ -143,6 +155,21 @@ async function startSim() {
     catch { /* el sim/start pudo bastar */ }
   }
   refreshSimUi();
+}
+
+/* conecta usando la configuración guardada por el asistente */
+async function connectFromCfg(cfg) {
+  if (!cfg?.profile_id && cfg?.method !== 'sim') throw new Error('sin báscula');
+  if (cfg.method === 'sim' || cfg.profile_id === 'sim') { await startSim(); return; }
+  const body = { profile_id: cfg.profile_id };
+  if (cfg.host) {
+    body.host = cfg.host;
+    if (cfg.tcp_port) body.tcp_port = cfg.tcp_port;
+  } else if (cfg.port) {
+    body.port = cfg.port;
+  }
+  await api('/api/scale/connect', { method: 'POST', body });
+  APP.scaleConnected = true;
 }
 
 function refreshSimUi() {
@@ -202,27 +229,14 @@ async function refreshPesajeHome() {
 
 $('bStart').onclick = () => {
   const seen = (() => { try { return localStorage.getItem('porcipeso_howto') === '1'; } catch { return false; } })();
-  if (!seen) { APP.howtoThen = gotoSetup; openHowto(); }
-  else gotoSetup();
+  if (!seen) { APP.howtoThen = gotoMode; openHowto(); }
+  else gotoMode();
 };
 $('bUseSim').onclick = async () => {
   $('bUseSim').disabled = true;
   try { await startSim(); await refreshPesajeHome(); }
   catch { /* banner activo */ }
   finally { $('bUseSim').disabled = false; }
-};
-$('bUseSim2').onclick = async () => {
-  $('bUseSim2').disabled = true;
-  try {
-    await startSim();
-    const res = $('testResult');
-    res.className = 'test-result show ok';
-    res.textContent = 'Báscula simulada activa ✓ — ve al módulo Pesaje y empieza.';
-  } catch {
-    const res = $('testResult');
-    res.className = 'test-result show fail';
-    res.textContent = 'No pude iniciar el simulador — ¿está corriendo el programa?';
-  } finally { $('bUseSim2').disabled = false; }
 };
 
 /* ---------------- overlay ¿cómo funciona? ---------------- */
@@ -237,6 +251,47 @@ $('bHowtoOk').onclick = () => {
 };
 
 /* ============================================================
+   ONBOARDING — primera apertura de la app
+   ============================================================ */
+const OB = { i: 0, n: 4, maxSeen: 0 };
+function obShow(i) {
+  OB.i = Math.max(0, Math.min(OB.n - 1, i));
+  OB.maxSeen = Math.max(OB.maxSeen, OB.i);
+  for (const s of document.querySelectorAll('.ob-slide')) {
+    const k = Number(s.dataset.ob);
+    s.classList.toggle('active', k === OB.i);
+    s.classList.toggle('left', k < OB.i);
+  }
+  const dots = $('obDots').children;
+  for (let k = 0; k < dots.length; k++) dots[k].classList.toggle('active', k === OB.i);
+  $('obNext').textContent = OB.i === OB.n - 1 ? '¡A pesar!' : 'Siguiente';
+  $('obSkip').hidden = OB.i === OB.n - 1;
+}
+function obFinish(goWizard = false) {
+  try {
+    localStorage.setItem('porcipeso_onboard', '1');
+    if (OB.maxSeen >= 2) localStorage.setItem('porcipeso_howto', '1'); // ya vio los 3 pasos
+  } catch { /* sin storage */ }
+  try { $('dlgOnboard').close(); } catch { /* cerrado */ }
+  if (goWizard) setModule('bascula');
+}
+$('obNext').onclick = () => { OB.i === OB.n - 1 ? obFinish() : obShow(OB.i + 1); };
+$('obSkip').onclick = () => obFinish();
+$('obConnect').onclick = () => obFinish(true);
+$('obLater').onclick = () => obShow(2);
+$('dlgOnboard').addEventListener('close', () => {
+  try { localStorage.setItem('porcipeso_onboard', '1'); } catch { /* sin storage */ }
+});
+
+/* ============================================================
+   MÓDULO PESAJE — elegir modo
+   ============================================================ */
+function gotoMode() { setSubview('modPesaje', 'pvMode'); }
+$('bModeBack').onclick = () => { setSubview('modPesaje', 'pvHome'); refreshPesajeHome().catch(() => {}); };
+$('bModeLote').onclick = () => { APP.mode = 'lote'; gotoSetup(); };
+$('bModeUnidades').onclick = () => { APP.mode = 'unidades'; gotoSetup(); };
+
+/* ============================================================
    MÓDULO PESAJE — preparar
    ============================================================ */
 function defaultName() {
@@ -245,15 +300,29 @@ function defaultName() {
   const h = d.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true });
   return `Lote ${dia}, ${h}`;
 }
+function stampNow() {
+  const d = new Date();
+  const f = d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' }).replace('.', '');
+  const h = d.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${f}, ${h}`;
+}
+function updateSaveWhen() { $('saveWhen').textContent = stampNow(); }
+setInterval(() => { if ($('pvSetup').classList.contains('active')) updateSaveWhen(); }, 15000);
+
 function gotoSetup() {
-  $('inpNombre').value = defaultName();
+  $('inpNombre').value = '';               // limpio: la fecha va aparte, fija
+  updateSaveWhen();
+  const chip = $('chipMode');
+  chip.hidden = false;
+  chip.className = 'chip ok';
+  chip.textContent = APP.mode === 'unidades' ? '🐷 Por unidades' : '⚖ Por lote';
   $('setupError').classList.remove('show');
   $('setupErrorActions').classList.remove('show');
   $('bComenzar').disabled = false;
   refreshSimUi();
   setSubview('modPesaje', 'pvSetup');
 }
-$('bSetupBack').onclick = () => { setSubview('modPesaje', 'pvHome'); refreshPesajeHome().catch(() => {}); };
+$('bSetupBack').onclick = () => gotoMode();
 $('bSetupSim').onclick = async () => {
   try {
     await startSim();
@@ -282,12 +351,7 @@ $('formSetup').addEventListener('submit', async (e) => {
       if (APP.simActive) {
         await startSim();
       } else {
-        const cfg = loadCfg();
-        if (!cfg?.profile_id) throw new Error('sin báscula');
-        const body = { profile_id: cfg.profile_id };
-        if (cfg.port) body.port = cfg.port;
-        await api('/api/scale/connect', { method: 'POST', body });
-        APP.scaleConnected = true;
+        await connectFromCfg(loadCfg());
       }
     }
   } catch {
@@ -302,7 +366,7 @@ $('formSetup').addEventListener('submit', async (e) => {
   try {
     const r = await api('/api/sessions', {
       method: 'POST',
-      body: { lote: nombre, ...extras, operador: '' },
+      body: { lote: nombre, modo: APP.mode, ...extras, operador: '' },
     });
     APP.session = { id: r?.id ?? r?.session_id ?? null, nombre };
     startWeighing(nombre);
@@ -317,14 +381,15 @@ $('formSetup').addEventListener('submit', async (e) => {
 /* ============================================================
    MÓDULO PESAJE — pesando
    ============================================================ */
+function setGuide(html) { $('stepGuide').innerHTML = html; }
 function setStep(n, ref) {
-  const g = $('stepGuide');
-  if (n === 1) g.innerHTML = '<b>PASO 1</b> · Sube UN cerdo solo — es el cerdo de prueba para calibrar';
-  else g.innerHTML = `<b>PASO 2</b> · Sube los demás como quieras (de a 1, 2, 3…); yo cuento${ref ? ` — cerdo de prueba: ${fmt(ref, 0)} kg` : ''}`;
+  if (n === 1) setGuide('<b>PASO 1</b> · Sube UN cerdo de prueba, solo');
+  else setGuide(`<b>PASO 2</b> · Sube los demás como quieras (de a 1, 2, 3…); yo cuento${ref ? ` — cerdo de prueba: ${fmt(ref, 0)} kg` : ''}`);
 }
 
 function startWeighing(nombre) {
-  APP.snapshot = null; APP.refKg = null;
+  APP.snapshot = null; APP.refKg = null; APP.candKg = null;
+  APP.fase = null; APP.loteAnnounced = false; APP.unitCount = 0;
   APP.weights = []; APP.moves = [];
   hist.length = 0;
   questions.length = 0; activeQuestion = null;
@@ -334,10 +399,48 @@ function startWeighing(nombre) {
   $('nTotal').innerHTML = '0 <em>kg</em>';
   $('nProm').innerHTML = '— <em>kg</em>';
   renderMoves();
-  setStep(1);
+  if (APP.mode === 'unidades') {
+    setGuide('🐷 De a <b>UN</b> cerdo a la vez — yo llevo la cuenta');
+    say('Sube un cerdo a la báscula', 'calm');
+  } else {
+    setStep(1);
+    say('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
+  }
   refreshSimUi();
-  say('Esperando el primer cerdo… súbelo solo, sin compañía', 'calm');
   setSubview('modPesaje', 'pvWeigh');
+}
+
+/* ---------------- FASES (si el backend las manda) ----------------
+   lote:     calibracion → bajar_prueba → lote
+   unidades: unidades
+   Si "fase" nunca llega, la UI usa el flujo clásico (evento referencia). */
+function applyFase(fase, src) {
+  if (!fase) return;
+  APP.faseSupported = true;
+  if (!APP.session || fase === APP.fase) return;
+  // si el backend aún no conoce el modo unidades, no dejamos que las
+  // fases del flujo lote pisen la narración de unidades
+  if (APP.mode === 'unidades' && fase !== 'unidades') return;
+  APP.fase = fase;
+  // durante bajar_prueba el backend aún no confirma ref_kg: usamos el peso
+  // que está sobre la báscula (kg_now) como peso del cerdo de prueba
+  const ref = src?.ref_kg ?? APP.refKg ?? src?.kg_now ?? APP.candKg;
+  if (fase === 'bajar_prueba' && ref != null) APP.candKg = ref;
+  if (fase === 'calibracion') {
+    setStep(1);
+    say('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
+  } else if (fase === 'bajar_prueba') {
+    setGuide(`✓ Cerdo de prueba: <b>${fmt(ref, 0)} kg</b> — ahora bájalo de la báscula`);
+    say(`✓ Cerdo de prueba: ${fmt(ref, 0)} kg — ahora bájalo de la báscula`, 'calm', 4000);
+  } else if (fase === 'lote') {
+    setStep(2, ref);
+    if (!APP.loteAnnounced) {
+      APP.loteAnnounced = true;
+      say('¡Listo! Ya puedes subir TODO el lote 🎉', 'calm', 6000);
+    }
+  } else if (fase === 'unidades') {
+    setGuide('🐷 De a <b>UN</b> cerdo a la vez — yo llevo la cuenta');
+  }
 }
 
 /* ---------------- LA NARRACIÓN ---------------- */
@@ -397,6 +500,7 @@ const hist = [];
 function onReading(m) {
   const kg = Number(m?.kg ?? 0);
   APP.lastReadingAt = Date.now();
+  if (m?.fase) { APP.faseSupported = true; if (APP.session) applyFase(m.fase, m); }
   $('led').innerHTML = `${fmt(kg, kg >= 100 ? 0 : 1)} <small>kg</small>`;
   $('led').classList.add('pulse');
   hist.push(kg); if (hist.length > 300) hist.shift();
@@ -406,8 +510,25 @@ function onReading(m) {
   else if (st === 'sin_senal') ambient('⚠ Perdí la señal de la báscula — revisa el cable', 'alert');
   else if (st === 'estable') {
     if (!APP.session) return;
-    if (APP.refKg == null) ambient('Esperando el primer cerdo… súbelo solo, sin compañía', 'calm');
-    else ambient('Todo tranquilo. Puedes subir más cerdos: de a 1, 2 o 3', '');
+    if (APP.fase === 'bajar_prueba') {
+      ambient(`✓ Cerdo de prueba: ${fmt(APP.refKg ?? APP.candKg, 0)} kg — ahora bájalo de la báscula`, 'calm');
+    } else if (APP.mode === 'unidades') {
+      ambient(APP.unitCount
+        ? 'Yo llevo la cuenta — bájalo y sube el siguiente cuando quieras'
+        : 'Sube un cerdo a la báscula', 'calm');
+    } else if (APP.refKg == null) {
+      // el motor pasa a bajar_prueba sin re-emitir snapshot: si hay un peso
+      // estable considerable durante la calibración, ES el cerdo de prueba
+      if (APP.fase === 'calibracion' && kg >= 40) {
+        APP.candKg = kg;
+        setGuide(`✓ Cerdo de prueba: <b>${fmt(kg, 0)} kg</b> — ahora bájalo de la báscula`);
+        ambient(`✓ Cerdo de prueba: ${fmt(kg, 0)} kg — ahora bájalo de la báscula`, 'calm');
+      } else {
+        ambient('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
+      }
+    } else {
+      ambient('Todo tranquilo. Puedes subir más cerdos: de a 1, 2 o 3', '');
+    }
   }
 }
 
@@ -423,7 +544,11 @@ setInterval(() => {
 function onSnapshot(s) {
   if (!s) return;
   APP.snapshot = s;
-  if (s.ref_kg != null && APP.refKg == null) { APP.refKg = s.ref_kg; setStep(2, s.ref_kg); }
+  if (s.ref_kg != null && APP.refKg == null) {
+    APP.refKg = s.ref_kg;
+    if (!s.fase && APP.mode === 'lote') setStep(2, s.ref_kg); // flujo clásico sin fases
+  }
+  applyFase(s.fase, s);
   $('nCerdos').textContent = s.count ?? 0;
   $('nTotal').innerHTML = `${fmt(s.total_kg ?? 0, 0)} <em>kg</em>`;
   $('nProm').innerHTML = `${s.avg_kg != null ? fmt(s.avg_kg, 0) : '—'} <em>kg</em>`;
@@ -440,9 +565,19 @@ function onEvent(ev) {
   if (tipo === 'referencia') {
     APP.refKg = delta;
     APP.weights.push(delta);
-    setStep(2, delta);
-    say(`Calibrado: el cerdo de prueba pesa ${fmt(delta, 0)} kg. Ya puedes subir los demás`, 'calm', 6000);
-    addMove('up', '✓', `Cerdo de prueba: ${fmt(delta)} kg — quedé calibrado`);
+    if (APP.mode === 'unidades') {
+      APP.unitCount = 1;
+      say(`✓ Cerdo #1: ${fmt(delta, 0)} kg — bájalo y sube el siguiente`, 'calm', 5000);
+      addMove('up', '✓', `Cerdo #1: ${fmt(delta)} kg`);
+    } else if (APP.faseSupported) {
+      // motor con fases: la narración la llevan las fases (bajar_prueba → lote);
+      // la referencia se emite al BAJAR el cerdo de prueba — aquí solo registro
+      addMove('up', '✓', `Cerdo de prueba: ${fmt(delta)} kg — quedé calibrado`);
+    } else {
+      setStep(2, delta);
+      say(`Calibrado: el cerdo de prueba pesa ${fmt(delta, 0)} kg. Ya puedes subir los demás`, 'calm', 6000);
+      addMove('up', '✓', `Cerdo de prueba: ${fmt(delta)} kg — quedé calibrado`);
+    }
     return;
   }
   if (pendiente) {
@@ -453,8 +588,21 @@ function onEvent(ev) {
     return;
   }
   if (tipo === 'bajada' || delta < 0) {
-    say(n > 1 ? `↩ Se bajaron ${n} — ya los desconté` : '↩ Uno se bajó — ya lo desconté', '', 5000);
-    addMove('down', '↩', `${n > 1 ? `Se bajaron ${n}` : 'Se bajó 1'} (${fmt(delta)} kg)`, ev.id);
+    if (APP.mode === 'unidades') {
+      say('Listo — sube el siguiente 🐷', 'calm', 3000);
+      addMove('down', '↩', `Se bajó de la báscula (${fmt(delta)} kg)`);
+    } else {
+      say(n > 1 ? `↩ Se bajaron ${n} — ya los desconté` : '↩ Uno se bajó — ya lo desconté', '', 5000);
+      addMove('down', '↩', `${n > 1 ? `Se bajaron ${n}` : 'Se bajó 1'} (${fmt(delta)} kg)`, ev.id);
+    }
+    return;
+  }
+  if (APP.mode === 'unidades') {
+    APP.unitCount += n;
+    const each = delta / (n || 1);
+    say(`✓ Cerdo #${APP.unitCount}: ${fmt(each, 0)} kg — bájalo y sube el siguiente`, 'calm', 5000);
+    addMove('up', '✓', `Cerdo #${APP.unitCount}: ${fmt(each)} kg`);
+    for (let i = 0; i < n; i++) APP.weights.push(each);
     return;
   }
   if (tipo === 'reingreso') {
@@ -604,7 +752,7 @@ $('bComparar').onclick = (e) => {
 $('bExcel').onclick = () => {
   if (APP.session?.id != null) window.open(`/api/sessions/${APP.session.id}/export.xlsx`, '_blank');
 };
-$('bOtroLote').onclick = () => { APP.session = null; gotoSetup(); };
+$('bOtroLote').onclick = () => { APP.session = null; APP.fase = null; gotoMode(); };
 $('bVerDatos').onclick = () => setModule('datos');
 
 /* ============================================================
@@ -642,6 +790,7 @@ async function loadGlobalStats() {
       `<div class="gstat"><div class="k">${k}</div><div class="v">${escapeHtml(v)}${u ? ` <em>${u}</em>` : ''}</div></div>`).join('');
 
     const pl = Array.isArray(s?.por_lote) ? s.por_lote : [];
+    $('sumPorLote').textContent = `Por lote (${pl.length})`;
     if (!pl.length) {
       lotes.innerHTML = '<div class="empty">Sin datos todavía — termina tu primer pesaje y aquí aparece.</div>';
     } else {
@@ -661,6 +810,7 @@ async function loadGlobalStats() {
     }
   } catch {
     box.innerHTML = '<div class="empty">No pude cargar el resumen — el programa no contesta.</div>';
+    $('sumPorLote').textContent = 'Por lote';
   }
 }
 
@@ -673,10 +823,12 @@ async function loadSessionsTable() {
     sessions = Array.isArray(data) ? data : (data?.sessions ?? []);
   } catch {
     tb.innerHTML = '<tr><td colspan="7" class="empty">No pude cargar los pesajes — el programa no contesta.</td></tr>';
+    $('sumPesajes').textContent = 'Pesajes';
     return;
   }
+  $('sumPesajes').textContent = `Pesajes (${sessions.length})`;
   if (!sessions.length) {
-    tb.innerHTML = '<tr><td colspan="7" class="empty">No hay pesajes con ese filtro. ¡Ve al módulo Pesaje y haz el primero!</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="empty">Aún no hay pesajes aquí. ¡Ve al módulo Pesaje y haz el primero!</td></tr>';
     return;
   }
   tb.innerHTML = '';
@@ -819,62 +971,257 @@ $('bExportDatos').onclick = () => {
 };
 
 /* ============================================================
-   MÓDULO BÁSCULA (técnico)
+   MÓDULO BÁSCULA — WIZARD DE CONEXIÓN (método → marca → dirección)
    ============================================================ */
-let configLoaded = false;
-function initConfig() {
-  if (!configLoaded) {
-    configLoaded = true;
-    loadProfilesInto($('cfgProfile')).catch(() => {});
-    const cfg = loadCfg();
-    if (cfg?.port) $('cfgPort').value = cfg.port;
+const WIZ = {
+  method: null,          // bluetooth | cable | red | sim
+  profileId: null,
+  profileName: null,
+  catalog: null,         // perfiles del backend (cache)
+  catalogOpen: false,
+};
+
+const COMMON_PROFILES = [
+  { id: 'matrix-adr00', name: 'Trumax / Lexus Matrix', d: 'El más usado en granjas porcinas' },
+  { id: 'yaohua-xk3190-a12e', name: 'Yaohua XK3190-A12E', d: 'Indicador muy común en básculas de plataforma' },
+  { id: 'gmt-tuxon-s-ascii', name: 'GMT Tuxon S', d: 'Salida continua estándar' },
+];
+
+const METHOD_LABEL = {
+  bluetooth: '📶 Bluetooth',
+  cable: '🔌 Cable',
+  red: '🌐 Red',
+  sim: '🎛 Simulada',
+};
+
+function initWizard() {
+  // arranca siempre en el paso 1, con lo guardado preseleccionado
+  const cfg = loadCfg();
+  if (cfg?.method && !WIZ.method) {
+    WIZ.method = cfg.method;
+    WIZ.profileId = cfg.profile_id ?? null;
+    WIZ.profileName = cfg.name ?? null;
   }
   $('testResult').className = 'test-result';
+  wizGo(1);
 }
 
-async function loadProfilesInto(sel) {
+function wizGo(step) {
+  for (const [i, id] of [[1, 'wizPane1'], [2, 'wizPane2'], [3, 'wizPane3']]) {
+    $(id).classList.toggle('active', i === step);
+  }
+  for (const i of [1, 2, 3]) {
+    const dot = $('wsDot' + i);
+    dot.classList.toggle('active', i === step);
+    dot.classList.toggle('done', i < step);
+  }
+  $('testResult').className = 'test-result';
+  if (step === 2) renderCommons();
+  if (step === 3) renderAddr();
+  window.scrollTo({ top: 0 });
+}
+
+for (const b of document.querySelectorAll('#wizPane1 [data-method]')) {
+  b.addEventListener('click', () => {
+    WIZ.method = b.dataset.method;
+    if (WIZ.method === 'sim') {
+      WIZ.profileId = 'sim';
+      WIZ.profileName = 'Báscula simulada';
+      wizGo(3);
+    } else {
+      if (WIZ.profileId === 'sim') { WIZ.profileId = null; WIZ.profileName = null; }
+      wizGo(2);
+    }
+  });
+}
+$('bWizBack2').onclick = () => wizGo(1);
+$('bWizBack3').onclick = () => wizGo(WIZ.method === 'sim' ? 1 : 2);
+
+/* ---- paso 2: marca y modelo ---- */
+function renderCommons() {
+  const box = $('wizCommons');
+  box.innerHTML = '';
+  for (const p of COMMON_PROFILES) {
+    const b = document.createElement('button');
+    b.className = 'commoncard' + (WIZ.profileId === p.id ? ' sel' : '');
+    b.innerHTML = `<span class="c-t">${escapeHtml(p.name)}</span><span class="c-d">${escapeHtml(p.d)}</span>`;
+    b.onclick = () => { selectProfile(p.id, p.name); };
+    box.appendChild(b);
+  }
+}
+
+function selectProfile(id, name) {
+  WIZ.profileId = id;
+  WIZ.profileName = name;
+  wizGo(3);
+}
+
+$('bWizAll').onclick = async () => {
+  WIZ.catalogOpen = !WIZ.catalogOpen;
+  $('wizCatalog').hidden = !WIZ.catalogOpen;
+  $('bWizAll').textContent = WIZ.catalogOpen ? 'Ocultar el catálogo ▴' : 'Ver todas las marcas ▾';
+  if (WIZ.catalogOpen && !WIZ.catalog) await loadCatalog();
+};
+
+async function loadCatalog() {
+  const box = $('wizCatalog');
+  box.innerHTML = '<div class="empty">Cargando catálogo…</div>';
   try {
     const data = await api('/api/profiles');
-    const profiles = Array.isArray(data) ? data : (data?.profiles ?? []);
-    sel.innerHTML = '<option value="">— Elige la báscula —</option>';
-    const byBrand = {};
-    for (const p of profiles) (byBrand[p?.brand ?? 'Otras'] ??= []).push(p);
-    for (const brand of Object.keys(byBrand).sort()) {
-      const og = document.createElement('optgroup');
-      og.label = brand;
-      for (const p of byBrand[brand]) {
-        const o = document.createElement('option');
-        o.value = p?.id ?? '';
-        o.textContent = p?.name ?? p?.id ?? '?';
-        og.appendChild(o);
-      }
-      sel.appendChild(og);
-    }
-    const cfg = loadCfg();
-    if (cfg?.profile_id) sel.value = cfg.profile_id;
+    WIZ.catalog = Array.isArray(data) ? data : (data?.profiles ?? []);
   } catch {
-    sel.innerHTML = '<option value="">(no pude cargar el catálogo — ¿está corriendo el programa?)</option>';
+    box.innerHTML = '<div class="empty">No pude cargar el catálogo — ¿está corriendo el programa?</div>';
+    return;
   }
+  const byBrand = {};
+  for (const p of WIZ.catalog) (byBrand[p?.brand ?? 'Otras'] ??= []).push(p);
+  box.innerHTML = '';
+  for (const brand of Object.keys(byBrand).sort()) {
+    const g = document.createElement('div');
+    g.className = 'cat-group';
+    g.innerHTML = `<div class="cat-brand">${escapeHtml(brand)}</div>`;
+    for (const p of byBrand[brand]) {
+      const b = document.createElement('button');
+      b.className = 'cat-item' + (WIZ.profileId === p?.id ? ' sel' : '');
+      b.textContent = p?.name ?? p?.id ?? '?';
+      b.onclick = () => selectProfile(p?.id ?? '', p?.name ?? p?.id ?? '?');
+      g.appendChild(b);
+    }
+    box.appendChild(g);
+  }
+}
+
+/* ---- paso 3: dirección según el método ---- */
+function renderAddr() {
+  const box = $('wizAddr');
+  const cfg = loadCfg();
+  const same = cfg?.method === WIZ.method && cfg?.profile_id === WIZ.profileId;
+  $('wizSel').textContent = WIZ.method === 'sim'
+    ? '🎛 Báscula simulada — para practicar'
+    : `${METHOD_LABEL[WIZ.method] ?? ''} · ${WIZ.profileName ?? 'báscula'}`;
+
+  if (WIZ.method === 'sim') {
+    $('wizQ3').textContent = 'Nada más que configurar';
+    box.innerHTML = '<p class="wizhelp">La báscula simulada corre dentro del programa: sirve para practicar y probar todo el sistema. Los pesajes quedan guardados de verdad.</p>';
+    return;
+  }
+  if (WIZ.method === 'cable') {
+    $('wizQ3').textContent = '¿En qué puerto está el cable?';
+    box.innerHTML = `
+      <label class="addrlbl">Puerto
+        <input id="wizPort" placeholder="Ej: COM3 o /dev/ttyUSB0" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
+      </label>
+      <details class="wizhelp-more">
+        <summary>¿Cómo encuentro el puerto?</summary>
+        <p>En <b>Windows</b>: clic derecho en Inicio → Administrador de dispositivos → "Puertos (COM y LPT)". Ahí aparece algo como <b>COM3</b>.<br>
+        En <b>Linux</b>: suele ser <b>/dev/ttyUSB0</b>.<br>
+        Si desconectas y conectas el cable, el que aparece y desaparece es el tuyo.</p>
+      </details>`;
+    return;
+  }
+  if (WIZ.method === 'red') {
+    $('wizQ3').textContent = '¿Cuál es la dirección del conversor?';
+    const val = same && cfg?.host ? `${cfg.host}${cfg.tcp_port ? ':' + cfg.tcp_port : ''}` : '';
+    box.innerHTML = `
+      <label class="addrlbl">Dirección IP y puerto
+        <input id="wizHost" inputmode="decimal" placeholder="Ej: 192.168.0.50:8899" autocomplete="off" value="${escapeHtml(val)}">
+      </label>
+      <p class="wizhelp">La dirección viene en la configuración del conversor ethernet/wifi (o pregúntale a quien lo instaló). Casi siempre es algo como 192.168.x.x:8899.</p>`;
+    return;
+  }
+  // bluetooth
+  $('wizQ3').textContent = '¿Dónde está el adaptador BLU2?';
+  if (IS_MOBILE) {
+    box.innerHTML = `
+      <div class="btlist" id="btList"><div class="empty">Buscando dispositivos emparejados…</div></div>
+      <label class="addrlbl">Dirección del adaptador
+        <input id="wizPort" placeholder="Ej: 00:1D:43:xx:xx:xx" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
+      </label>
+      <p class="wizhelp">📱 Primero <b>empareja el BLU2</b> en los ajustes Bluetooth del teléfono (PIN <b>1234</b>). Después vuelve aquí y elígelo de la lista.</p>`;
+    fillBtDevices();
+  } else {
+    box.innerHTML = `
+      <p class="wizhelp">💻 En un computador, el BLU2 emparejado aparece como un <b>puerto COM</b> más (Bluetooth → puerto serial). Empareja primero el BLU2 en los ajustes Bluetooth (PIN <b>1234</b>) y luego escribe el puerto que le asignó Windows.</p>
+      <label class="addrlbl">Puerto
+        <input id="wizPort" placeholder="Ej: COM5" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
+      </label>`;
+  }
+}
+
+async function fillBtDevices() {
+  const list = $('btList');
+  if (!list) return;
+  let devices = null;
+  try {
+    const d = await api('/api/bt/devices');
+    const arr = Array.isArray(d) ? d : (d?.devices ?? null);
+    devices = Array.isArray(arr) ? arr : null;
+  } catch { devices = null; }
+  if (!list.isConnected) return;                 // cambió de paso mientras cargaba
+  if (!devices || !devices.length) { list.innerHTML = ''; return; }  // sin soporte → queda el campo manual
+  list.innerHTML = '<div class="bt-title">Dispositivos emparejados:</div>';
+  for (const dev of devices) {
+    const name = dev?.name ?? dev?.nombre ?? 'Dispositivo';
+    const addr = dev?.address ?? dev?.addr ?? dev?.mac ?? dev?.port ?? '';
+    const b = document.createElement('button');
+    b.className = 'bt-item';
+    b.innerHTML = `<span class="bt-n">${escapeHtml(name)}</span><span class="bt-a mono">${escapeHtml(addr)}</span>`;
+    b.onclick = () => {
+      const inp = $('wizPort');
+      if (inp) inp.value = addr;
+      for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
+    };
+    list.appendChild(b);
+  }
+}
+
+/* ---- probar + guardar ---- */
+function wizAddress() {
+  // → {ok, body?, cfgExtra?, msg?}
+  if (WIZ.method === 'sim') return { ok: true, body: null, cfgExtra: {} };
+  if (!WIZ.profileId) return { ok: false, msg: 'Primero elige la marca y el modelo de la báscula.' };
+  if (WIZ.method === 'red') {
+    const raw = ($('wizHost')?.value ?? '').trim();
+    if (!raw) return { ok: false, msg: 'Escribe la dirección IP del conversor (Ej: 192.168.0.50:8899).' };
+    const m = raw.match(/^([^:\s]+)(?::(\d+))?$/);
+    if (!m) return { ok: false, msg: 'La dirección no se ve bien — usa el formato 192.168.0.50:8899.' };
+    const body = { profile_id: WIZ.profileId, host: m[1] };
+    const cfgExtra = { host: m[1] };
+    if (m[2]) { body.tcp_port = parseInt(m[2], 10); cfgExtra.tcp_port = body.tcp_port; }
+    return { ok: true, body, cfgExtra };
+  }
+  const port = ($('wizPort')?.value ?? '').trim();
+  if (!port) {
+    return {
+      ok: false,
+      msg: WIZ.method === 'bluetooth'
+        ? 'Falta la dirección: elige el BLU2 de la lista o escribe el puerto.'
+        : 'Escribe el puerto donde está el cable (Ej: COM3).',
+    };
+  }
+  return { ok: true, body: { profile_id: WIZ.profileId, port }, cfgExtra: { port } };
+}
+
+function wizResult(cls, text) {
+  const res = $('testResult');
+  res.className = 'test-result show' + (cls ? ' ' + cls : '');
+  res.textContent = text;
 }
 
 let lastKg = null;
 $('bProbar').onclick = async () => {
-  const sel = $('cfgProfile');
-  const res = $('testResult');
-  if (!sel.value) {
-    res.className = 'test-result show fail';
-    res.textContent = 'Primero elige la marca y el modelo de la báscula.';
-    return;
-  }
+  const a = wizAddress();
+  if (!a.ok) { wizResult('fail', a.msg); return; }
   $('bProbar').disabled = true;
-  res.className = 'test-result show';
-  res.textContent = 'Probando…';
+  wizResult('', 'Probando…');
   const t0 = Date.now();
   try {
-    const body = { profile_id: sel.value };
-    const port = $('cfgPort').value.trim();
-    if (port) body.port = port;
-    await api('/api/scale/connect', { method: 'POST', body });
+    if (WIZ.method === 'sim') {
+      await startSim();
+      wizResult('ok', 'Báscula simulada activa ✓ — guarda y ve al módulo Pesaje.');
+      return;
+    }
+    await api('/api/scale/connect', { method: 'POST', body: a.body });
     const kg = await new Promise((resolve) => {
       const iv = setInterval(() => {
         if (APP.lastReadingAt > t0) { clearInterval(iv); resolve(lastKg); }
@@ -882,39 +1229,34 @@ $('bProbar').onclick = async () => {
       }, 200);
     });
     if (kg != null) {
-      res.className = 'test-result show ok';
-      res.textContent = `La báscula responde: ${fmt(kg)} kg ✓`;
+      wizResult('ok', `La báscula responde: ${fmt(kg)} kg ✓`);
     } else {
       const st = await api('/api/scale/status').catch(() => null);
       if (st?.connected) {
-        res.className = 'test-result show ok';
-        res.textContent = 'Conectada ✓ — aún no recibo peso; revisa que la báscula esté encendida.';
+        wizResult('ok', 'Conectada ✓ — aún no recibo peso; revisa que la báscula esté encendida.');
       } else {
-        res.className = 'test-result show fail';
-        res.textContent = 'La báscula no responde. Revisa el cable, el puerto y que esté encendida.';
+        wizResult('fail', 'La báscula no responde. Revisa la conexión, la dirección y que esté encendida.');
       }
     }
   } catch {
-    res.className = 'test-result show fail';
-    res.textContent = 'No pude probar: el programa de la báscula no contesta.';
+    wizResult('fail', 'No pude probar la conexión. Revisa la dirección y que el programa esté corriendo.');
   } finally {
     $('bProbar').disabled = false;
   }
 };
 
 $('bGuardarCfg').onclick = () => {
-  const sel = $('cfgProfile');
-  const res = $('testResult');
-  if (!sel.value) {
-    res.className = 'test-result show fail';
-    res.textContent = 'Elige una báscula antes de guardar.';
-    return;
-  }
-  const name = sel.selectedOptions?.[0]?.textContent ?? sel.value;
-  saveCfg({ profile_id: sel.value, port: $('cfgPort').value.trim(), name });
-  APP.simActive = false;
-  res.className = 'test-result show ok';
-  res.textContent = `Guardado: ${name} ✓`;
+  const a = wizAddress();
+  if (!a.ok) { wizResult('fail', a.msg); return; }
+  const cfg = {
+    method: WIZ.method,
+    profile_id: WIZ.method === 'sim' ? 'sim' : WIZ.profileId,
+    name: WIZ.method === 'sim' ? 'Báscula simulada' : (WIZ.profileName ?? WIZ.profileId),
+    ...(a.cfgExtra ?? {}),
+  };
+  saveCfg(cfg);
+  if (WIZ.method !== 'sim') APP.simActive = false;
+  wizResult('ok', `Guardado: ${cfg.name} ✓ — ya puedes ir al módulo Pesaje.`);
 };
 
 /* ============================================================
@@ -990,4 +1332,11 @@ function drawSpark() {
 
   refreshPesajeHome().catch(() => {});
   drawSpark();
+
+  // onboarding: solo la primera vez que se abre la app
+  const onboarded = (() => { try { return localStorage.getItem('porcipeso_onboard') === '1'; } catch { return true; } })();
+  if (!onboarded) {
+    obShow(0);
+    try { $('dlgOnboard').showModal(); } catch { /* sin dialog */ }
+  }
 })();

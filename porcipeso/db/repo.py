@@ -31,13 +31,23 @@ def _now_iso() -> str:
 
 
 def init_db(path: str | Path) -> None:
-    """Crea (o migra en vacío) el esquema. Idempotente."""
+    """Crea (o migra en vacío) el esquema. Idempotente.
+
+    Migración v2: DBs creadas antes del motor v2 no tienen la columna
+    ``sesiones.modo`` (el CREATE usa IF NOT EXISTS y no la agrega); se
+    detecta con PRAGMA table_info y se agrega con ALTER TABLE.
+    """
     path = Path(path)
     if path.parent != Path(""):
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     try:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sesiones)")}
+        if "modo" not in cols:
+            conn.execute(
+                "ALTER TABLE sesiones ADD COLUMN modo TEXT NOT NULL DEFAULT 'lote'"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -93,6 +103,7 @@ class Repo:
 
     def create_session(self, data: dict[str, Any]) -> int:
         cols = {k: data.get(k) for k in SESSION_FIELDS}
+        cols["modo"] = data.get("modo") or "lote"
         cols["uuid"] = data.get("uuid") or str(uuid_mod.uuid4())
         cols["hora_entrada"] = data.get("hora_entrada") or _now_iso()
         cols["estado"] = "abierta"
@@ -365,19 +376,36 @@ class Repo:
         }
 
     def stats(self, session_id: int) -> dict[str, Any]:
-        """Estadística de la sesión (SPEC §6, por sesión).
+        """Estadística de la sesión (SPEC §6 + docs/ESTADISTICA.md).
 
         Totales sobre TODOS los eventos (con signo: las bajadas
-        descuentan). La dispersión (desviación estándar, CV%,
-        uniformidad ±10 %) se calcula sobre los deltas de subidas de
-        exactamente 1 animal — los únicos pesos individuales conocidos.
+        descuentan). La dispersión (desviación estándar MUESTRAL n-1,
+        varianza muestral, mediana, CV%, uniformidad ±10 %) se calcula
+        sobre los pesos individuales conocidos:
+
+        - modo "unidades": TODOS los eventos son SUBIDA n=1 con el peso
+          exacto de cada animal → la muestra es COMPLETA (censo del
+          lote pesado; máxima precisión).
+        - modo "lote": la muestra son los deltas de subidas de
+          exactamente 1 animal (incluida la REFERENCIA del cerdo de
+          prueba) → es una ESTIMACIÓN (los animales que subieron en
+          grupo no aportan pesos individuales).
         """
+        session = self.get_session(session_id)
+        modo = (session or {}).get("modo") or "lote"
         events = self.list_events(session_id)
         total_kg = 0.0
         total_animales = 0
         singles: list[float] = []
         for ev in events:
             if ev["tipo"] == "ajuste" and ev["delta_kg"] == 0:
+                continue
+            if ev["tipo"] == "referencia":
+                # Motor v2: la REFERENCIA es el cerdo de prueba que se
+                # BAJÓ al terminar la calibración — no integra los
+                # totales del lote (count arranca en 0), pero su peso SÍ
+                # es una muestra individual conocida.
+                singles.append(float(ev["delta_kg"]))
                 continue
             n = ev["animales_confirmados"]
             if n is None:
@@ -391,10 +419,20 @@ class Repo:
 
         promedio = (total_kg / total_animales) if total_animales else None
 
-        desviacion_std = cv_pct = uniformidad_pct = None
+        n_muestras = len(singles)
+        # Desviación estándar / varianza MUESTRALES (n-1, Bessel):
+        # 0 si n < 2 (con una sola muestra no hay dispersión medible).
+        if n_muestras >= 2:
+            desviacion_std = statistics.stdev(singles)
+            varianza = statistics.variance(singles)
+        else:
+            desviacion_std = 0.0
+            varianza = 0.0
+        mediana = statistics.median(singles) if singles else None
+
+        cv_pct = uniformidad_pct = None
         if singles:
             media_singles = statistics.fmean(singles)
-            desviacion_std = statistics.pstdev(singles)
             if media_singles:
                 cv_pct = desviacion_std / media_singles * 100.0
                 dentro = [
@@ -408,10 +446,18 @@ class Repo:
             "total_animales": total_animales,
             "promedio": round(promedio, 3) if promedio is not None else None,
             "n_eventos": len(events),
-            "n_muestras_individuales": len(singles),
+            "n_muestras": n_muestras,
+            # alias legado (pre-v2); mismo valor que n_muestras
+            "n_muestras_individuales": n_muestras,
             "min_delta": min(singles) if singles else None,
             "max_delta": max(singles) if singles else None,
-            "desviacion_std": round(desviacion_std, 3) if desviacion_std is not None else None,
+            "mediana": round(mediana, 3) if mediana is not None else None,
+            "varianza": round(varianza, 3),
+            "desviacion_std": round(desviacion_std, 3),
             "cv_pct": round(cv_pct, 2) if cv_pct is not None else None,
             "uniformidad_pct": round(uniformidad_pct, 2) if uniformidad_pct is not None else None,
+            "modo": modo,
+            # completa = cada animal pesado individualmente (unidades);
+            # estimada = solo las subidas de 1 animal aportan muestra (lote)
+            "tipo_muestra": "completa" if modo == "unidades" else "estimada",
         }

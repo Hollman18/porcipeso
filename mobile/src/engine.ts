@@ -1,10 +1,25 @@
 /**
- * Motor de pesaje PorciPeso — PORT FIEL de porcipeso/engine/engine.py.
+ * Motor de pesaje PorciPeso v2 — PORT FIEL de porcipeso/engine/engine.py.
  *
  * Máquina de estados pura y determinista sobre el stream de lecturas:
  * sin timers, sin I/O. El tiempo viene de reading.ts_ms; el reloj de
  * pared (inyectable vía `nowMs`) solo se consulta en snapshot() para el
  * watchdog SIN_SENAL — igual que time.time() en el original.
+ *
+ * MODO "lote" (v2 — calibración con cerdo de prueba que SE BAJA):
+ * openSession(id, "lote") arranca en fase "calibracion"; el candidato a
+ * referencia es el MÁXIMO nivel estable sostenido (peak hold sobre
+ * niveles ESTABLES). Con candidato → fase "bajar_prueba"; si montan otro
+ * sin bajar el primero (subida estable ≥ min_delta) vuelve a
+ * "calibracion" con el nuevo máximo. Al vaciar (< min_delta o < 20 % del
+ * candidato) se emite UN evento REFERENCIA (delta=ref, n=1) SIN sumar a
+ * count/total (count arranca 0) y la fase pasa a "lote" (comportamiento
+ * clásico: n = round(delta/avg), ambiguos, bidireccional).
+ *
+ * MODO "unidades" (v2 — pesaje uno a uno): fase "unidades" siempre.
+ * Cada nivel estable ≥ min_delta = SUBIDA n=1 con el peso del animal;
+ * retorno a vacío SIN evento; otro animal sin vaciar = SUBIDA con la
+ * diferencia; sin ambiguos.
  *
  * PARIDAD: la aritmética replica a Python operación por operación
  * (misma media de ventana sum/len en el mismo orden, round() banquero
@@ -18,6 +33,9 @@ import {
   EngineSnapshot,
   EngineStateT,
   EventTypeT,
+  FaseT,
+  ModoT,
+  MODOS,
   pyRound,
   Reading,
   WeighEvent,
@@ -25,6 +43,16 @@ import {
 
 export type OnEvent = (ev: WeighEvent) => void;
 export type OnState = (state: EngineStateT) => void;
+
+// Fases del pesaje (EngineSnapshot.fase) — espejo de engine.py
+export const FASE_CALIBRACION: FaseT = "calibracion";
+export const FASE_BAJAR_PRUEBA: FaseT = "bajar_prueba";
+export const FASE_LOTE: FaseT = "lote";
+export const FASE_UNIDADES: FaseT = "unidades";
+
+/** Fracción del candidato bajo la cual la plataforma se considera vacía
+ *  al terminar la calibración (además del umbral absoluto min_delta_kg). */
+export const EMPTY_FRACTION = 0.2;
 
 export class WeighingEngine {
   readonly config: EngineConfig;
@@ -43,6 +71,8 @@ export class WeighingEngine {
   // sesión
   private sessionId: number | null = null;
   private nextEventId = 1;
+  private modo: ModoT = "lote";
+  private fase: FaseT = FASE_LOTE;
   private refKg: number | null = null;
   private avgKg: number | null = null;
   private count = 0;
@@ -51,6 +81,12 @@ export class WeighingEngine {
   private pending = new Map<number, WeighEvent>();
   private unmatchedBajadas: number[] = []; // ids de BAJADA sin reingreso
   private links = new Map<number, number>(); // reingreso_id -> bajada_id
+  // calibración (modo lote)
+  private calibBase: number | null = null; // nivel estable inicial (vacío)
+  private calibCandidate: number | null = null; // peak hold del cerdo de prueba
+  // modo unidades
+  private unitBase: number | null = null; // nivel estable de plataforma vacía
+  private unitLevel: number | null = null; // nivel registrado del animal arriba
 
   constructor(
     config: EngineConfig = DEFAULT_ENGINE_CONFIG,
@@ -101,17 +137,20 @@ export class WeighingEngine {
     }
   }
 
-  openSession(sessionId: number): void {
+  openSession(sessionId: number, modo: string = "lote"): void {
+    if (!(MODOS as readonly string[]).includes(modo)) {
+      throw new Error(`modo desconocido: '${modo}' (esperado: ('lote', 'unidades'))`);
+    }
     this.sessionId = sessionId;
     this.resetSessionVars();
-    if (this.windowStable()) {
-      // la báscula ya está estable: ese nivel es la base de la sesión
-      this.baseline = this.windowMean();
-      this.setState("estable");
-    } else {
-      this.movementStartTs = this.lastTsMs;
-      this.setState("movimiento");
-    }
+    this.modo = modo as ModoT;
+    this.fase = modo === "lote" ? FASE_CALIBRACION : FASE_UNIDADES;
+    // La base de la sesión se fija SOLO con lecturas frescas: heredar la
+    // ventana de la conexión/sesión anterior daría una base falsa y la
+    // sesión quedaría muda (paridad con engine.py).
+    this.window.length = 0;
+    this.movementStartTs = this.lastTsMs;
+    this.setState("movimiento");
   }
 
   confirm(eventId: number, n: number): WeighEvent | null {
@@ -141,6 +180,7 @@ export class WeighingEngine {
       count: this.count,
       total_kg: this.totalKg,
       pending: this.pending.size,
+      fase: this.fase,
     };
   }
 
@@ -155,6 +195,8 @@ export class WeighingEngine {
   // ------------------------------------------------------------ interno
 
   private resetSessionVars(): void {
+    this.modo = "lote";
+    this.fase = FASE_LOTE; // default del contrato; openSession la fija
     this.refKg = null;
     this.avgKg = null;
     this.count = 0;
@@ -163,6 +205,10 @@ export class WeighingEngine {
     this.pending = new Map();
     this.unmatchedBajadas = [];
     this.links = new Map();
+    this.calibBase = null;
+    this.calibCandidate = null;
+    this.unitBase = null;
+    this.unitLevel = null;
   }
 
   private windowStable(): boolean {
@@ -189,35 +235,81 @@ export class WeighingEngine {
     }
   }
 
+  // --------------------------------------------------- despacho por fase
+
   /** Procesa una transición movimiento→estable con sesión abierta. */
   private handleStableLevel(level: number, tsMs: number, estabMs: number): void {
-    if (this.baseline === null) {
-      // primer nivel estable de la sesión: base, sin evento
-      this.baseline = level;
-      return;
-    }
-    const delta = level - this.baseline;
-    if (Math.abs(delta) < this.config.min_delta_kg) {
-      return; // vibración / deriva: no es escalón (baseline NO avanza)
-    }
-    if (this.refKg === null) {
-      this.setReference(level, delta, tsMs, estabMs);
+    if (this.modo === "unidades") {
+      this.stableUnidades(level, tsMs, estabMs);
+    } else if (this.fase === FASE_CALIBRACION || this.fase === FASE_BAJAR_PRUEBA) {
+      this.stableCalibracion(level, tsMs, estabMs);
     } else {
-      this.step(level, delta, tsMs, estabMs);
+      this.stableLote(level, tsMs, estabMs);
     }
   }
 
-  private setReference(level: number, delta: number, tsMs: number, estabMs: number): void {
-    const pesoAntes = this.baseline as number;
-    // el nivel físico cambió: la base avanza aunque no haya referencia
-    this.baseline = level;
-    if (delta <= 0) return; // la referencia debe ser positiva; se ignora
-    this.refKg = delta;
-    this.avgKg = delta;
-    this.count = 1;
-    this.totalKg = delta;
-    const ev = this.newEvent(tsMs, pesoAntes, level, delta, 1, "referencia", estabMs);
-    this.onEvent(ev);
+  // ------------------------------------------------- calibración (lote)
+
+  /** Peak hold del cerdo de prueba; termina cuando vuelve a vacío. */
+  private stableCalibracion(level: number, tsMs: number, estabMs: number): void {
+    const cfg = this.config;
+    if (this.calibBase === null) {
+      // primer nivel estable de la sesión: base (vacío), sin evento
+      this.calibBase = level;
+      return;
+    }
+    const rel = level - this.calibBase;
+    const cand = this.calibCandidate;
+
+    if (cand !== null && (rel < cfg.min_delta_kg || rel < EMPTY_FRACTION * cand)) {
+      // casi vacío: el cerdo de prueba se bajó → calibración lista.
+      // Su bajada NO es evento BAJADA; se emite UN evento REFERENCIA
+      // semánticamente "el cerdo de prueba pesó cand".
+      this.refKg = cand;
+      this.avgKg = cand;
+      this.count = 0;
+      this.totalKg = 0.0;
+      this.baseline = level; // base del lote = nivel vacío actual
+      this.calibCandidate = null;
+      this.fase = FASE_LOTE;
+      const ev = this.newEvent(tsMs, 0.0, cand, cand, 1, "referencia", estabMs);
+      this.onEvent(ev);
+      return;
+    }
+
+    if (rel < cfg.min_delta_kg) {
+      return; // sigue vacío (o vibración): aún no sube el de prueba
+    }
+
+    if (cand === null) {
+      // subió el cerdo de prueba: primer candidato
+      this.calibCandidate = rel;
+      this.fase = FASE_BAJAR_PRUEBA;
+    } else if (rel > cand) {
+      // peak hold: solo sube el candidato, nunca baja
+      this.calibCandidate = rel;
+      if (rel - cand >= cfg.min_delta_kg) {
+        // montaron otro sin bajar el primero (A4): se recalibra
+        // con el nuevo máximo — tolerante, sin romperse
+        this.fase = FASE_CALIBRACION;
+      } else {
+        // cerdo inquieto acomodándose: sigue esperando la bajada
+        this.fase = FASE_BAJAR_PRUEBA;
+      }
+    }
+    // rel <= cand (se acomodó más liviano / bajada parcial): peak hold,
+    // ni evento ni cambio de fase
+  }
+
+  // -------------------------------------------------------- fase "lote"
+
+  private stableLote(level: number, tsMs: number, estabMs: number): void {
+    // baseline y avgKg quedaron fijados al terminar la calibración
+    const delta = level - (this.baseline as number);
+    if (Math.abs(delta) < this.config.min_delta_kg) {
+      return; // vibración / deriva: no es escalón (baseline NO avanza)
+    }
+    this.step(level, delta, tsMs, estabMs);
   }
 
   private step(level: number, delta: number, tsMs: number, estabMs: number): void {
@@ -274,6 +366,59 @@ export class WeighingEngine {
       this.avgKg = this.totalKg / this.count;
     }
   }
+
+  // ---------------------------------------------------- modo "unidades"
+
+  /** Pesaje uno a uno: cada nivel estable ≥ min_delta = un animal. */
+  private stableUnidades(level: number, tsMs: number, estabMs: number): void {
+    const cfg = this.config;
+    if (this.unitBase === null) {
+      // primer nivel estable de la sesión: plataforma vacía (base)
+      this.unitBase = level;
+      return;
+    }
+    const rel = level - this.unitBase;
+
+    if (this.unitLevel === null) {
+      // plataforma vacía: ¿subió un animal?
+      if (rel >= cfg.min_delta_kg) {
+        this.unitLevel = level;
+        this.emitUnidad(this.unitBase, level, rel, tsMs, estabMs);
+      }
+      return;
+    }
+
+    // hay un animal arriba
+    if (rel < cfg.min_delta_kg) {
+      // volvió a vacío: el animal salió — NO es evento
+      this.unitLevel = null;
+      return;
+    }
+    const extra = level - this.unitLevel;
+    if (extra >= cfg.min_delta_kg) {
+      // se montó otro encima sin pasar por vacío: cuenta como otro
+      const pesoAntes = this.unitLevel;
+      this.unitLevel = level;
+      this.emitUnidad(pesoAntes, level, extra, tsMs, estabMs);
+    }
+    // bajada parcial extraña (o ajuste menor): se ignora hasta vaciar
+  }
+
+  private emitUnidad(
+    pesoAntes: number,
+    level: number,
+    peso: number,
+    tsMs: number,
+    estabMs: number,
+  ): void {
+    this.count += 1;
+    this.totalKg += peso;
+    this.avgKg = this.totalKg / this.count;
+    const ev = this.newEvent(tsMs, pesoAntes, level, peso, 1, "subida", estabMs);
+    this.onEvent(ev);
+  }
+
+  // ------------------------------------------------------------- eventos
 
   private newEvent(
     tsMs: number,
