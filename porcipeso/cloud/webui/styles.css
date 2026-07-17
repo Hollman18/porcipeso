@@ -8,6 +8,7 @@
   --amber:#B97E1E; --amber-soft:#F5EAD5; --red:#C03A22;
   --panel:#202722; --panel-edge:#39443C;
   --grid:#E4E9E4; --chart-1:#178A50;
+  --eleia-green:#76B82A; /* co-branding "una solución ELEIA" */
 }
 @media (prefers-color-scheme: dark){
   :root{
@@ -16,6 +17,7 @@
     --amber:#BA8323; --amber-soft:#2E2617; --red:#E06248;
     --panel:#0D1210; --panel-edge:#242E27;
     --grid:#242D26; --chart-1:#2E9D68;
+    --eleia-green:#8FCC44;
   }
 }
 
@@ -239,3 +241,10 @@ dialog::backdrop{background:rgba(10,14,11,.6)}
 
 img,canvas,svg,video{max-width:100%}
 footer{font-size:13px;color:var(--muted);text-align:center;margin-top:auto}
+
+/* ------------- co-branding "una solución ELEIA" ------------- */
+.eleia-line{color:var(--muted)}
+.eleia-line b{display:inline;color:var(--eleia-green);font-weight:700;
+  font-size:inherit;font-family:inherit;letter-spacing:.03em}
+.login-logo .eleia-line{display:block;font-size:12px;margin-top:2px}
+.sidefoot .eleia-line{display:block;font-size:11.5px}

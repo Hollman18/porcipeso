@@ -1,0 +1,4 @@
+1
+00:00:00,100 --> 00:00:08,750
+Los sistemas de pesaje inteligentes tradicionales son indicadores importados: costosos, con meses de espera... y te amarran a una sola marca de báscula.
+

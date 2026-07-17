@@ -1,0 +1,20 @@
+1
+00:00:00,100 --> 00:00:03,025
+PorciPeso es distinto: es software.
+
+2
+00:00:02,975 --> 00:00:08,000
+Se conecta a cualquier indicador con puerto serial — del más económico al más costoso.
+
+3
+00:00:08,000 --> 00:00:10,725
+Veinticinco marcas ya integradas.
+
+4
+00:00:10,725 --> 00:00:14,862
+Usa la báscula que ya tienes, sin esperar importaciones.
+
+5
+00:00:14,862 --> 00:00:17,612
+Más barato, y crece contigo.
+

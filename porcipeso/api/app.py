@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from porcipeso.api import cloudauth
+from porcipeso.api.reports import router as reports_router
 from porcipeso.api.simlive import SimLiveScale
 from porcipeso.api.syncworker import SyncWorker
 from porcipeso.api.updatecheck import router as update_router
@@ -644,6 +645,7 @@ def create_app(
             hub.unregister(ws)
 
     app.include_router(update_router)  # GET /api/update/status
+    app.include_router(reports_router)  # informes PDF con marca ELEIA
 
     # UI estática del operador (Task 4); puede no existir aún.
     if STATIC_DIR.is_dir():
@@ -690,12 +692,40 @@ STATS_ROWS = [
 
 def build_xlsx(session: dict[str, Any], events: list[dict[str, Any]],
                stats: dict[str, Any]) -> bytes:
-    """Construye el .xlsx (hoja Resumen + hoja Eventos). Retorna bytes."""
+    """Construye el .xlsx (hoja Resumen + hoja Eventos). Retorna bytes.
+
+    Lleva el encabezado de marca "PorciPeso · una solución ELEIA"
+    (constantes de porcipeso.branding — nada de strings sueltos).
+    """
     from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+
+    from porcipeso import branding
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Resumen"
+
+    # --------- encabezado de marca (verde Eleia + tipografía blanca) ---------
+    eleia_fill = PatternFill("solid", fgColor=branding.ELEIA_GREEN.lstrip("#"))
+    ws.append([f"{branding.PRODUCT_NAME} — Informe de pesaje"])
+    ws.append([f"una solución {branding.COMPANY} · {branding.TAGLINE_COMPANY}"])
+    for row, size in ((1, 14), (2, 10)):
+        for col in (1, 2):
+            cell = ws.cell(row=row, column=col)
+            cell.fill = eleia_fill
+            cell.font = Font(bold=True, color="FFFFFF", size=size)
+    logo = branding.get_logo_path()
+    if logo is not None:
+        try:
+            from openpyxl.drawing.image import Image as XlsxImage
+
+            ws.add_image(XlsxImage(str(logo)), "D1")
+        except Exception:
+            pass  # sin Pillow (u otro fallo) queda el wordmark tipográfico
+    ws.column_dimensions["A"].width = 34
+    ws.append([])
+
     ws.append(["Sesión", session["id"]])
     ws.append(["UUID", session.get("uuid")])
     for label, key in RESUMEN_ROWS:
@@ -704,6 +734,16 @@ def build_xlsx(session: dict[str, Any], events: list[dict[str, Any]],
     ws.append(["— Estadística —", ""])
     for label, key in STATS_ROWS:
         ws.append([label, stats.get(key)])
+
+    # ----------------------------- pie de marca -----------------------------
+    ws.append([])
+    ws.append([
+        f"Generado por {branding.PRODUCT_NAME} v{branding.get_version()}"
+        f" · {branding.COMPANY}"
+    ])
+    ws.cell(row=ws.max_row, column=1).font = Font(
+        size=9, color=branding.ELEIA_CHARCOAL.lstrip("#"), italic=True
+    )
 
     we = wb.create_sheet("Eventos")
     we.append(EVENT_COLUMNS)

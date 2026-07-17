@@ -1,0 +1,8 @@
+1
+00:00:00,100 --> 00:00:05,550
+Se instala en el computador de la granja o en un celular, conectado por cable o Bluetooth.
+
+2
+00:00:05,500 --> 00:00:11,012
+Y funciona sin internet: en pleno corral, sin señal, no se pierde ni un kilo.
+

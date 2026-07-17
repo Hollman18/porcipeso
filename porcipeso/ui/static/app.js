@@ -754,6 +754,11 @@ $('bComparar').onclick = (e) => {
 $('bExcel').onclick = () => {
   if (APP.session?.id != null) window.open(`/api/sessions/${APP.session.id}/export.xlsx`, '_blank');
 };
+// Informe PDF con marca (escritorio: reportlab; móvil: el shim abre
+// la vista imprimible y Android genera el PDF nativo con print()).
+$('bPdf').onclick = () => {
+  if (APP.session?.id != null) window.open(`/api/sessions/${APP.session.id}/report.pdf`, '_blank');
+};
 $('bOtroLote').onclick = () => { APP.session = null; APP.fase = null; gotoMode(); };
 $('bVerDatos').onclick = () => setModule('datos');
 
@@ -968,6 +973,9 @@ function renderDatosMoves(events) {
 }
 
 $('bBackDatos').onclick = () => { setSubview('modDatos', 'dvList'); APP.datosDetailId = null; };
+$('bExportPdfDatos').onclick = () => {
+  if (APP.datosDetailId != null) window.open(`/api/sessions/${APP.datosDetailId}/report.pdf`, '_blank');
+};
 $('bExportDatos').onclick = () => {
   if (APP.datosDetailId != null) window.open(`/api/sessions/${APP.datosDetailId}/export.xlsx`, '_blank');
 };

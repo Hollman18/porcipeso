@@ -17,7 +17,8 @@
   <aside class="sidenav">
     <div class="applogo">
       <span class="pig">🐷</span>
-      <div><b>PorciPeso</b><small>La báscula que te habla claro</small></div>
+      <div><b>PorciPeso</b><small>La báscula que te habla claro</small>
+        <small class="eleia-line">una solución <b>ELEIA</b></small></div>
     </div>
     <nav class="navlist" aria-label="Módulos">
       <button class="navbtn active" data-mod="pesaje"><span class="ic">⚖</span> Pesaje</button>
@@ -29,7 +30,8 @@
       <div class="ub-who">👤 <b id="userName"></b><small id="userRol"></small></div>
       <button class="ub-out" id="bLogout">Salir</button>
     </div>
-    <div class="sidefoot">PorciPeso · pesaje porcino</div>
+    <div class="sidefoot">PorciPeso · pesaje porcino
+      <span class="eleia-line">una solución <b>ELEIA</b></span></div>
   </aside>
 
   <!-- ===== CONTENIDO ===== -->
@@ -181,6 +183,7 @@
         <div class="done-head">
           <h2>Pesaje terminado ✓</h2>
           <div class="sub" id="doneSub"></div>
+          <div class="done-eleia eleia-line">PorciPeso · una solución <b>ELEIA</b></div>
         </div>
         <div class="rcards" id="rCards"></div>
         <div class="verdict" id="verdict" hidden></div>
@@ -198,6 +201,7 @@
         </details>
         <div class="result-actions">
           <button class="btn-primary" id="bExcel">Descargar Excel</button>
+          <button id="bPdf">Descargar PDF</button>
           <button id="bOtroLote">Pesar otro lote</button>
           <button id="bVerDatos">Ver módulo de datos</button>
         </div>
@@ -255,6 +259,7 @@
           <button class="btn-link" id="bBackDatos">◂ Todos los pesajes</button>
           <div class="grow"></div>
           <button class="btn-primary btn-sm" id="bExportDatos">Descargar Excel</button>
+          <button class="btn-sm" id="bExportPdfDatos">Descargar PDF</button>
         </div>
         <div class="done-head">
           <h2 id="dNombre">Pesaje</h2>
@@ -355,7 +360,8 @@
       </details>
     </section>
 
-    <footer>PorciPeso · la báscula que te habla claro</footer>
+    <footer>PorciPeso · la báscula que te habla claro
+      <span class="eleia-line">· una solución <b>ELEIA</b></span></footer>
   </main>
 
   <!-- ===== PESTAÑAS INFERIORES (móvil) ===== -->
@@ -421,6 +427,7 @@
         <div class="ob-pic">🐷</div>
         <h2>Bienvenido a PorciPeso</h2>
         <p class="ob-txt">La báscula que te habla claro: pesa tus cerdos, los cuenta sola y te avisa si tiene dudas.</p>
+        <p class="ob-eleia eleia-line">PorciPeso · una solución <b>ELEIA</b></p>
       </div>
 
       <div class="ob-slide" data-ob="1">

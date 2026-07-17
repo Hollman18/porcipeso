@@ -398,6 +398,14 @@ export class LocalBackend {
     if ((m = /^\/api\/sessions\/(\d+)\/export\.xlsx$/.exec(path)) && method === "GET") {
       return this.exportCsv(Number(m[1]));
     }
+    // DIFERENCIA DOCUMENTADA: en escritorio esta ruta devuelve un PDF
+    // real (reportlab, porcipeso/api/reports.py). reportlab no corre en
+    // el APK, así que aquí respondemos un HTML imprimible con la MISMA
+    // estructura y marca; la UI lo abre y window.print() genera el PDF
+    // nativo en Android (ver reportview.ts).
+    if ((m = /^\/api\/sessions\/(\d+)\/report\.pdf$/.exec(path)) && method === "GET") {
+      return this.reportPrintView(Number(m[1]));
+    }
     if ((m = /^\/api\/events\/(\d+)\/confirm$/.exec(path)) && method === "POST") {
       return this.confirmEvent(Number(m[1]), body);
     }
@@ -694,6 +702,44 @@ export class LocalBackend {
     };
   }
 
+  /**
+   * Print-view del informe (ruta report.pdf en móvil): HTML imprimible
+   * con la marca "PorciPeso · una solución ELEIA" (ver reportview.ts).
+   */
+  async buildReportHtml(sessionId: number): Promise<string | null> {
+    const session = await this.repo.getSession(sessionId);
+    if (session === null) return null;
+    const events = await this.repo.listEvents(sessionId);
+    const stats = await this.repo.stats(sessionId);
+    const { buildReportHtml } = await import("./reportview");
+    const { APP_VERSION } = await import("./update");
+    return buildReportHtml(session, events, stats, APP_VERSION);
+  }
+
+  private async reportPrintView(sessionId: number): Promise<JsonResponse> {
+    const html = await this.buildReportHtml(sessionId);
+    if (html === null) return err(404, "sesión no encontrada");
+    return {
+      status: 200,
+      body: html,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    };
+  }
+
+  /**
+   * Informe para window.open(): abre el print-view y lanza
+   * window.print() — en Android el diálogo del sistema genera el PDF
+   * nativo (equivalente móvil del PDF reportlab del escritorio).
+   */
+  async reportAndPrint(sessionId: number): Promise<boolean> {
+    const html = await this.buildReportHtml(sessionId);
+    if (html === null) return false;
+    if (typeof document === "undefined") return false;
+    const { openPrintView } = await import("./reportview");
+    openPrintView(html);
+    return true;
+  }
+
   /** Export para window.open(): comparte en nativo o descarga en web. */
   async exportAndShare(sessionId: number): Promise<boolean> {
     const csv = await this.buildCsv(sessionId);
@@ -852,9 +898,17 @@ export function installShim(
   const origOpen = w.open ? w.open.bind(w) : null;
   w.open = ((url?: string | URL, target?: string, features?: string) => {
     const s = url != null ? String(url) : "";
-    const m = /\/api\/sessions\/(\d+)\/export\.xlsx$/.exec(s.split("?")[0] ?? "");
+    const path = s.split("?")[0] ?? "";
+    const m = /\/api\/sessions\/(\d+)\/export\.xlsx$/.exec(path);
     if (m) {
       void getBackend().then((b) => b.exportAndShare(Number(m[1])));
+      return null;
+    }
+    // report.pdf → print-view + window.print() (PDF nativo de Android;
+    // ver reportview.ts para la diferencia con el reportlab de escritorio)
+    const mp = /\/api\/sessions\/(\d+)\/report\.pdf$/.exec(path);
+    if (mp) {
+      void getBackend().then((b) => b.reportAndPrint(Number(mp[1])));
       return null;
     }
     return origOpen ? origOpen(url, target, features) : null;

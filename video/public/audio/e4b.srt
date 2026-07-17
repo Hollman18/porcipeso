@@ -1,0 +1,4 @@
+1
+00:00:00,100 --> 00:00:07,287
+Y en el computador, toda la analítica: cada lote, cada pesaje, cada tendencia — lista para decidir.
+

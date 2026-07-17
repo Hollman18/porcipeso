@@ -1,0 +1,12 @@
+1
+00:00:00,100 --> 00:00:06,100
+En el corral, todo pasa en tu celular: subes un cerdo de prueba y el sistema se calibra solo.
+
+2
+00:00:06,050 --> 00:00:12,550
+Después subes el lote como quieras: él cuenta, descuenta al que se baja, y si duda... te pregunta.
+
+3
+00:00:12,550 --> 00:00:18,725
+Al final: total, promedio, uniformidad, y tu informe en Excel y PDF con tu marca.
+
