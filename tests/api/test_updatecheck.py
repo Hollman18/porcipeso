@@ -6,14 +6,17 @@ degradación silenciosa, cache 6 h, semver y min_version.
 from __future__ import annotations
 
 import httpx
+import pathlib
 import pytest
 from fastapi.testclient import TestClient
 
 from porcipeso.api import updatecheck
 from porcipeso.api.app import create_app
 
+LOCAL_VERSION = (pathlib.Path(__file__).resolve().parents[2] / "VERSION").read_text().strip()
+
 REMOTE = {
-    "latest_version": "2.2.0",
+    "latest_version": "99.0.0",  # siempre mayor que la local: garantiza update_available
     "min_version": "2.0.0",
     "apk_url": "https://cdn.example.com/porcipeso-2.2.0.apk",
     "banners": [
@@ -84,7 +87,7 @@ def test_semver_cmp(a, b, expected):
 
 def test_read_local_version_from_file_and_env(monkeypatch):
     # el archivo VERSION de la raíz del repo existe (lo define release)
-    assert updatecheck.read_local_version() == "2.1.0"
+    assert updatecheck.read_local_version() == LOCAL_VERSION
     monkeypatch.setenv("PORCIPESO_VERSION", "9.9.9")
     assert updatecheck.read_local_version() == "9.9.9"
 
@@ -94,7 +97,7 @@ def test_read_local_version_from_file_and_env(monkeypatch):
 def test_sin_cloud_url_apagado_silencioso():
     status = updatecheck.build_status()
     assert status == {
-        "current": "2.1.0",
+        "current": LOCAL_VERSION,
         "latest": None,
         "update_available": False,
         "min_version_ok": True,
@@ -112,8 +115,8 @@ def test_config_remota_ok(monkeypatch):
     monkeypatch.setattr(updatecheck.httpx, "get", _fake_get(REMOTE, calls))
 
     status = updatecheck.build_status()
-    assert status["current"] == "2.1.0"
-    assert status["latest"] == "2.2.0"
+    assert status["current"] == LOCAL_VERSION
+    assert status["latest"] == "99.0.0"
     assert status["update_available"] is True
     assert status["min_version_ok"] is True       # 2.1.0 >= 2.0.0
     assert status["apk_url"] == REMOTE["apk_url"]
@@ -136,7 +139,7 @@ def test_min_version_no_cumplida(monkeypatch):
 
 def test_ya_en_la_ultima_version(monkeypatch):
     monkeypatch.setenv("PORCIPESO_CLOUD_URL", "https://nube.example.com")
-    monkeypatch.setenv("PORCIPESO_VERSION", "2.2.0")
+    monkeypatch.setenv("PORCIPESO_VERSION", "99.0.0")  # = latest del REMOTE
     monkeypatch.setattr(updatecheck.httpx, "get", _fake_get(REMOTE))
     status = updatecheck.build_status()
     assert status["update_available"] is False
@@ -191,7 +194,7 @@ def test_cache_6h_no_refetchea(monkeypatch):
 
     monkeypatch.setattr(updatecheck.httpx, "get", timeout_get)
     status = updatecheck.build_status()
-    assert status["latest"] == "2.2.0"  # config vieja mejor que nada
+    assert status["latest"] == "99.0.0"  # config vieja mejor que nada
 
 
 # ---------------------------------------------------------------- endpoint
