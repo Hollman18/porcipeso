@@ -1,3 +1,8 @@
+# PorciPeso — builds de escritorio (PyInstaller)
+#
+# Versionado: la fuente única es el archivo VERSION de la raíz (env
+# PORCIPESO_VERSION). En tags v* los binarios se renombran con la versión
+# y un job final los adjunta al GitHub Release del tag.
 name: Desktop builds
 
 on:
@@ -5,6 +10,9 @@ on:
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: write # crear/actualizar el GitHub Release en tags
 
 jobs:
   build:
@@ -19,6 +27,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Versión (archivo VERSION -> env)
+        shell: bash
+        run: |
+          VERSION="$(tr -d ' \n' < VERSION)"
+          echo "PORCIPESO_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PorciPeso v$VERSION"
 
       - uses: actions/setup-python@v5
         with:
@@ -67,26 +82,50 @@ jobs:
 
       - name: Empaquetar zip (macOS)
         if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent dist/PorciPeso.app dist/PorciPeso-macos.zip
+        run: ditto -c -k --keepParent dist/PorciPeso.app "dist/PorciPeso-macos-v${PORCIPESO_VERSION}.zip"
 
       - name: Empaquetar zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist\PorciPeso -DestinationPath dist\PorciPeso-windows.zip
+        run: Compress-Archive -Path dist\PorciPeso -DestinationPath "dist\PorciPeso-windows-v$env:PORCIPESO_VERSION.zip"
 
       - name: Instalador Inno Setup (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\installer.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$env:PORCIPESO_VERSION" packaging\installer.iss
+          Rename-Item -Path "dist\PorciPeso-Setup.exe" -NewName "PorciPeso-Setup-v$env:PORCIPESO_VERSION.exe"
 
       - name: Subir artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            dist/PorciPeso-macos.zip
-            dist/PorciPeso-windows.zip
-            dist/PorciPeso-Setup.exe
+            dist/PorciPeso-macos-v*.zip
+            dist/PorciPeso-windows-v*.zip
+            dist/PorciPeso-Setup-v*.exe
           if-no-files-found: error
+
+  # Solo en tags v*: adjunta los binarios al GitHub Release del tag.
+  # (El APK Android lo adjunta android.yml al MISMO release.)
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Crear/actualizar GitHub Release con los binarios
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PorciPeso ${{ github.ref_name }}
+          files: |
+            dist/PorciPeso-Setup-v*.exe
+            dist/PorciPeso-macos-v*.zip
+            dist/PorciPeso-windows-v*.zip
+          fail_on_unmatched_files: true

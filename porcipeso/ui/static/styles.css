@@ -478,3 +478,40 @@ details.collap .lotegrid .empty,details.collap>.empty{padding-top:0}
 .ob-dots .d.active{background:var(--accent);transform:scale(1.25)}
 .ob-next{min-height:52px;padding:10px 22px;font-size:16px}
 #obSkip{min-height:52px}
+
+/* ============================================================
+   ☁️ NUBE: login + usuario + roles (auth.js)
+   ============================================================ */
+.userbox{display:flex;align-items:center;gap:8px;padding:10px 8px;border-top:1px solid var(--border);
+  font-size:14px;min-width:0}
+.userbox .ub-who{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.userbox .ub-who b{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.userbox .ub-who small{color:var(--muted);font-size:11.5px;text-transform:capitalize}
+.userbox .ub-out{min-height:36px;padding:4px 12px;font-size:13px;border-radius:8px}
+.userbox.compact{border-top:none;padding:0;font-size:13px;gap:6px}
+.userbox.compact .ub-who{flex-direction:row;gap:6px;align-items:baseline}
+.cloud-chip{font-size:16px;line-height:1;filter:grayscale(1);opacity:.55}
+.cloud-chip.ok{filter:none;opacity:1}
+
+.banner-info{background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber)}
+.banner-info .dot{background:var(--amber)}
+
+#dlgLogin{max-width:440px}
+.dlg.login form{display:flex;flex-direction:column;gap:12px}
+.dlg.login .form-error{margin:0}
+.login-note{margin:14px 0 0;font-size:13.5px;color:var(--muted);line-height:1.5}
+
+details.nube .nube-body{display:flex;flex-direction:column;gap:12px;padding:0 16px 16px}
+.nube-estado{margin:0;font-size:14.5px;color:var(--muted)}
+
+/* --- rol OPERADOR: solo el módulo Pesaje (los demás DESAPARECEN) --- */
+body.rol-operador .navbtn[data-mod="datos"],
+body.rol-operador .navbtn[data-mod="bascula"],
+body.rol-operador .tabbtn[data-mod="datos"],
+body.rol-operador .tabbtn[data-mod="bascula"],
+body.rol-operador #modDatos,
+body.rol-operador #modBascula,
+body.rol-operador #pvWeigh details.moves,   /* sin "Ver movimientos" */
+body.rol-operador #pvDone details.moves,    /* sin detalle del pesaje */
+body.rol-operador #bExcel,                  /* sin export */
+body.rol-operador #bVerDatos{display:none !important}

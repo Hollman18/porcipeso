@@ -40,6 +40,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Auto-actualización: abrir el instalador del APK descargado
+         (intent VIEW application/vnd.android.package-archive). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Bluetooth Clásico SPP (captura de la báscula):
          Android 12+ (API 31): BLUETOOTH_SCAN + BLUETOOTH_CONNECT.
          Android <= 11: permisos legacy BLUETOOTH/BLUETOOTH_ADMIN +

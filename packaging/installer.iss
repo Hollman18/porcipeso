@@ -4,7 +4,12 @@
 ; Genera: dist\PorciPeso-Setup.exe
 
 #define MyAppName "PorciPeso"
-#define MyAppVersion "0.1.0"
+; La versión real viene del archivo VERSION de la raíz: CI la inyecta con
+;   ISCC /DMyAppVersion=X.Y.Z packaging\installer.iss
+; Este valor es solo el fallback para compilaciones manuales.
+#ifndef MyAppVersion
+  #define MyAppVersion "2.1.0"
+#endif
 #define MyAppExeName "PorciPeso.exe"
 
 [Setup]

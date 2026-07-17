@@ -18,6 +18,8 @@ import {
 } from "./db";
 import type { ScaleProfile } from "./models";
 import profilesJson from "./profiles.json";
+import { CloudSync } from "./sync";
+import { getDeviceId, maybeSendTelemetry } from "./telemetry";
 
 const PROFILES = profilesJson as unknown as ScaleProfile[];
 
@@ -60,11 +62,19 @@ async function createDriver(): Promise<{ driver: SqlDriver; native: boolean }> {
 async function initBackend(hub: Hub): Promise<LocalBackend> {
   const { driver, native } = await createDriver();
   const repo = await Repo.create(driver);
+  // Sync a la nube: dormido hasta que auth.js configura la nube e
+  // inicia sesión (POST /api/cloud/login|session vía el shim).
+  const sync = new CloudSync({ repo, deviceId: () => getDeviceId() });
+  sync.start(); // timer 5 min + push al recuperar red (window "online")
   return new LocalBackend({
     repo,
     profiles: PROFILES,
     hub,
     shareCsv: native ? nativeShareCsv : undefined,
+    cloud: {
+      route: (method, path, body) => sync.route(method, path, body),
+      onSessionClosed: () => sync.pushSoon(),
+    },
   });
 }
 
@@ -74,3 +84,10 @@ const getBackend = (): Promise<LocalBackend> => (ready ??= initBackend(hub));
 
 installShim(hub, getBackend);
 void getBackend(); // warm-up: la DB queda lista antes del primer toque
+
+// Telemetría nativa (plataforma "android"): la envía este bundle y se
+// marca el flag para que el telemetry.js de la UI no mande otro ping.
+if (Capacitor.isNativePlatform()) {
+  (window as unknown as Record<string, unknown>)["__porcipesoTelemetryNative"] = true;
+  void maybeSendTelemetry();
+}

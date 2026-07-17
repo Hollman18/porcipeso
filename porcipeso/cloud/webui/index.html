@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PorciPeso Cloud — Panel</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐷</text></svg>">
+</head>
+<body>
+
+<!-- ============================== LOGIN ============================== -->
+<div id="viewLogin" class="login-wrap" hidden>
+  <div class="login-card">
+    <div class="login-logo">
+      <span class="pig">🐷</span>
+      <span><b>PorciPeso</b><small>Panel de la nube</small></span>
+    </div>
+    <p class="sub">Entra con tu correo y tu contraseña.</p>
+    <form id="formLogin" novalidate>
+      <label class="fld">Correo
+        <input id="loginEmail" type="email" name="email" autocomplete="username"
+               placeholder="tu@correo.com" required>
+      </label>
+      <label class="fld">Contraseña
+        <input id="loginPass" type="password" name="password"
+               autocomplete="current-password" placeholder="Tu contraseña" required>
+      </label>
+      <p id="loginError" class="form-error" role="alert"></p>
+      <button type="submit" id="btnLogin" class="btn-primary">Entrar</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============================ OPERADOR ============================= -->
+<div id="viewOperador" class="oper-wrap" hidden>
+  <div class="oper-card">
+    <span class="pic">⚖️</span>
+    <h1>Tu cuenta es de operación</h1>
+    <p>Este panel es para administradores. Con tu cuenta usa la app
+       <b>PorciPeso</b> directamente en la báscula: ahí es donde pesas.</p>
+    <button id="btnLogoutOperador" class="btn-primary">Cerrar sesión</button>
+  </div>
+</div>
+
+<!-- ============================ APP SHELL ============================ -->
+<div id="appShell" class="appshell" hidden>
+  <nav class="sidenav" aria-label="Secciones">
+    <div class="applogo">
+      <span class="pig">🐷</span>
+      <span><b>PorciPeso</b><small id="navSubtitle">Panel de la nube</small></span>
+    </div>
+    <div id="navList" class="navlist"></div>
+    <div class="sidefoot">
+      <div class="whoami"><b id="whoName"></b><span id="whoRole"></span></div>
+      <button id="btnLogout" class="btn-xs">Cerrar sesión</button>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="mobilehead">
+      <span class="pig">🐷</span><b>PorciPeso</b>
+      <span class="grow"></span>
+      <button id="btnLogoutMobile" class="btn-xs">Salir</button>
+    </div>
+
+    <!-- ..................... SUPERADMIN: Clientes ..................... -->
+    <section id="view-clientes" class="view">
+      <div class="modhead">
+        <h2>Clientes</h2><span class="grow"></span>
+        <button id="btnNuevoTenant" class="btn-primary">Nuevo cliente</button>
+        <p class="desc">Cada cliente (granja o empresa) tiene su propio espacio con sus usuarios y sus pesajes.</p>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Cliente</th><th>Slug</th><th>Usuarios</th><th>Estado</th>
+            <th>Creado</th><th>Acciones</th>
+          </tr></thead>
+          <tbody id="tbodyTenants"></tbody>
+        </table>
+      </div>
+      <p id="emptyTenants" class="empty" hidden>Todavía no hay clientes. Crea el primero con «Nuevo cliente».</p>
+    </section>
+
+    <!-- .................... SUPERADMIN: Telemetría .................... -->
+    <section id="view-telemetria" class="view">
+      <div class="modhead">
+        <h2>Telemetría</h2><span class="grow"></span>
+        <button id="btnRecargarTelemetria" class="btn-xs">Actualizar</button>
+        <p class="desc">Qué versiones de la app están usando los dispositivos en el campo.</p>
+      </div>
+      <div class="gstats" id="telemetriaTotales"></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Cliente</th><th>Plataforma</th><th>Versión</th>
+            <th>Dispositivos</th><th>Reportes</th><th>Último reporte</th>
+          </tr></thead>
+          <tbody id="tbodyTelemetria"></tbody>
+        </table>
+      </div>
+      <p id="emptyTelemetria" class="empty" hidden>Todavía no ha llegado telemetría de ningún dispositivo.</p>
+    </section>
+
+    <!-- .................. SUPERADMIN: Config global ................... -->
+    <section id="view-configGlobal" class="view">
+      <div class="modhead">
+        <h2>Config global</h2>
+        <p class="desc">Lo que ven TODAS las apps: versión vigente, dónde bajar el APK y los avisos de plataforma.</p>
+      </div>
+      <div class="card">
+        <h3>Versión de la app</h3>
+        <div class="cfgform">
+          <label class="fld">Última versión (latest_version)
+            <input id="cfgLatest" placeholder="ej. 1.4.0">
+          </label>
+          <label class="fld">Versión mínima (min_version)
+            <input id="cfgMin" placeholder="ej. 1.2.0">
+          </label>
+          <label class="fld full">URL del APK (apk_url)
+            <input id="cfgApk" placeholder="https://…/porcipeso.apk">
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btnGuardarConfigGlobal" class="btn-primary">Guardar versión</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Avisos (banners globales)</h3>
+        <p class="hint">Se muestran en todas las apps, encima de los avisos propios de cada cliente.</p>
+        <div id="listaBannersGlobal" class="bannerlist"></div>
+        <div class="actions">
+          <button id="btnNuevoBannerGlobal" class="btn-primary">Nuevo aviso</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ...................... ADMIN: Pesajes .......................... -->
+    <section id="view-pesajes" class="view">
+      <div id="pesajesLista">
+        <div class="modhead">
+          <h2>Pesajes</h2>
+          <p class="desc">Todo lo que tus básculas han subido a la nube.</p>
+        </div>
+        <form id="formFiltros" class="filters" style="margin-top:14px">
+          <label>Desde <input type="date" id="fDesde"></label>
+          <label>Hasta <input type="date" id="fHasta"></label>
+          <label class="fq">Lote / corral / destino
+            <input type="search" id="fQ" placeholder="ej. L-42"></label>
+          <button type="submit" class="btn-primary">Filtrar</button>
+          <button type="button" id="btnLimpiarFiltros">Limpiar</button>
+        </form>
+        <div class="tablewrap" style="margin-top:14px">
+          <table>
+            <thead><tr>
+              <th>Fecha</th><th>Lote</th><th>Corral</th><th>Destino</th>
+              <th>Animales</th><th>Kilos</th><th>Promedio</th><th>Estado</th>
+            </tr></thead>
+            <tbody id="tbodySesiones"></tbody>
+          </table>
+        </div>
+        <p id="emptySesiones" class="empty" hidden>No hay pesajes con esos filtros. Cuando una báscula sincronice, aparecerán aquí.</p>
+      </div>
+
+      <div id="pesajeDetalle" hidden>
+        <button id="btnVolverPesajes" class="btn-link detail-back">← Volver a pesajes</button>
+        <div class="modhead"><h2 id="detTitulo">Pesaje</h2></div>
+        <div class="gstats" id="detStats" style="margin-top:12px"></div>
+        <div class="tablewrap" style="margin-top:14px">
+          <table>
+            <thead><tr>
+              <th>Hora</th><th>Movimiento</th><th>Kilos</th>
+              <th>Animales</th><th>Confirmado</th><th>Detalle</th>
+            </tr></thead>
+            <tbody id="tbodyEventos"></tbody>
+          </table>
+        </div>
+        <p id="emptyEventos" class="empty" hidden>Este pesaje no tiene movimientos registrados.</p>
+      </div>
+    </section>
+
+    <!-- ...................... ADMIN: Resumen .......................... -->
+    <section id="view-resumen" class="view">
+      <div class="modhead">
+        <h2>Resumen</h2><span class="grow"></span>
+        <button id="btnRecargarResumen" class="btn-xs">Actualizar</button>
+        <p class="desc">Los números grandes de tu operación, con todo lo sincronizado.</p>
+      </div>
+      <div class="gstats" id="resumenStats"></div>
+      <h3 style="margin:6px 0 0;text-transform:uppercase;font-size:16px">Por lote</h3>
+      <div id="resumenLotes" class="lotegrid"></div>
+      <p id="emptyResumen" class="empty" hidden>Todavía no hay datos. En cuanto una báscula sincronice, verás el resumen aquí.</p>
+    </section>
+
+    <!-- ...................... ADMIN: Usuarios ......................... -->
+    <section id="view-usuarios" class="view">
+      <div class="modhead">
+        <h2>Usuarios</h2><span class="grow"></span>
+        <button id="btnNuevoUsuario" class="btn-primary">Nuevo usuario</button>
+        <p class="desc">Quién puede entrar: los administradores ven este panel, los operadores usan la app en la báscula.</p>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Correo</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Acciones</th>
+          </tr></thead>
+          <tbody id="tbodyUsers"></tbody>
+        </table>
+      </div>
+      <p id="emptyUsers" class="empty" hidden>Todavía no hay usuarios en tu equipo.</p>
+    </section>
+
+    <!-- ....................... ADMIN: Config .......................... -->
+    <section id="view-configTenant" class="view">
+      <div class="modhead">
+        <h2>Config</h2>
+        <p class="desc">Avisos que ven SOLO las apps de tu operación (además de los de la plataforma).</p>
+      </div>
+      <div class="card">
+        <h3>Tus avisos</h3>
+        <div id="listaBannersTenant" class="bannerlist"></div>
+        <div class="actions">
+          <button id="btnNuevoBannerTenant" class="btn-primary">Nuevo aviso</button>
+        </div>
+      </div>
+    </section>
+
+    <footer>PorciPeso Cloud · panel de administración</footer>
+  </div>
+</div>
+
+<!-- barra de pestañas móvil -->
+<nav id="tabbar" class="tabbar" hidden aria-label="Secciones"></nav>
+
+<!-- ======================= DIÁLOGO: nuevo cliente ===================== -->
+<dialog id="dlgTenant">
+  <form class="dlg" id="formTenant" method="dialog" novalidate>
+    <h2>Nuevo cliente</h2>
+    <p class="sub">Se crea el espacio del cliente y su primer administrador.</p>
+    <label class="fld">Nombre del cliente
+      <input id="tNombre" placeholder="ej. Granja Demo" required maxlength="120">
+    </label>
+    <label class="fld">Slug (identificador corto, sin espacios)
+      <input id="tSlug" placeholder="ej. granja-demo" required maxlength="63"
+             pattern="[a-z0-9][a-z0-9\-]{1,62}">
+    </label>
+    <label class="fld">Correo del administrador
+      <input id="tEmail" type="email" placeholder="admin@granja.com" required>
+    </label>
+    <label class="fld">Contraseña del administrador (mínimo 10 caracteres)
+      <input id="tPass" type="text" autocomplete="new-password" required minlength="10">
+    </label>
+    <p id="tenantError" class="form-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="dlg-cancel">Cancelar</button>
+      <button type="submit" class="btn-primary" id="btnCrearTenant">Crear cliente</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ======================= DIÁLOGO: nuevo usuario ===================== -->
+<dialog id="dlgUsuario">
+  <form class="dlg" id="formUsuario" method="dialog" novalidate>
+    <h2>Nuevo usuario</h2>
+    <p class="sub">Los administradores entran a este panel; los operadores usan la app en la báscula.</p>
+    <label class="fld">Correo
+      <input id="uEmail" type="email" placeholder="persona@granja.com" required>
+    </label>
+    <label class="fld">Nombre (opcional)
+      <input id="uNombre" placeholder="ej. Pedro Gómez" maxlength="120">
+    </label>
+    <label class="fld">Contraseña (mínimo 10 caracteres)
+      <input id="uPass" type="text" autocomplete="new-password" required minlength="10">
+    </label>
+    <label class="fld">Rol
+      <select id="uRol">
+        <option value="operador">Operador — pesa en la báscula</option>
+        <option value="admin">Administrador — ve este panel</option>
+      </select>
+    </label>
+    <p id="usuarioError" class="form-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="dlg-cancel">Cancelar</button>
+      <button type="submit" class="btn-primary" id="btnCrearUsuario">Crear usuario</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ==================== DIÁLOGO: reset de contraseña ================== -->
+<dialog id="dlgPassword">
+  <form class="dlg" id="formPassword" method="dialog" novalidate>
+    <h2>Nueva contraseña</h2>
+    <p class="sub" id="passSub"></p>
+    <label class="fld">Contraseña nueva (mínimo 10 caracteres)
+      <input id="pPass" type="text" autocomplete="new-password" required minlength="10">
+    </label>
+    <p id="passwordError" class="form-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="dlg-cancel">Cancelar</button>
+      <button type="submit" class="btn-primary">Guardar contraseña</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ======================= DIÁLOGO: aviso (banner) ==================== -->
+<dialog id="dlgBanner">
+  <form class="dlg" id="formBanner" method="dialog" novalidate>
+    <h2 id="bannerTitle">Nuevo aviso</h2>
+    <p class="sub">El aviso aparece en la app dentro de las fechas que elijas.</p>
+    <label class="fld">Identificador (id, único)
+      <input id="bId" placeholder="ej. mantenimiento-julio" required maxlength="64">
+    </label>
+    <label class="fld">Texto del aviso
+      <input id="bTexto" placeholder="ej. El domingo hay mantenimiento de 2 a 4 am" required maxlength="240">
+    </label>
+    <div class="grid2">
+      <label class="fld">Texto del botón (opcional)
+        <input id="bBoton" placeholder="ej. Ver más" maxlength="40">
+      </label>
+      <label class="fld">URL del botón (opcional)
+        <input id="bUrl" placeholder="https://…" maxlength="500">
+      </label>
+    </div>
+    <div class="grid2">
+      <label class="fld">Desde (opcional)
+        <input id="bDesde" type="date">
+      </label>
+      <label class="fld">Hasta (opcional)
+        <input id="bHasta" type="date">
+      </label>
+    </div>
+    <label class="chk">
+      <input id="bSoloSinNube" type="checkbox">
+      Mostrar solo en básculas SIN nube configurada
+    </label>
+    <p id="bannerError" class="form-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="dlg-cancel">Cancelar</button>
+      <button type="submit" class="btn-primary" id="btnGuardarBanner">Guardar aviso</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

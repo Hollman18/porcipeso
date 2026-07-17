@@ -9,6 +9,11 @@ data/*.db-*
 .playwright-mcp/
 .DS_Store
 
+# firma Android: el keystore vive en ~/porcipeso_secrets, JAMAS en el repo
+*.keystore
+*.jks
+porcipeso_secrets/
+
 # build (empaquetado de escritorio)
 build/
 dist/

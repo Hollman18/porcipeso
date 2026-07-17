@@ -1,0 +1,84 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# PorciPeso Cloud — imagen del servidor nube (python -m porcipeso.cloud)
+#
+# Build local:
+#   docker build -f Dockerfile.cloud -t porcipeso-cloud:local .
+# Run:
+#   docker run --rm -p 8090:8090 -v porcipeso_cloud_data:/data \
+#     -e CLOUD_JWT_SECRET=$(openssl rand -hex 32) porcipeso-cloud:local
+#
+# CI publica esta imagen a ghcr.io/hollman18/porcipeso-cloud
+# (ver .github/workflows/cloud-image.yml). Deploy: deploy/cloud/.
+# =============================================================================
+
+# ---------- Etapa 1: builder — venv con el paquete + deps runtime+cloud ------
+FROM python:3.12-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /src
+COPY pyproject.toml ./
+COPY porcipeso/ porcipeso/
+
+# Instala el paquete vía pyproject con el extra "cloud" (pyjwt, argon2-cffi).
+# SIN extras dev/build: la imagen solo lleva runtime.
+RUN pip install ".[cloud]"
+
+# El wheel de setuptools NO incluye los datos no-Python del paquete
+# (porcipeso/cloud/schema.sql, porcipeso/cloud/webui/, …) porque el repo no
+# tiene MANIFEST.in ni package-data declarado. En vez de tocar el empaquetado
+# del resto del proyecto, sincronizamos el árbol fuente completo sobre el
+# paquete instalado: garantiza que TODO archivo de porcipeso/ llegue al venv.
+# (sysconfig y no `import porcipeso`: desde /src el import resolvería al
+# árbol fuente local, no al paquete instalado en el venv.)
+RUN SP="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/porcipeso" \
+ && cp -a porcipeso/. "$SP/" \
+ && find "$SP" -type d -name __pycache__ -exec rm -rf {} +
+
+# Sanity check en build: si falta el panel o el schema, la imagen NO se crea.
+RUN cd / && python -c "\
+import pathlib, porcipeso.cloud.app as a; \
+p = pathlib.Path(a.__file__).parent; \
+assert (p / 'schema.sql').is_file(), 'falta schema.sql en el paquete'; \
+assert (p / 'webui' / 'index.html').is_file(), 'falta webui/ en el paquete'; \
+print('paquete OK:', p)"
+
+# ---------- Etapa 2: runtime — slim, no-root, /data persistente --------------
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    CLOUD_DB=/data/porcipeso_cloud.db \
+    CLOUD_HOST=0.0.0.0 \
+    CLOUD_PORT=8090
+
+# Usuario no-root dueño de /data (el volumen hereda este owner al crearse).
+RUN useradd --system --uid 10001 --user-group --create-home \
+      --home-dir /home/porcipeso porcipeso \
+ && mkdir -p /data \
+ && chown porcipeso:porcipeso /data
+
+COPY --from=builder /opt/venv /opt/venv
+
+# Metadatos de release dentro de la imagen: versión publicada + config
+# remota global de las apps (feed que puede sembrarse en /config/app vía
+# PUT /admin/config/*; el repo es privado y los clientes solo hablan
+# con este cloud, nunca con GitHub).
+WORKDIR /app
+COPY VERSION /app/VERSION
+COPY config/app-config.json /app/config/app-config.json
+
+USER porcipeso
+VOLUME /data
+EXPOSE 8090
+
+# Healthcheck sin curl (la imagen slim no lo trae): urllib de la stdlib.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD ["python", "-c", "import os, sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('CLOUD_PORT', '8090'), timeout=4).status == 200 else 1)"]
+
+CMD ["python", "-m", "porcipeso.cloud"]

@@ -1,0 +1,26 @@
+# =============================================================================
+# PorciPeso Cloud — despliegue con Docker Compose
+#
+# En el servidor: este archivo + .env (copiado de .env.example y rellenado)
+# viven juntos (p. ej. /opt/porcipeso/). Levantar/actualizar: ./deploy.sh
+#
+# Imagen: por defecto la publicada por CI en ghcr. Si el paquete de ghcr es
+# privado y el pull anónimo falla, construye la imagen EN el servidor:
+#   docker build -f src/Dockerfile.cloud -t porcipeso-cloud:local src/
+# y fija en el .env:
+#   PORCIPESO_CLOUD_IMAGE=porcipeso-cloud:local
+# (compose lee el .env del directorio para interpolar ${...}).
+# =============================================================================
+services:
+  porcipeso-cloud:
+    image: ${PORCIPESO_CLOUD_IMAGE:-ghcr.io/hollman18/porcipeso-cloud:latest}
+    container_name: porcipeso-cloud
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - porcipeso_cloud_data:/data
+    env_file: .env
+
+volumes:
+  porcipeso_cloud_data:

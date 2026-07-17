@@ -21,6 +21,7 @@ import {
 } from "./models";
 import { isParserSupported } from "./parsers";
 import { SimLiveScale, SimLiveOptions } from "./simlive";
+import { downloadAndInstallApk, fetchUpdateStatus } from "./update";
 import type { BluetoothScaleDriver } from "./bluetooth";
 
 export const READING_BROADCAST_MIN_S = 0.2; // throttle ~5 msgs/s (igual que app.py)
@@ -128,9 +129,19 @@ export interface BackendDeps {
   ) => Promise<BluetoothScaleDriver>;
   /** Exportador nativo (Filesystem+Share); si falta, descarga web. */
   shareCsv?: (filename: string, csv: string) => Promise<void>;
+  /** Sync a la nube (opcional): resuelve /api/cloud/* y recibe el aviso
+   *  de cierre de sesión de pesaje para empujar sin esperar el timer. */
+  cloud?: {
+    route(
+      method: string,
+      path: string,
+      body: Record<string, unknown>,
+    ): Promise<JsonResponse | null>;
+    onSessionClosed?: () => void;
+  };
 }
 
-interface JsonResponse {
+export interface JsonResponse {
   status: number;
   body: unknown;
   headers?: Record<string, string>;
@@ -153,6 +164,7 @@ export class LocalBackend {
   private simOptions: SimLiveOptions;
   private createBtDriver: BackendDeps["createBtDriver"];
   private shareCsvFn: BackendDeps["shareCsv"];
+  private cloud: BackendDeps["cloud"];
 
   engine: WeighingEngine | null = null;
   currentSessionId: number | null = null;
@@ -173,6 +185,7 @@ export class LocalBackend {
     this.simOptions = deps.simOptions ?? {};
     this.createBtDriver = deps.createBtDriver;
     this.shareCsvFn = deps.shareCsv;
+    this.cloud = deps.cloud;
   }
 
   /** Espera a que terminen las escrituras/broadcasts en vuelo (tests). */
@@ -335,10 +348,23 @@ export class LocalBackend {
   ): Promise<JsonResponse> {
     let m: RegExpExecArray | null;
 
+    // Nube (login/roles/sync): delega en el CloudSync inyectado.
+    if (path.startsWith("/api/cloud/")) {
+      if (this.cloud) {
+        const r = await this.cloud.route(method, path, body);
+        if (r !== null) return r;
+      }
+      return err(404, `nube no disponible: ${method} ${path}`);
+    }
+
     if (method === "GET" && path === "/api/profiles") return this.getProfiles();
     if (method === "POST" && path === "/api/scale/connect") return this.scaleConnect(body);
     if (method === "GET" && path === "/api/scale/status") return this.scaleStatus();
     if (method === "GET" && path === "/api/bt/devices") return this.btDevices();
+
+    // Auto-actualización: mismo contrato que porcipeso/api/updatecheck.py
+    if (method === "GET" && path === "/api/update/status") return ok(await fetchUpdateStatus());
+    if (method === "POST" && path === "/api/update/download") return this.updateDownload(body);
 
     if (method === "POST" && path === "/api/sim/start") return this.simStart();
     if (method === "POST" && path === "/api/sim/action") return this.simAction(body);
@@ -379,6 +405,23 @@ export class LocalBackend {
       return this.eventMotivo(Number(m[1]), body);
     }
     return err(404, `ruta desconocida: ${method} ${path}`);
+  }
+
+  // -------------------------------------------------------- actualización
+
+  /** Descarga el APK nuevo y abre el instalador (solo Android). */
+  private async updateDownload(body: Record<string, unknown>): Promise<JsonResponse> {
+    let apkUrl = body["apk_url"] != null ? String(body["apk_url"]) : "";
+    if (!apkUrl) {
+      apkUrl = (await fetchUpdateStatus()).apk_url ?? ""; // cacheado 6 h
+    }
+    if (!apkUrl) return err(404, "no hay apk_url: no hay actualización disponible");
+    try {
+      const path = await downloadAndInstallApk(apkUrl);
+      return ok({ ok: true, path });
+    } catch (e) {
+      return err(502, `descarga/instalación falló: ${String(e instanceof Error ? e.message : e)}`);
+    }
   }
 
   // ------------------------------------------------------------- báscula
@@ -582,6 +625,12 @@ export class LocalBackend {
       pending: 0,
       fase: "lote",
     });
+    // nube: empuja el cierre sin esperar el timer de 5 min
+    try {
+      this.cloud?.onSessionClosed?.();
+    } catch {
+      /* el sync jamás rompe el cierre */
+    }
     return ok(closed);
   }
 

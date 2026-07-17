@@ -689,6 +689,8 @@ $('bTerminar').onclick = async () => {
     const r = await api(`/api/sessions/${APP.session.id}/close`, { method: 'POST', body: {} });
     if (APP.simActive) api('/api/sim/stop', { method: 'POST', body: {} }).catch(() => {});
     showResults(r ?? {});
+    // nube: el backend empuja el cierre ya; refresco el chip ☁️ enseguida
+    try { window.PPAuth?.pokeStatus?.(); } catch { /* sin nube */ }
   } catch { /* banner activo */ }
   finally { $('bTerminar').disabled = false; }
 };

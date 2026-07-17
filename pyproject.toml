@@ -9,11 +9,16 @@ dependencies = [
   "pyserial",
   "pyyaml",
   "openpyxl",
+  "httpx",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "httpx", "websockets"]
 build = ["pillow", "pyinstaller"]
+# Servidor nube (porcipeso.cloud): JWT + hashing Argon2id.
+# argon2-cffi elegido sobre passlib[bcrypt]: passlib está sin
+# mantenimiento y falla en Python 3.13+; argon2id es el estándar OWASP.
+cloud = ["pyjwt", "argon2-cffi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

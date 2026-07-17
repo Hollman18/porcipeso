@@ -15,6 +15,7 @@ Variables de entorno respetadas (mismas del modo servidor):
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import socket
@@ -63,6 +64,31 @@ def log(msg: str) -> None:
             pass
 
 
+def check_update_url(url: str) -> str:
+    """Consulta /api/update/status del propio servidor tras readiness.
+
+    Si hay versión nueva, loguea y retorna la URL con ?update=1 (la UI
+    ya muestra el banner por su cuenta; el parámetro es solo una señal).
+    En escritorio NO hay auto-descarga (decisión: menos riesgo).
+    Cualquier fallo degrada a la URL original.
+    """
+    try:
+        probe = url.rstrip("/") + "/api/update/status"
+        with urllib.request.urlopen(probe, timeout=5) as resp:
+            status = json.load(resp)
+        if status.get("update_available"):
+            log(
+                f"[{APP_NAME}] hay una versión nueva: {status.get('latest')} "
+                f"(instalada: {status.get('current')})"
+            )
+            if not status.get("min_version_ok", True):
+                log(f"[{APP_NAME}] la versión instalada quedó por debajo de la mínima soportada")
+            return url + ("&" if "?" in url else "?") + "update=1"
+    except Exception:
+        pass  # sin nube / sin red: la app abre normal
+    return url
+
+
 def wait_ready_and_open(url: str, url_file: Path, server: uvicorn.Server) -> None:
     """Espera readiness del servidor, persiste la URL y abre el navegador."""
     deadline = time.monotonic() + READY_TIMEOUT_S
@@ -85,9 +111,10 @@ def wait_ready_and_open(url: str, url_file: Path, server: uvicorn.Server) -> Non
     except OSError as exc:
         log(f"[{APP_NAME}] no se pudo escribir {url_file}: {exc}")
     log(f"[{APP_NAME}] listo — {url}")
+    open_url = check_update_url(url)
     if os.environ.get("PORCIPESO_NO_BROWSER") != "1":
         try:
-            webbrowser.open(url)
+            webbrowser.open(open_url)
         except Exception as exc:
             log(f"[{APP_NAME}] no se pudo abrir el navegador: {exc}. Abra {url} manualmente.")
 

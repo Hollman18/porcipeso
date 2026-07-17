@@ -1,9 +1,15 @@
 # PorciPeso — APK Android (Capacitor)
 #
 # El APK se compila SOLO en CI (no hay Android SDK local). Dispara:
-#   - manualmente (workflow_dispatch), o
-#   - al pushear un tag v* (p. ej. v0.1.0).
-# Artifact resultante: porcipeso-debug-apk (app-debug.apk instalable).
+#   - manualmente (workflow_dispatch)  -> APK DEBUG (artifact porcipeso-debug-apk)
+#   - al pushear un tag v* (ej v2.1.0) -> APK RELEASE FIRMADO + GitHub Release
+#
+# Versionado: la fuente única es el archivo VERSION de la raíz.
+#   - versionName = contenido de VERSION (env PORCIPESO_VERSION)
+#   - versionCode = número de commits (git rev-list --count HEAD,
+#     env PORCIPESO_VERSION_CODE) -> monótono creciente en cada release.
+# Firma: keystore en secrets (ANDROID_KEYSTORE_BASE64 + passwords);
+# el original vive FUERA del repo en ~/porcipeso_secrets del operador.
 name: android-apk
 
 on:
@@ -11,6 +17,9 @@ on:
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: write # crear/actualizar el GitHub Release en tags
 
 jobs:
   build:
@@ -20,6 +29,19 @@ jobs:
         working-directory: mobile
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # historial completo para calcular versionCode
+
+      - name: Versión (archivo VERSION -> env)
+        id: version
+        working-directory: .
+        run: |
+          VERSION="$(tr -d ' \n' < VERSION)"
+          CODE="$(git rev-list --count HEAD)"
+          echo "PORCIPESO_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PORCIPESO_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "PorciPeso v$VERSION (versionCode $CODE)"
 
       - name: Java 17 (Gradle / AGP de Capacitor 6)
         uses: actions/setup-java@v4
@@ -49,13 +71,18 @@ jobs:
       - name: Capacitor sync
         run: npx cap sync android
 
+      # ------------------------------------------------------------------
+      # workflow_dispatch -> DEBUG (sin firma de release)
+      # ------------------------------------------------------------------
       - name: Compilar APK debug
+        if: github.ref_type != 'tag'
         working-directory: mobile/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Subir APK
+      - name: Subir APK debug
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: porcipeso-debug-apk
@@ -63,34 +90,42 @@ jobs:
           if-no-files-found: error
 
       # ------------------------------------------------------------------
-      # Release FIRMADO (pendiente de keystore) — pasos de referencia:
-      #
-      # 1. Generar el keystore UNA vez (guardarlo fuera del repo):
-      #      keytool -genkey -v -keystore porcipeso.keystore \
-      #        -alias porcipeso -keyalg RSA -keysize 2048 -validity 10000
-      # 2. Crear secrets del repo:
-      #      ANDROID_KEYSTORE_B64   (base64 -i porcipeso.keystore)
-      #      ANDROID_KEYSTORE_PASS, ANDROID_KEY_ALIAS, ANDROID_KEY_PASS
-      # 3. Descomentar:
-      #
-      # - name: Compilar APK release firmado
-      #   working-directory: mobile/android
-      #   env:
-      #     KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-      #     KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
-      #     KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      #     KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
-      #   run: |
-      #     echo "$KEYSTORE_B64" | base64 -d > porcipeso.keystore
-      #     ./gradlew assembleRelease --no-daemon \
-      #       -Pandroid.injected.signing.store.file=$PWD/porcipeso.keystore \
-      #       -Pandroid.injected.signing.store.password=$KEYSTORE_PASS \
-      #       -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
-      #       -Pandroid.injected.signing.key.password=$KEY_PASS
-      #
-      # - name: Subir APK release
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: porcipeso-release-apk
-      #     path: mobile/android/app/build/outputs/apk/release/app-release.apk
+      # tag v* -> RELEASE FIRMADO + GitHub Release
       # ------------------------------------------------------------------
+      - name: Decodificar keystore (secret -> archivo temporal)
+        if: github.ref_type == 'tag'
+        working-directory: mobile/android
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/porcipeso-release.keystore"
+          echo "PORCIPESO_KEYSTORE_FILE=$RUNNER_TEMP/porcipeso-release.keystore" >> "$GITHUB_ENV"
+
+      - name: Compilar APK release firmado
+        if: github.ref_type == 'tag'
+        working-directory: mobile/android
+        env:
+          PORCIPESO_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          PORCIPESO_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          PORCIPESO_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          cp "$APK" "$RUNNER_TEMP/porcipeso-v${PORCIPESO_VERSION}.apk"
+          rm -f "$RUNNER_TEMP/porcipeso-release.keystore"
+
+      - name: Subir APK release (artifact)
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: porcipeso-release-apk
+          path: ${{ runner.temp }}/porcipeso-v${{ steps.version.outputs.version }}.apk
+          if-no-files-found: error
+
+      - name: Crear/actualizar GitHub Release con el APK
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PorciPeso ${{ github.ref_name }}
+          files: ${{ runner.temp }}/porcipeso-v${{ steps.version.outputs.version }}.apk
+          fail_on_unmatched_files: true

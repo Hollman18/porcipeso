@@ -28,7 +28,10 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from porcipeso.api import cloudauth
 from porcipeso.api.simlive import SimLiveScale
+from porcipeso.api.syncworker import SyncWorker
+from porcipeso.api.updatecheck import router as update_router
 from porcipeso.core.interfaces import Engine
 from porcipeso.core.models import EngineConfig, Reading, ScaleProfile, WeighEvent
 from porcipeso.db.repo import Repo
@@ -126,6 +129,27 @@ class MotivoBody(BaseModel):
     motivo: str
 
 
+class CloudProbeBody(BaseModel):
+    cloud_url: str
+    tenant: Optional[str] = None
+
+
+class CloudLoginBody(BaseModel):
+    cloud_url: str
+    tenant: Optional[str] = None
+    email: str
+    password: str
+
+
+class CloudSessionBody(BaseModel):
+    cloud_url: str
+    tenant: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: str
+    expires_in: Optional[float] = None
+    perfil: Optional[dict[str, Any]] = None
+
+
 class SimActionBody(BaseModel):
     action: Literal["pigs_on", "pig_off", "nervous", "silence"]
     n: Optional[int] = None            # pigs_on (default 1)
@@ -163,12 +187,15 @@ def create_app(
 ) -> FastAPI:
     repo = Repo(db_path, store_readings=store_readings)
     hub = Hub()
+    sync_worker = SyncWorker(repo)
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         hub.loop = asyncio.get_running_loop()
+        sync_worker.start()
         yield
         stop_driver()
+        sync_worker.stop()
         repo.close()
 
     app = FastAPI(title="PorciPeso", version="0.1.0", lifespan=lifespan)
@@ -187,6 +214,7 @@ def create_app(
     st.last_reading_broadcast = 0.0
     st.sim = None                 # SimLiveScale activa (o None)
     st.event_id_map = {}          # id de DB -> id interno del engine
+    st.sync_worker = sync_worker  # sync a la nube (dormido sin sesión)
 
     # ----------------------------------------------------------- wiring motor
 
@@ -469,6 +497,7 @@ def create_app(
                        "count": closed["total_animales"] or 0,
                        "total_kg": closed["total_kg"] or 0.0,
                        "pending": 0, "fase": "lote"})
+        sync_worker.request_push()  # sube el cierre a la nube sin esperar 60 s
         return closed
 
     @app.get("/api/sessions/{session_id}/events")
@@ -525,6 +554,79 @@ def create_app(
             },
         )
 
+    # ------------------------------------------------------- nube (opcional)
+    # La UI habla con la nube SIEMPRE a través de estos endpoints locales
+    # (mismo origen ⇒ sin CORS) y el TokenBox del worker es el único
+    # dueño del refresh (rotativo: dos refrescadores se pisarían).
+
+    @app.post("/api/cloud/probe")
+    def cloud_probe(body: CloudProbeBody) -> dict[str, Any]:
+        """Prueba GET /health + GET /config/app?tenant=… de la nube."""
+        return cloudauth.cloud_probe(body.cloud_url, body.tenant or "")
+
+    @app.post("/api/cloud/login")
+    def cloud_login(body: CloudLoginBody) -> dict[str, Any]:
+        """Proxy de login: autentica, configura el sync worker y retorna
+        {perfil, access_token, refresh_token, expires_in} a la UI."""
+        try:
+            pair = cloudauth.cloud_login(body.cloud_url, body.email, body.password)
+        except cloudauth.CloudOffline as exc:
+            raise HTTPException(504, f"sin conexión con la nube: {exc.detail}")
+        except cloudauth.CloudError as exc:
+            raise HTTPException(exc.status or 502, exc.detail or "error de la nube")
+        access = str(pair.get("access_token") or "")
+        refresh = str(pair.get("refresh_token") or "")
+        expires_in = float(pair.get("expires_in") or 1800)
+        perfil = cloudauth.perfil_from_token(access, email=body.email)
+        sync_worker.set_session(
+            body.cloud_url, body.tenant or "", access, refresh,
+            expires_in=expires_in, perfil=perfil,
+        )
+        return {
+            "perfil": perfil,
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_in": expires_in,
+        }
+
+    @app.post("/api/cloud/session")
+    def cloud_session(body: CloudSessionBody) -> dict[str, Any]:
+        """La UI entrega los tokens al worker (p. ej. login hecho aparte
+        o re-siembra tras un reinicio con refresh cacheado)."""
+        sync_worker.set_session(
+            body.cloud_url, body.tenant or "",
+            body.access_token or "", body.refresh_token,
+            expires_in=body.expires_in, perfil=body.perfil,
+        )
+        return {"ok": True, "device_id": sync_worker.device_id}
+
+    @app.delete("/api/cloud/session")
+    def cloud_logout() -> dict[str, Any]:
+        """Logout: revoca el refresh en la nube (best-effort) y lo borra.
+        Los pesajes locales y el marcador de sync quedan intactos."""
+        sync_worker.clear_session()
+        return {"ok": True}
+
+    @app.get("/api/cloud/token")
+    def cloud_token() -> dict[str, Any]:
+        """Access vigente para la UI (refresca el worker si hace falta)."""
+        if not sync_worker.configured:
+            raise HTTPException(409, "nube sin sesión")
+        try:
+            sync_worker.tokens.get_access()
+        except cloudauth.SessionExpired:
+            raise HTTPException(401, "sesión vencida: inicia sesión de nuevo")
+        except cloudauth.CloudOffline:
+            raise HTTPException(504, "sin conexión con la nube")
+        except cloudauth.CloudError as exc:
+            raise HTTPException(exc.status or 502, exc.detail or "error de la nube")
+        snap = sync_worker.tokens.snapshot()
+        return {**snap, "perfil": sync_worker.perfil()}
+
+    @app.get("/api/cloud/status")
+    def cloud_status() -> dict[str, Any]:
+        return {**sync_worker.status(), "perfil": sync_worker.perfil()}
+
     # -------------------------------------------------------------- websocket
 
     @app.websocket("/ws")
@@ -540,6 +642,8 @@ def create_app(
             pass
         finally:
             hub.unregister(ws)
+
+    app.include_router(update_router)  # GET /api/update/status
 
     # UI estática del operador (Task 4); puede no existir aún.
     if STATIC_DIR.is_dir():
