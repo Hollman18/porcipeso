@@ -1,23 +1,31 @@
 /**
- * Detector de señal directa/invertida (y barrido de baudios en USB).
+ * Detector de señal (y barrido de baudios en USB) — 4 COMBINACIONES:
+ * normal / números al revés (reverse_frame) / bits invertidos
+ * (invert_bits) / ambas. Por velocidad:
  *
- * Algoritmo por velocidad:
- *   1. Escucha `windowMs` y captura los bytes crudos (emitiendo HEX en
- *      vivo vía onHex para el panel del wizard).
- *   2. Analiza la captura en DIRECTA: ¿algún parser registrado saca una
- *      lectura válida? ¿o al menos hay patrón de peso (0x30-0x39/0x2E
- *      recurrentes)?
- *   3. Si no, aplica ~b & 0xFF (INVERTIDA) sobre la misma captura y
- *      repite el análisis. La inversión es determinista byte a byte, así
- *      que analizar la misma ventana equivale a escuchar otra ventana —
- *      y responde en la mitad del tiempo.
+ *   1. Escucha `windowMs` y captura los bytes crudos (HEX en vivo vía
+ *      onHex para el panel del wizard).
+ *   2. Sobre la MISMA captura prueba polaridad × orden-de-caracteres ×
+ *      todos los parsers registrados (ambas transformaciones son
+ *      deterministas, así que no hace falta re-escuchar por combo).
+ *   3. Elige por PLAUSIBILIDAD (ver tokenFormScore): parser válido con
+ *      ≥2 tramas + heurística del punto decimal — un peso real no tiene
+ *      forma "0.4321" (punto y 4 decimales) ni "001" (ceros a la
+ *      izquierda). La forma se evalúa EN LA INTERPRETACIÓN EFECTIVA de
+ *      cada candidato, así los parsers que ya invierten solos (XK3190 /
+ *      Matrix Adr99) compiten en igualdad y el punto decimal desempata.
  *   4. En USB se repite por cada velocidad (2 s c/u); en Bluetooth la
  *      velocidad la fija el módulo HC-05 y solo hay una ventana de 3 s.
  *
- * Veredictos → mensajes en humano (ver DETECT_MESSAGES).
+ * Veredictos → mensajes en humano (ver buildMessage / DETECT_MESSAGES).
  */
-import type { ScaleProfile } from "./models";
-import { PARSER_REGISTRY } from "./parsers";
+import type { Reading, ScaleProfile } from "./models";
+import {
+  asciiDecode,
+  PARSER_REGISTRY,
+  reverseFrameActive,
+  reverseString,
+} from "./parsers";
 import type { ByteTransport } from "./serial";
 import { invertBytes, toHex, weightPattern } from "./signal";
 
@@ -25,11 +33,17 @@ export type DetectVerdict = "directa" | "invertida" | "sin_peso" | "sin_datos";
 
 export interface DetectResult {
   ok: boolean;
+  /** Polaridad eléctrica elegida (compat: "invertida" = invert_bits). */
   verdict: DetectVerdict;
   kg: number | null;
   baudrate: number | null;
   invert_bits: boolean;
+  /** Orden de caracteres al revés detectado ("001" = 100). */
+  reverse_frame: boolean;
   parser_ok: boolean; // true si un parser registrado entendió la trama
+  /** QUÉ parser entendió la trama (clave de PARSER_REGISTRY) — es lo que
+   *  el perfil "auto" del flujo Bluetooth guarda para reconectar. */
+  parser: string | null;
   message: string;
   hex: string; // últimos bytes crudos capturados
 }
@@ -61,68 +75,179 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out;
 }
 
-interface PolarityAnalysis {
-  parserOk: boolean;
-  kg: number | null;
-  weightLike: boolean;
+// ------------------------------------------------------- plausibilidad
+
+/**
+ * Puntúa la FORMA de un token numérico tal como quedaría interpretado.
+ * Heurística del punto decimal del cliente: un peso real casi nunca es
+ * "0.4321" (4 decimales) ni "001" (ceros a la izquierda sin punto).
+ *
+ *   +1  forma natural: (0|[1-9]…)(.dd)? — 0-2 decimales, sin ceros raros
+ *    0  numérico pero raro sin ser descarte (ej. "07.5")
+ *   −2  no-numérico bien formado ("1.2.3"), > 20000, > 2 decimales,
+ *       o ceros a la IZQUIERDA sin punto ("001")
+ */
+export function tokenFormScore(token: string): number {
+  if (!/^\d+(\.\d+)?$/.test(token)) return -2;
+  const value = Number(token);
+  if (!Number.isFinite(value) || value > 20000) return -2;
+  const dot = token.indexOf(".");
+  const decimals = dot < 0 ? 0 : token.length - dot - 1;
+  if (decimals > 2) return -2;
+  if (dot < 0 && /^0\d/.test(token)) return -2;
+  return /^(0|[1-9]\d*)(\.\d{1,2})?$/.test(token) ? 1 : 0;
 }
 
-/** Analiza UNA polaridad: parser del perfil → cualquier parser → heurística. */
-export function analyzeBytes(profile: ScaleProfile, data: Uint8Array): PolarityAnalysis {
+function numericTokens(text: string): string[] {
+  return (text.match(/[0-9.]{2,}/g) ?? []).slice(0, 40);
+}
+
+/** Promedio de tokenFormScore, con los tokens leídos en la reversa dada. */
+function comboFormScore(tokens: string[], reversed: boolean): number {
+  if (!tokens.length) return 0;
+  let sum = 0;
+  for (const t of tokens) sum += tokenFormScore(reversed ? reverseString(t) : t);
+  return sum / tokens.length;
+}
+
+export interface Candidate {
+  parser: string;
+  kg: number;
+  invert: boolean; // invert_bits aplicado
+  reverse: boolean; // reverse_frame aplicado
+  score: number;
+}
+
+/**
+ * Prueba las 4 combinaciones (normal / reverse_frame / invert_bits /
+ * ambas) × todos los parsers registrados y puntúa cada candidato:
+ *
+ *   score = 3 (parser válido: ≥2 tramas finitas, kg ∈ [0, 20000])
+ *         + formScore promedio de la INTERPRETACIÓN EFECTIVA
+ *           (reverse del combo XOR lo que el parser invierte solo)
+ *         + 0.5 si es el parser del perfil elegido (no-auto)
+ *         − 0.25 por corrección aplicada (reverse, invert) → a igual
+ *           plausibilidad gana la interpretación más simple
+ */
+export function analyzeCombos(
+  profile: ScaleProfile,
+  data: Uint8Array,
+): { best: Candidate | null; weightLikeInvert: boolean | null } {
   const keys = Object.keys(PARSER_REGISTRY);
-  // el parser del perfil elegido primero: su lectura es la que se reporta
   const ordered = keys.includes(profile.parser)
     ? [profile.parser, ...keys.filter((k) => k !== profile.parser)]
     : keys;
-  const looksLikeWeight = weightPattern(data).looksLikeWeight;
-  for (const key of ordered) {
-    // El regex genérico acepta cualquier "línea" con un dígito: sobre ruido
-    // binario da falsos positivos, así que solo cuenta si la captura además
-    // pasa la heurística de trama ASCII de peso.
-    if (key === "generic_regex" && !looksLikeWeight) continue;
-    try {
-      const parser = new PARSER_REGISTRY[key]({ ...profile, parser: key });
-      const readings = parser.push(data).filter((r) => Number.isFinite(r.kg));
-      // Se exigen >= 2 tramas válidas: una sola coincidencia sobre ruido
-      // (p. ej. el regex genérico ante una "línea" casual con dígitos) no
-      // debe declarar la polaridad como correcta.
-      if (readings.length >= 2) {
-        return { parserOk: true, kg: readings[readings.length - 1].kg, weightLike: true };
+  const baseExtra: Record<string, unknown> = { ...profile.extra };
+  delete baseExtra["invert_bits"]; // las transformaciones las pone el combo
+  delete baseExtra["reverse_frame"];
+
+  let best: Candidate | null = null;
+  let weightLikeInvert: boolean | null = null;
+
+  for (const invert of [false, true]) {
+    const bytes = invert ? invertBytes(data) : data;
+    const looksLikeWeight = weightPattern(bytes).looksLikeWeight;
+    if (looksLikeWeight && weightLikeInvert === null) weightLikeInvert = invert;
+    const tokens = numericTokens(asciiDecode(bytes));
+
+    for (const reverse of [false, true]) {
+      for (const key of ordered) {
+        // El regex genérico acepta cualquier "línea" con un dígito: sobre
+        // ruido binario da falsos positivos, así que solo cuenta si la
+        // captura además pasa la heurística de trama ASCII de peso.
+        if (key === "generic_regex" && !looksLikeWeight) continue;
+        const variant: ScaleProfile = {
+          ...profile,
+          parser: key,
+          extra: { ...baseExtra, reverse_frame: reverse },
+        };
+        let readings: Reading[];
+        try {
+          readings = new PARSER_REGISTRY[key](variant)
+            .push(bytes)
+            .filter((r) => Number.isFinite(r.kg));
+        } catch {
+          continue; // un parser que no aplica no corta el análisis
+        }
+        // ≥2 tramas válidas: una coincidencia casual sobre ruido no cuenta
+        if (readings.length < 2) continue;
+        const kg = readings[readings.length - 1].kg;
+        if (kg < 0 || kg > 20000) continue;
+        // La forma se evalúa como el parser LEE los dígitos: XOR entre la
+        // reversa del combo y la que el parser aplica de fábrica (XK3190 /
+        // extra.reversed legado). Así "= 126.35" leído por xk3190 puntúa
+        // como "53.621" (mal) y por matrix como "126.35" (bien) — el punto
+        // decimal desempata a los parsers auto-invertidos.
+        const effectiveReverse = reverseFrameActive(variant, key === "xk3190_a12e");
+        const score =
+          3 +
+          comboFormScore(tokens, effectiveReverse) +
+          (key === profile.parser ? 0.5 : 0) -
+          0.25 * (Number(reverse) + Number(invert));
+        if (best === null || score > best.score) {
+          best = { parser: key, kg, invert, reverse, score };
+        }
       }
-    } catch {
-      /* un parser que no aplica no corta el análisis */
     }
   }
-  return { parserOk: false, kg: null, weightLike: looksLikeWeight };
+  return { best, weightLikeInvert };
 }
 
-function verdictFor(
-  polarity: "directa" | "invertida",
-  a: PolarityAnalysis,
+/** Mensaje en humano según las correcciones aplicadas. */
+function buildMessage(c: Candidate, baudTxt: string): string {
+  const kg = fmtKg(c.kg);
+  if (c.invert && c.reverse) {
+    return `✓ Señal eléctrica invertida y números al revés — corregido: la báscula responde ${kg} kg${baudTxt}`;
+  }
+  if (c.invert) {
+    return `✓ Señal INVERTIDA detectada y corregida — báscula responde: ${kg} kg${baudTxt}`;
+  }
+  if (c.reverse) {
+    return `✓ Los números venían al revés — corregido: la báscula responde ${kg} kg${baudTxt}`;
+  }
+  return `✓ La báscula responde: ${kg} kg (señal directa${baudTxt})`;
+}
+
+function candidateResult(
+  c: Candidate,
   baud: number | null,
   sweep: boolean,
   hex: string,
 ): DetectResult {
   const baudTxt = sweep && baud != null ? ` a ${baud} baudios` : "";
-  const inverted = polarity === "invertida";
-  let message: string;
-  if (a.parserOk && a.kg !== null) {
-    message = inverted
-      ? `✓ Señal INVERTIDA detectada y corregida — báscula responde: ${fmtKg(a.kg)} kg${baudTxt}`
-      : `✓ La báscula responde: ${fmtKg(a.kg)} kg (señal directa${baudTxt})`;
-  } else {
-    message =
-      `✓ Llegan datos de peso (señal ${polarity}${baudTxt}), pero el modelo elegido ` +
-      "no entiende la trama — revisa la marca y el modelo en el paso 2.";
-  }
   return {
     ok: true,
-    verdict: polarity,
-    kg: a.kg,
+    verdict: c.invert ? "invertida" : "directa",
+    kg: c.kg,
     baudrate: baud,
-    invert_bits: inverted,
-    parser_ok: a.parserOk,
-    message,
+    invert_bits: c.invert,
+    reverse_frame: c.reverse,
+    parser_ok: true,
+    parser: c.parser,
+    message: buildMessage(c, baudTxt),
+    hex,
+  };
+}
+
+function weightLikeResult(
+  invert: boolean,
+  baud: number | null,
+  sweep: boolean,
+  hex: string,
+): DetectResult {
+  const baudTxt = sweep && baud != null ? ` a ${baud} baudios` : "";
+  return {
+    ok: true,
+    verdict: invert ? "invertida" : "directa",
+    kg: null,
+    baudrate: baud,
+    invert_bits: invert,
+    reverse_frame: false,
+    parser_ok: false,
+    parser: null,
+    message:
+      `✓ Llegan datos de peso (señal ${invert ? "invertida" : "directa"}${baudTxt}), ` +
+      "pero el modelo elegido no entiende la trama — revisa la marca y el modelo en el paso 2.",
     hex,
   };
 }
@@ -188,24 +313,21 @@ export async function detectSignal(opts: DetectOptions): Promise<DetectResult> {
     if (data.length === 0) {
       result = {
         ok: false, verdict: "sin_datos", kg: null, baudrate: baud,
-        invert_bits: false, parser_ok: false,
-        message: DETECT_MESSAGES.sin_datos, hex,
+        invert_bits: false, reverse_frame: false, parser_ok: false,
+        parser: null, message: DETECT_MESSAGES.sin_datos, hex,
       };
     } else {
-      const direct = analyzeBytes(opts.profile, data);
-      if (direct.parserOk || direct.weightLike) {
-        result = verdictFor("directa", direct, baud, sweep, hex);
+      const { best: candidate, weightLikeInvert } = analyzeCombos(opts.profile, data);
+      if (candidate !== null) {
+        result = candidateResult(candidate, baud, sweep, hex);
+      } else if (weightLikeInvert !== null) {
+        result = weightLikeResult(weightLikeInvert, baud, sweep, hex);
       } else {
-        const inverted = analyzeBytes(opts.profile, invertBytes(data));
-        if (inverted.parserOk || inverted.weightLike) {
-          result = verdictFor("invertida", inverted, baud, sweep, hex);
-        } else {
-          result = {
-            ok: false, verdict: "sin_peso", kg: null, baudrate: baud,
-            invert_bits: false, parser_ok: false,
-            message: DETECT_MESSAGES.sin_peso, hex,
-          };
-        }
+        result = {
+          ok: false, verdict: "sin_peso", kg: null, baudrate: baud,
+          invert_bits: false, reverse_frame: false, parser_ok: false,
+          parser: null, message: DETECT_MESSAGES.sin_peso, hex,
+        };
       }
     }
 

@@ -44,6 +44,22 @@ export const SIM_PROFILE: ScaleProfile = {
   extra: {},
 };
 
+/**
+ * Perfil pseudo "auto" — flujo Bluetooth a prueba de tontos: el usuario
+ * NUNCA elige marca. El detector prueba TODOS los parsers registrados ×
+ * las dos polaridades; el parser y la polaridad que matchearon se guardan
+ * en la config del cliente (cfg.parser / cfg.invert_bits) y viajan en el
+ * body de /api/scale/connect (body.parser + body.invert_bits).
+ */
+export const AUTO_PROFILE: ScaleProfile = {
+  id: "auto",
+  name: "Báscula Bluetooth (detección automática)",
+  brand: "PorciPeso",
+  parser: "auto", // se reemplaza por el parser detectado al conectar
+  transport: "serial",
+  extra: {},
+};
+
 // ----------------------------------------------------------------- WS shim
 
 type WsLikeEvent = { data: string };
@@ -533,13 +549,31 @@ export class LocalBackend {
     const profileId = String(body["profile_id"] ?? "");
     if (profileId === "sim" || profileId === "simulador") return this.simStart();
 
-    const found = this.profiles.find((p) => p.id === profileId);
-    if (!found) return err(404, `perfil desconocido: ${profileId}`);
-    const profile: ScaleProfile = { ...found, extra: { ...found.extra } };
+    let profile: ScaleProfile;
+    if (profileId === "auto") {
+      // Flujo Bluetooth automático: el parser lo decidió el detector.
+      const parserKey = String(body["parser"] ?? "");
+      if (!isParserSupported(parserKey)) {
+        return err(
+          400,
+          "el perfil 'auto' necesita el parser detectado (body.parser): " +
+            "corre primero la detección (POST /api/scale/detect)",
+        );
+      }
+      profile = { ...AUTO_PROFILE, parser: parserKey, extra: {} };
+    } else {
+      const found = this.profiles.find((p) => p.id === profileId);
+      if (!found) return err(404, `perfil desconocido: ${profileId}`);
+      profile = { ...found, extra: { ...found.extra } };
+    }
     if (body["port"]) profile.port = String(body["port"]);
     // Señal invertida (wizard paso 3 / detector): pisa lo que diga el catálogo.
     if (body["invert_bits"] !== undefined && body["invert_bits"] !== null) {
       profile.extra["invert_bits"] = Boolean(body["invert_bits"]);
+    }
+    // Números al revés (toggle 🔁 / detector): orden de caracteres de la trama.
+    if (body["reverse_frame"] !== undefined && body["reverse_frame"] !== null) {
+      profile.extra["reverse_frame"] = Boolean(body["reverse_frame"]);
     }
     // Baudios elegidos en el wizard (solo tiene efecto en USB/OTG).
     if (body["baudrate"] != null && Number.isFinite(Number(body["baudrate"]))) {
@@ -621,11 +655,18 @@ export class LocalBackend {
    */
   private async scaleDetect(body: Record<string, unknown>): Promise<JsonResponse> {
     const profileId = String(body["profile_id"] ?? "");
-    const found = this.profiles.find((p) => p.id === profileId);
-    if (!found) return err(404, `perfil desconocido: ${profileId}`);
-    const profile: ScaleProfile = { ...found, extra: { ...found.extra } };
-    delete profile.extra["invert_bits"]; // la polaridad la decide el detector
-    if (!isParserSupported(profile.parser)) return this.unsupportedProfileError(profile);
+    let profile: ScaleProfile;
+    if (profileId === "auto" || profileId === "") {
+      // detección sin marca: se prueban TODOS los parsers registrados
+      profile = { ...AUTO_PROFILE, extra: {} };
+    } else {
+      const found = this.profiles.find((p) => p.id === profileId);
+      if (!found) return err(404, `perfil desconocido: ${profileId}`);
+      profile = { ...found, extra: { ...found.extra } };
+      delete profile.extra["invert_bits"]; // la polaridad la decide el detector
+      delete profile.extra["reverse_frame"]; // el orden también (reversed legado se queda)
+      if (!isParserSupported(profile.parser)) return this.unsupportedProfileError(profile);
+    }
 
     const kind = String(body["transport"] ?? "bluetooth") === "usb" ? "usb" : "bluetooth";
     const address = String(body["port"] ?? "").trim();

@@ -56,10 +56,33 @@ export abstract class FrameParser {
 }
 
 /** Decodifica bytes como ASCII con reemplazo (paridad con decode("ascii","replace")). */
-function asciiDecode(bytes: Uint8Array): string {
+export function asciiDecode(bytes: Uint8Array): string {
   let s = "";
   for (const b of bytes) s += b < 0x80 ? String.fromCharCode(b) : "�";
   return s;
+}
+
+/**
+ * ¿Hay que invertir el ORDEN de los caracteres del contenido de la trama?
+ *
+ * `extra.reverse_frame` es el mecanismo GENERAL (la báscula manda "0.4321"
+ * cuando el peso es "1234.0", o "001" cuando es "100"). Se combina por XOR
+ * con lo que el parser ya invierte de fábrica (`base` = forcedReversed del
+ * XK3190, o el `extra.reversed` legado del Matrix Adr 99): activarlo sobre
+ * un parser que YA invierte vuelve al orden normal. Independiente de
+ * `extra.invert_bits` (polaridad eléctrica, signal.ts) — pueden coexistir.
+ *
+ * Punto único por lado: nivel parser (los límites de trama viven aquí);
+ * espejo escritorio en porcipeso/drivers/parsers.py:reverse_frame_active().
+ * Solo tramas de TEXTO (matrix-style y por líneas).
+ */
+export function reverseFrameActive(profile: ScaleProfile, base = false): boolean {
+  const legacy = base || Boolean(profile.extra["reversed"]);
+  return legacy !== Boolean(profile.extra["reverse_frame"]);
+}
+
+export function reverseString(s: string): string {
+  return s.split("").reverse().join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +95,8 @@ export class MatrixParser extends FrameParser {
   protected readonly FRAME_LEN = 8;
 
   private isReversed(): boolean {
-    return this.forcedReversed || Boolean(this.profile.extra["reversed"]);
+    // reverse_frame (general) XOR reversed/forzado (legado del perfil)
+    return reverseFrameActive(this.profile, this.forcedReversed);
   }
 
   protected extract(): Reading[] {
@@ -87,7 +111,7 @@ export class MatrixParser extends FrameParser {
       if (this.buf.length < this.FRAME_LEN) break;
       const payload = asciiDecode(this.buf.slice(1, this.FRAME_LEN));
       let text = payload.trim();
-      if (this.isReversed()) text = text.split("").reverse().join("");
+      if (this.isReversed()) text = reverseString(text);
       const kg = pyFloat(text);
       if (kg === null) {
         this.buf = this.buf.slice(1); // basura tras '=': resincronizar
@@ -141,7 +165,10 @@ export class GenericRegexParser extends FrameParser {
       if (idx < 0) break;
       const line = this.buf.slice(0, idx);
       this.buf = this.buf.slice(idx + 1);
-      const text = asciiDecode(line);
+      // extra.reverse_frame: la línea llega con los caracteres al revés
+      // ("001" = 100) — se corrige aquí, antes del regex.
+      let text = asciiDecode(line);
+      if (reverseFrameActive(this.profile)) text = reverseString(text);
       if (!text.trim()) continue;
       const m = this.re.exec(text);
       if (!m || m[1] === undefined) continue;

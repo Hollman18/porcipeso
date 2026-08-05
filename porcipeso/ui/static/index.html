@@ -286,26 +286,23 @@
           <li class="ws" id="wsDot3"><span class="n">3</span> Dirección</li>
         </ol>
 
-        <!-- PASO 1: método -->
+        <!-- PASO 1: UNA sola pregunta. La visibilidad por plataforma la
+             maneja app.js: OTG solo en la app Android; Cable serial solo
+             en escritorio (COM/tty y conversor de red viven ahí). -->
         <div class="wizpane active" id="wizPane1">
-          <h3 class="wizq">¿Cómo se conecta tu báscula?</h3>
-          <p class="wizsub">Si no estás seguro, mira qué sale del indicador de peso.</p>
+          <h3 class="wizq">¿Cómo la vas a conectar?</h3>
           <div class="methodgrid">
             <button class="methodcard" data-method="bluetooth">
               <span class="m-ic">📶</span><span class="m-t">Bluetooth</span>
-              <span class="m-d">Con adaptador BLU2 — sin cables hasta el teléfono o computador</span>
+              <span class="m-d">El módulo Bluetooth de la báscula (BLU2, HC-05, Bolutek…)</span>
             </button>
-            <button class="methodcard" data-method="cable">
-              <span class="m-ic">🔌</span><span class="m-t">Cable</span>
-              <span class="m-d">Cable USB-serial al computador, o al teléfono con adaptador OTG</span>
+            <button class="methodcard" data-method="otg" hidden>
+              <span class="m-ic">🔌</span><span class="m-t">OTG</span>
+              <span class="m-d">Cable USB al celular con adaptador OTG</span>
             </button>
-            <button class="methodcard" data-method="red">
-              <span class="m-ic">🌐</span><span class="m-t">Red</span>
-              <span class="m-d">Conversor ethernet o wifi — la báscula tiene una dirección IP</span>
-            </button>
-            <button class="methodcard" data-method="sim">
-              <span class="m-ic">🎛</span><span class="m-t">Simulada</span>
-              <span class="m-d">Para practicar sin báscula — todo funciona igual</span>
+            <button class="methodcard" data-method="serial" hidden>
+              <span class="m-ic">🖥</span><span class="m-t">Cable serial</span>
+              <span class="m-d">Al computador: puerto COM, /dev/tty o conversor de red</span>
             </button>
           </div>
         </div>

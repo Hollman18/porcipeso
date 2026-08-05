@@ -536,6 +536,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
       expect(res.json.verdict).toBe("invertida");
       expect(res.json.invert_bits).toBe(true);
       expect(res.json.parser_ok).toBe(true);
+      expect(res.json.parser).toBe("matrix");
       expect(res.json.kg).toBeCloseTo(126.35, 2);
       expect(res.json.message).toContain("INVERTIDA");
       await vi.advanceTimersByTimeAsync(10); // microtasks del hub
@@ -543,6 +544,85 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
       expect(detects[0].hex).toMatch(/^[0-9A-F]{2}( [0-9A-F]{2})*$/);
     } finally {
       ws.close();
+      await bt.repo.close();
+    }
+  });
+
+  it("POST /api/scale/detect con profile_id 'auto' detecta parser sin marca elegida", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    await import("../src/detector");
+    await import("../src/serial");
+    const chunk = stringToBytes("= 102.50= 102.50= 102.50");
+    const transport = {
+      label: "fake-bt",
+      open: async () => {},
+      read: async () => chunk,
+      close: async () => {},
+    };
+    const bt = await makeBackend({ serial: { makeTransport: async () => transport } });
+    try {
+      const p = call(bt, "POST", "/api/scale/detect", {
+        profile_id: "auto",
+        transport: "bluetooth",
+        port: "98:D3:31:F0:12:34",
+      });
+      let settled: Awaited<typeof p> | null = null;
+      void p.then((r) => (settled = r));
+      for (let i = 0; i < 100 && settled === null; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(res.json.ok).toBe(true);
+      expect(res.json.parser_ok).toBe(true);
+      expect(res.json.parser).toBe("matrix"); // detectado SIN elegir marca
+      expect(res.json.verdict).toBe("directa");
+      expect(res.json.kg).toBeCloseTo(102.5, 2);
+    } finally {
+      await bt.repo.close();
+    }
+  });
+
+  it("scale/connect perfil 'auto': exige body.parser y conecta con el detectado", async () => {
+    let got: any = null;
+    const bt = await makeBackend({
+      createBtDriver: async (profile, address) => {
+        got = { profile, address };
+        return { disconnect: async () => {}, isConnected: async () => true };
+      },
+    });
+    try {
+      // sin parser → instrucción clara de correr la detección primero
+      const bad = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "auto",
+        transport: "bluetooth",
+        port: "98:D3:31:F0:12:34",
+      });
+      expect(bad.status).toBe(400);
+      expect(bad.json.detail).toContain("detect");
+
+      // con el parser detectado + polaridad: conecta y arma el perfil auto
+      const res = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "auto",
+        parser: "matrix",
+        transport: "bluetooth",
+        port: "98:D3:31:F0:12:34",
+        invert_bits: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({
+        connected: true, profile_id: "auto", transport: "bluetooth",
+      });
+      expect(got.profile.id).toBe("auto");
+      expect(got.profile.parser).toBe("matrix");
+      expect(got.profile.extra.invert_bits).toBe(true);
+      expect(got.address).toBe("98:D3:31:F0:12:34");
+
+      const status = await call(bt, "GET", "/api/scale/status");
+      expect(status.json.connected).toBe(true);
+      expect(status.json.profile_id).toBe("auto");
+    } finally {
+      await bt.stopDriver();
       await bt.repo.close();
     }
   });

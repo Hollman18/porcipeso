@@ -56,6 +56,27 @@ class _BufferedParser(FrameParser):
                        scale_id=self.profile.id, stable_flag=stable)
 
 
+def reverse_frame_active(profile: ScaleProfile, base: bool = False) -> bool:
+    """¿Hay que invertir el ORDEN de los caracteres del contenido de la trama?
+
+    ``extra.reverse_frame`` es el mecanismo GENERAL (la báscula manda
+    "0.4321" cuando el peso es "1234.0", o "001" cuando es "100").
+    Se combina por XOR con lo que el parser ya invierte de fábrica
+    (``base`` = _forced_reversed del XK3190, o el ``extra.reversed``
+    legado del Matrix Adr 99): activar reverse_frame sobre un parser que
+    YA invierte vuelve al orden normal — es un toggle "encima" del
+    default del perfil. Independiente de extra.invert_bits (polaridad
+    eléctrica, runner.ingress): pueden coexistir.
+
+    Punto único por lado: aquí a nivel parser (los límites de trama viven
+    aquí) — espejo móvil en mobile/src/parsers.ts:reverseFrameActive().
+    Aplica solo a tramas de TEXTO (matrix-style y protocolos por línea);
+    los binarios (modbus, toledo) no tienen "orden de caracteres".
+    """
+    legacy = base or bool(profile.extra.get("reversed"))
+    return legacy != bool(profile.extra.get("reverse_frame"))
+
+
 class _LineParser(_BufferedParser):
     """Base para protocolos orientados a línea (CR, LF o CRLF)."""
 
@@ -64,6 +85,10 @@ class _LineParser(_BufferedParser):
     def _extract(self) -> list[Reading]:
         out: list[Reading] = []
         term = set(self.terminators)
+        # extra.reverse_frame: el contenido de CADA línea llega con los
+        # caracteres al revés ("001" = 100) — se corrige aquí, en el punto
+        # único por donde pasan TODOS los parsers de línea, antes de parsear.
+        reverse = reverse_frame_active(self.profile)
         while True:
             idx = next((i for i, b in enumerate(self._buf) if b in term), -1)
             if idx < 0:
@@ -72,7 +97,7 @@ class _LineParser(_BufferedParser):
             del self._buf[: idx + 1]
             if not line.strip():
                 continue
-            reading = self._parse_line(line)
+            reading = self._parse_line(line[::-1] if reverse else line)
             if reading is not None:
                 out.append(reading)
         return out
@@ -91,7 +116,9 @@ class MatrixParser(_BufferedParser):
     FRAME_LEN = 8
 
     def _is_reversed(self) -> bool:
-        return self._forced_reversed or bool(self.profile.extra.get("reversed"))
+        # reverse_frame (general) XOR reversed/forzado (legado del perfil):
+        # ver reverse_frame_active().
+        return reverse_frame_active(self.profile, self._forced_reversed)
 
     def _extract(self) -> list[Reading]:
         out: list[Reading] = []

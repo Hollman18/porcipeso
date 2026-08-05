@@ -549,3 +549,16 @@ body.rol-operador #bVerDatos{display:none !important}
 .clean-confirm{margin-top:10px;padding:12px 14px;border-radius:12px;border:2px solid var(--red)}
 .clean-warn{font-weight:700;color:var(--red);margin-bottom:10px}
 .btn-danger{background:var(--red);color:#fff;border:none}
+
+/* ============ flujo de conexión v2 ============ */
+.methodcard[hidden]{display:none !important}   /* tarjetas por plataforma */
+details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag avanzado */
+.wizsteps[hidden]{display:none !important}      /* BT automático: sin pasos */
+.bt-auto-status{margin:10px 0;font-size:16px;font-weight:600}
+.btn-link.discreet{font-size:13px;color:var(--muted)}
+
+/* ============ 🔁 números al revés (reverse_frame) ============ */
+.revtoggle{display:flex;align-items:flex-start;gap:10px;margin:12px 0 4px;
+  font-size:15px;font-weight:600;cursor:pointer}
+.revtoggle input{width:22px;height:22px;flex:none;accent-color:var(--accent);cursor:pointer}
+.revtoggle small{display:block;font-weight:400;color:var(--muted)}

@@ -181,7 +181,7 @@ async function connectFromCfg(cfg) {
   if (!cfg?.profile_id && cfg?.method !== 'sim') throw new Error('sin báscula');
   if (cfg.method === 'sim' || cfg.profile_id === 'sim') { await startSim(); return; }
   const body = { profile_id: cfg.profile_id };
-  if (SHIM && cfg.method === 'cable' && cfg.usb) {
+  if (SHIM && (cfg.method === 'otg' || cfg.method === 'cable') && cfg.usb) {
     // OTG: Android asigna otro deviceId en cada conexión → re-resolver por vid:pid
     const devices = await apiJson('/api/usb/devices');
     const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
@@ -195,9 +195,15 @@ async function connectFromCfg(cfg) {
     if (cfg.tcp_port) body.tcp_port = cfg.tcp_port;
   } else if (cfg.port) {
     body.port = cfg.port;
-    if (SHIM && cfg.method === 'bluetooth') body.transport = 'bluetooth';
+    if (SHIM && cfg.method === 'bluetooth') {
+      body.transport = 'bluetooth';
+      // perfil "auto": reconecta con el parser que detectó la primera vez
+      if (cfg.profile_id === 'auto' && cfg.parser) body.parser = cfg.parser;
+    }
   }
   if (SHIM && cfg.invert_bits != null) body.invert_bits = cfg.invert_bits;
+  // números al revés: aplica en móvil Y escritorio (app.py también lo acepta)
+  if (cfg.reverse_frame != null) body.reverse_frame = cfg.reverse_frame;
   await api('/api/scale/connect', { method: 'POST', body });
   APP.scaleConnected = true;
 }
@@ -1014,14 +1020,16 @@ $('bExportDatos').onclick = () => {
    MÓDULO BÁSCULA — WIZARD DE CONEXIÓN (método → marca → dirección)
    ============================================================ */
 const WIZ = {
-  method: null,          // bluetooth | cable | red | sim
+  method: null,          // bluetooth | otg (app) | serial (escritorio) | sim (legacy)
   profileId: null,
   profileName: null,
   catalog: null,         // perfiles del backend (cache)
   catalogOpen: false,
-  signal: 'auto',        // auto | direct | inverted (solo app móvil)
+  signal: 'auto',        // señal ELÉCTRICA: auto | direct | inverted (app móvil)
+  reverse: false,        // 🔁 números al revés (reverse_frame) — toggle manual
   usbDevice: null,       // {deviceId, vid, pid, name} elegido (OTG)
-  detected: null,        // resultado del detector {invert_bits, baudrate}
+  detected: null,        // resultado del detector {invert_bits, reverse_frame, baudrate}
+  advanced: false,       // BT: "Ajustes avanzados" = elegir marca/señal a mano
 };
 
 const BAUDRATES = [1200, 2400, 4800, 9600, 19200];
@@ -1034,21 +1042,32 @@ const COMMON_PROFILES = [
 
 const METHOD_LABEL = {
   bluetooth: '📶 Bluetooth',
-  cable: '🔌 Cable',
-  red: '🌐 Red',
+  otg: '🔌 OTG',
+  serial: '🖥 Cable serial',
   sim: '🎛 Simulada',
 };
 
+/* migración de configs guardadas con los métodos viejos (cable/red) */
+function migrateMethod(method) {
+  if (method === 'cable') return SHIM ? 'otg' : 'serial';
+  if (method === 'red') return 'serial';
+  return method;
+}
+
 function initWizard() {
   // arranca siempre en el paso 1, con lo guardado preseleccionado
+  WIZ.advanced = false;
   const cfg = loadCfg();
   if (cfg?.method && !WIZ.method) {
-    WIZ.method = cfg.method;
+    WIZ.method = migrateMethod(cfg.method);
     WIZ.profileId = cfg.profile_id ?? null;
     WIZ.profileName = cfg.name ?? null;
     if (cfg.signal) WIZ.signal = cfg.signal;
+    WIZ.reverse = !!cfg.reverse_frame;
   }
-  if (SHIM && WIZ.method === 'red') WIZ.method = null; // método oculto en el APK
+  // métodos que no existen en esta plataforma no se precargan
+  if (SHIM && WIZ.method === 'serial') WIZ.method = null;
+  if (!SHIM && WIZ.method === 'otg') WIZ.method = null;
   $('testResult').className = 'test-result';
   showHexPanel(false);
   wizGo(1);
@@ -1063,6 +1082,13 @@ function wizGo(step) {
     dot.classList.toggle('active', i === step);
     dot.classList.toggle('done', i < step);
   }
+  // BT automático (APK): una sola pantalla, sin pasos ni Probar/Guardar —
+  // tocar el dispositivo hace todo (detectar, conectar, guardar).
+  const btAuto = SHIM && WIZ.method === 'bluetooth' && !WIZ.advanced;
+  const steps = document.querySelector('#wizard .wizsteps');
+  if (steps) steps.hidden = btAuto && step === 3;
+  const actions = $('bProbar')?.closest('.config-actions');
+  if (actions) actions.hidden = btAuto && step === 3;
   $('testResult').className = 'test-result';
   showHexPanel(false);
   if (step === 2) renderCommons();
@@ -1077,29 +1103,38 @@ function showHexPanel(show) {
   if (show) el.textContent = 'Esperando bytes…';
 }
 
-/* PODA (app móvil): el método Red necesita un socket TCP crudo que no existe
-   dentro del WebView/shim — no se muestra una opción que no funciona.
-   Bluetooth, Cable (OTG) y Simulada sí son 100% funcionales en el APK. */
-if (SHIM) {
-  const redCard = document.querySelector('#wizPane1 [data-method="red"]');
-  if (redCard) redCard.hidden = true;
+/* Tarjetas por plataforma (paso 1 = UNA sola pregunta):
+   - 📶 Bluetooth: siempre (en el APK es el camino principal, automático).
+   - 🔌 OTG: solo en la app Android (cable USB al celular).
+   - 🖥 Cable serial: solo en escritorio (COM/tty y conversor de red).
+   La báscula simulada vive en el módulo Pesaje ("Usar báscula simulada"). */
+{
+  const otgCard = document.querySelector('#wizPane1 [data-method="otg"]');
+  const serialCard = document.querySelector('#wizPane1 [data-method="serial"]');
+  if (otgCard) otgCard.hidden = !SHIM;
+  if (serialCard) serialCard.hidden = !!SHIM;
 }
 
 for (const b of document.querySelectorAll('#wizPane1 [data-method]')) {
   b.addEventListener('click', () => {
     WIZ.method = b.dataset.method;
-    if (WIZ.method === 'sim') {
-      WIZ.profileId = 'sim';
-      WIZ.profileName = 'Báscula simulada';
+    if (WIZ.profileId === 'sim') { WIZ.profileId = null; WIZ.profileName = null; }
+    // Bluetooth en el APK: SIN marcas ni catálogo — directo a buscar y
+    // auto-detectar (paso 3). Las marcas quedan solo en OTG/Cable serial
+    // (y en "Ajustes avanzados" del Bluetooth).
+    if (WIZ.method === 'bluetooth' && SHIM && !WIZ.advanced) {
       wizGo(3);
     } else {
-      if (WIZ.profileId === 'sim') { WIZ.profileId = null; WIZ.profileName = null; }
       wizGo(2);
     }
   });
 }
-$('bWizBack2').onclick = () => wizGo(1);
-$('bWizBack3').onclick = () => wizGo(WIZ.method === 'sim' ? 1 : 2);
+$('bWizBack2').onclick = () => { WIZ.advanced = false; wizGo(1); };
+$('bWizBack3').onclick = () => {
+  if (WIZ.method === 'sim') { wizGo(1); return; }
+  if (WIZ.method === 'bluetooth' && SHIM && !WIZ.advanced) { wizGo(1); return; }
+  wizGo(2);
+};
 
 /* ---- paso 2: marca y modelo ---- */
 function renderCommons() {
@@ -1169,9 +1204,9 @@ function renderAddr() {
     box.innerHTML = '<p class="wizhelp">La báscula simulada corre dentro del programa: sirve para practicar y probar todo el sistema. Los pesajes quedan guardados de verdad.</p>';
     return;
   }
-  if (WIZ.method === 'cable') {
+  if (WIZ.method === 'otg' || WIZ.method === 'cable') {
     if (SHIM) {
-      // App móvil: cable = OTG (USB serial al teléfono)
+      // App móvil: OTG (USB serial al teléfono)
       $('wizQ3').textContent = '¿Qué hay conectado al teléfono?';
       const savedBaud = same && cfg?.baudrate ? Number(cfg.baudrate) : 9600;
       box.innerHTML = `
@@ -1182,6 +1217,7 @@ function renderAddr() {
             `<option value="${b}"${b === savedBaud ? ' selected' : ''}>${b}</option>`).join('')}
           </select>
         </label>
+        ${reverseToggleHtml()}
         ${signalSelectorHtml()}
         <p class="wizhelp">🔌 Conecta el indicador al teléfono con un <b>cable OTG</b> y un adaptador
           USB-serial (FTDI, CH340, CP210x, PL2303 o CDC). Si Android pregunta si permites el
@@ -1190,16 +1226,25 @@ function renderAddr() {
           <summary>¿No aparece nada?</summary>
           <p>Prueba otro cable OTG (algunos son solo de carga), revisa que el adaptador esté bien
           puesto y toca «Buscar dispositivos USB» de nuevo. Con «🪄 Detectar automáticamente» yo
-          pruebo todas las velocidades (1200–19200) y las dos polaridades de señal.</p>
+          pruebo todas las velocidades (1200–19200), las dos polaridades de señal y el orden de
+          los números.</p>
         </details>`;
       $('bUsbScan').onclick = () => { scanUsbDevices().catch(() => {}); };
       bindSignalSel();
+      bindReverseToggle();
       scanUsbDevices().catch(() => {});
       return;
     }
-    $('wizQ3').textContent = '¿En qué puerto está el cable?';
+    // (config vieja 'cable' en escritorio → cae al método serial)
+    WIZ.method = 'serial';
+  }
+  if (WIZ.method === 'serial') {
+    // Escritorio: puerto COM/tty, o conversor de red (el viejo método
+    // "Red" vive aquí — si llenas la dirección IP, se usa la red).
+    $('wizQ3').textContent = '¿Dónde está conectada?';
+    const hostVal = same && cfg?.host ? `${cfg.host}${cfg.tcp_port ? ':' + cfg.tcp_port : ''}` : '';
     box.innerHTML = `
-      <label class="addrlbl">Puerto
+      <label class="addrlbl">Puerto del cable
         <input id="wizPort" placeholder="Ej: COM3 o /dev/ttyUSB0" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
       </label>
       <details class="wizhelp-more">
@@ -1207,23 +1252,42 @@ function renderAddr() {
         <p>En <b>Windows</b>: clic derecho en Inicio → Administrador de dispositivos → "Puertos (COM y LPT)". Ahí aparece algo como <b>COM3</b>.<br>
         En <b>Linux</b>: suele ser <b>/dev/ttyUSB0</b>.<br>
         Si desconectas y conectas el cable, el que aparece y desaparece es el tuyo.</p>
-      </details>`;
-    return;
-  }
-  if (WIZ.method === 'red') {
-    $('wizQ3').textContent = '¿Cuál es la dirección del conversor?';
-    const val = same && cfg?.host ? `${cfg.host}${cfg.tcp_port ? ':' + cfg.tcp_port : ''}` : '';
-    box.innerHTML = `
-      <label class="addrlbl">Dirección IP y puerto
-        <input id="wizHost" inputmode="decimal" placeholder="Ej: 192.168.0.50:8899" autocomplete="off" value="${escapeHtml(val)}">
-      </label>
-      <p class="wizhelp">La dirección viene en la configuración del conversor ethernet/wifi (o pregúntale a quien lo instaló). Casi siempre es algo como 192.168.x.x:8899.</p>`;
+      </details>
+      <details class="wizhelp-more" ${hostVal ? 'open' : ''}>
+        <summary>¿Usas un conversor de red (ethernet/wifi)?</summary>
+        <label class="addrlbl">Dirección IP y puerto
+          <input id="wizHost" inputmode="decimal" placeholder="Ej: 192.168.0.50:8899" autocomplete="off" value="${escapeHtml(hostVal)}">
+        </label>
+        <p class="wizhelp">Si llenas la dirección IP, me conecto por red y el puerto del cable se ignora. Casi siempre es algo como 192.168.x.x:8899.</p>
+      </details>
+      ${reverseToggleHtml()}`;
+    bindReverseToggle();
     return;
   }
   // bluetooth
+  if (SHIM && !WIZ.advanced) {
+    // ============ CAMINO PRINCIPAL (a prueba de tontos) ============
+    // Sin marcas, sin catálogo, sin señal: buscar → tocar → la app
+    // detecta sola el parser y la polaridad (perfil "auto") y conecta.
+    $('wizQ3').textContent = 'Elige tu báscula';
+    $('wizSel').textContent = '📶 Bluetooth — sin configurar nada: yo detecto la marca y la señal';
+    box.innerHTML = `
+      <div class="bt-auto-status" id="btAutoStatus">🔍 Buscando básculas Bluetooth…</div>
+      <div class="btlist" id="btList"></div>
+      <div class="config-actions">
+        <button id="bBtScan" type="button">🔍 Buscar de nuevo</button>
+      </div>
+      <p class="wizhelp">¿No aparece? Empareja primero el módulo en <b>Ajustes → Bluetooth</b>
+        (PIN <b>1234</b>) y vuelve a buscar.</p>
+      <button class="btn-link discreet" id="bBtAdvanced" type="button">Ajustes avanzados — elegir marca y señal a mano</button>`;
+    $('bBtScan').onclick = () => { btAutoScan().catch(() => {}); };
+    $('bBtAdvanced').onclick = () => { WIZ.advanced = true; wizGo(2); };
+    btAutoScan().catch(() => {});
+    return;
+  }
   $('wizQ3').textContent = '¿Dónde está el adaptador Bluetooth?';
   if (SHIM) {
-    // App móvil: buscador de verdad (emparejados + cercanos) + señal
+    // App móvil, "Ajustes avanzados": marca elegida a mano + señal forzable
     box.innerHTML = `
       <button class="btn-primary scanbtn" id="bBtScan" type="button">🔍 Buscar básculas Bluetooth</button>
       <div class="btlist" id="btList"></div>
@@ -1232,6 +1296,7 @@ function renderAddr() {
       </label>
       <p class="wizhelp">¿No aparece? Empareja primero el módulo en <b>Ajustes → Bluetooth</b>
         (PIN <b>1234</b>) y vuelve a buscar.</p>
+      ${reverseToggleHtml()}
       ${signalSelectorHtml()}
       <details class="wizhelp-more">
         <summary>Símbolos raros, o no llega el peso</summary>
@@ -1244,6 +1309,7 @@ function renderAddr() {
       </details>`;
     $('bBtScan').onclick = () => { scanBtDevices().catch(() => {}); };
     bindSignalSel();
+    bindReverseToggle();
     return;
   }
   if (IS_MOBILE) {
@@ -1294,7 +1360,60 @@ async function fillBtDevices() {
   }
 }
 
-/* ---- señal directa / invertida / detectar (app móvil) ---- */
+/* ---- 🔁 números al revés (reverse_frame): la báscula manda "001" cuando
+   marca 100, o "0.4321" cuando pesa 1234.0. Separado de la señal
+   ELÉCTRICA (invert_bits), que queda como opción avanzada. ---- */
+function reverseToggleHtml() {
+  return `
+    <label class="revtoggle">
+      <input type="checkbox" id="revToggle"${WIZ.reverse ? ' checked' : ''}>
+      <span>🔁 ¿Los números se ven al revés? <small>(ves 001 cuando la báscula marca 100)</small></span>
+    </label>
+    <div class="test-result" id="revLive"></div>`;
+}
+
+function bindReverseToggle() {
+  const t = $('revToggle');
+  if (!t) return;
+  t.onchange = async () => {
+    WIZ.reverse = t.checked;
+    WIZ.detected = null; // corrección manual: olvida la detección previa
+    const live = $('revLive');
+    const a = wizAddress();
+    if (!a.ok || a.body == null) return;
+    // EN VIVO: reconecta con la corrección y muestra el valor corregido
+    // para que el usuario confirme viéndolo (si aún no hay conexión, el
+    // cambio aplica al Probar/Guardar).
+    if (!APP.scaleConnected) return;
+    if (live) { live.className = 'test-result show'; live.textContent = 'Aplicando…'; }
+    const t0 = Date.now();
+    try {
+      await api('/api/scale/connect', { method: 'POST', body: a.body });
+      const kg = await new Promise((resolve) => {
+        const iv = setInterval(() => {
+          if (APP.lastReadingAt > t0) { clearInterval(iv); resolve(lastKg); }
+          else if (Date.now() - t0 > 4000) { clearInterval(iv); resolve(null); }
+        }, 200);
+      });
+      if (!live || !live.isConnected) return;
+      if (kg != null) {
+        live.className = 'test-result show ok';
+        live.textContent = `Ahora leo: ${fmt(kg)} kg — ¿se ve bien?`;
+      } else {
+        live.className = 'test-result show';
+        live.textContent = 'Cambio aplicado — esperando una lectura de la báscula…';
+      }
+    } catch {
+      if (live && live.isConnected) {
+        live.className = 'test-result show fail';
+        live.textContent = 'No pude aplicar el cambio — prueba la conexión de nuevo.';
+      }
+    }
+  };
+}
+
+/* ---- señal ELÉCTRICA directa / invertida / detectar (app móvil,
+   opción avanzada — distinta del 🔁 de números al revés) ---- */
 function signalSelectorHtml() {
   const opts = [
     ['auto', '🪄 Detectar automáticamente'],
@@ -1302,14 +1421,18 @@ function signalSelectorHtml() {
     ['inverted', '🔄 Invertida'],
   ];
   return `
-    <div class="addrlbl">Señal
-      <div class="sigsel" id="sigSel">
-        ${opts.map(([v, t]) =>
-          `<button type="button" data-sig="${v}"${WIZ.signal === v ? ' class="sel"' : ''}>${t}</button>`).join('')}
+    <details class="wizhelp-more">
+      <summary>⚡ Señal eléctrica (avanzado)</summary>
+      <div class="addrlbl">Señal eléctrica
+        <div class="sigsel" id="sigSel">
+          ${opts.map(([v, t]) =>
+            `<button type="button" data-sig="${v}"${WIZ.signal === v ? ' class="sel"' : ''}>${t}</button>`).join('')}
+        </div>
       </div>
-    </div>
-    <p class="wizhelp">Si el módulo va soldado a la tarjeta del indicador y llegan símbolos raros,
-      la señal puede venir <b>invertida</b>. «Detectar» lo resuelve solo al probar la conexión.</p>`;
+      <p class="wizhelp">Si el módulo va soldado a la tarjeta del indicador y llegan símbolos raros,
+        la señal ELÉCTRICA puede venir <b>invertida</b> (bits al revés — distinto del orden de los
+        números). «Detectar» lo resuelve solo al probar la conexión.</p>
+    </details>`;
 }
 
 function bindSignalSel() {
@@ -1373,6 +1496,121 @@ async function scanBtDevices() {
   }
 }
 
+/* ---- Bluetooth AUTOMÁTICO (camino principal en la app) ----
+   buscar → tocar el dispositivo → detectar parser+polaridad (perfil
+   "auto") → conectar → guardar. El usuario jamás elige marca. */
+async function btAutoScan() {
+  const list = $('btList'), status = $('btAutoStatus'), btn = $('bBtScan');
+  if (!list) return;
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = '🔍 Buscando básculas Bluetooth… (deja el módulo encendido)';
+  list.innerHTML = '';
+  try {
+    const devices = await apiJson('/api/bt/devices');
+    if (!list.isConnected) return;
+    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
+    if (!arr.length) {
+      if (status) status.textContent = 'No encontré dispositivos.';
+      list.innerHTML = '<div class="empty">Empareja primero el módulo en Ajustes → Bluetooth (PIN 1234) y toca «Buscar de nuevo».</div>';
+      return;
+    }
+    if (status) status.textContent = 'Toca tu báscula para conectarla:';
+    for (const dev of arr) {
+      const b = document.createElement('button');
+      b.className = 'bt-item';
+      b.innerHTML = `<span class="bt-n">${escapeHtml(dev?.name || 'Dispositivo sin nombre')}</span>` +
+        `<span class="bt-a mono">${escapeHtml(dev?.address ?? '')}</span>` +
+        `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
+      b.onclick = () => {
+        for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
+        btAutoConnect({ name: dev?.name || '', address: dev?.address ?? '' }).catch(() => {});
+      };
+      list.appendChild(b);
+    }
+  } catch (e) {
+    if (status && status.isConnected) status.textContent = '';
+    if (list.isConnected) list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos Bluetooth.')}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function btAutoConnect(dev) {
+  const status = $('btAutoStatus');
+  if (!dev.address) return;
+  showHexPanel(true);
+  if (status) status.innerHTML = `🎧 Escuchando <b>${escapeHtml(dev.name || dev.address)}</b>… ` +
+    'detecto la marca y la señal (unos segundos)';
+  $('testResult').className = 'test-result';
+  let r = null;
+  try {
+    r = await apiJson('/api/scale/detect', {
+      method: 'POST',
+      body: { profile_id: 'auto', transport: 'bluetooth', port: dev.address },
+    });
+  } catch (e) {
+    showHexPanel(false);
+    if (status) status.textContent = '';
+    wizResult('fail', e?.message ?? 'No pude escuchar la báscula.');
+    btAutoRetry(dev);
+    return;
+  }
+  showHexPanel(false);
+  if (r?.ok && r?.parser_ok && r?.parser) {
+    try {
+      await api('/api/scale/connect', {
+        method: 'POST',
+        body: {
+          profile_id: 'auto', parser: r.parser, transport: 'bluetooth',
+          port: dev.address, invert_bits: !!r.invert_bits,
+          reverse_frame: !!r.reverse_frame,
+        },
+      });
+    } catch {
+      if (status) status.textContent = '';
+      wizResult('fail', 'La detecté pero no pude dejarla conectada — intenta de nuevo.');
+      btAutoRetry(dev);
+      return;
+    }
+    APP.scaleConnected = true;
+    APP.simActive = false;
+    // el parser y la polaridad detectados quedan guardados: la próxima
+    // vez la app conecta directo, sin volver a detectar
+    saveCfg({
+      method: 'bluetooth', profile_id: 'auto', parser: r.parser,
+      invert_bits: !!r.invert_bits, reverse_frame: !!r.reverse_frame,
+      port: dev.address, signal: 'auto',
+      name: `Báscula Bluetooth (${dev.name || dev.address})`,
+    });
+    if (status) status.textContent = '';
+    const fixes = [];
+    if (r.invert_bits) fixes.push('señal invertida corregida sola');
+    if (r.reverse_frame) fixes.push('números al revés corregidos solos');
+    const kgTxt = r.kg != null ? `la báscula responde: ${fmt(r.kg)} kg` : 'la báscula responde';
+    wizResult('ok', `✓ Conectada — ${kgTxt}${fixes.length ? ` (${fixes.join(' y ')})` : ''}. ¡Ya puedes ir a Pesaje!`);
+  } else {
+    if (status) status.textContent = '';
+    const msg = (r?.ok && !r?.parser_ok)
+      ? 'Recibo datos pero no los entiendo — puede ser la velocidad del módulo (se cambia con comandos AT) o un modelo que aún no conozco.'
+      : (r?.message ?? 'No reconocí la báscula.');
+    wizResult('fail', msg);
+    btAutoRetry(dev);
+  }
+}
+
+/* tras un fallo: botón Reintentar (mismo dispositivo); "Ajustes avanzados"
+   ya está en pantalla para forzar marca/señal a mano */
+function btAutoRetry(dev) {
+  const status = $('btAutoStatus');
+  if (!status || !status.isConnected) return;
+  status.innerHTML = '';
+  const b = document.createElement('button');
+  b.className = 'btn-primary';
+  b.textContent = `↻ Reintentar con ${dev.name || dev.address}`;
+  b.onclick = () => { btAutoConnect(dev).catch(() => {}); };
+  status.appendChild(b);
+}
+
 /* ---- buscador USB/OTG (app móvil) ---- */
 async function scanUsbDevices() {
   const list = $('usbList'), btn = $('bUsbScan');
@@ -1418,18 +1656,29 @@ function wizAddress() {
   // → {ok, body?, cfgExtra?, msg?}
   if (WIZ.method === 'sim') return { ok: true, body: null, cfgExtra: {} };
   if (!WIZ.profileId) return { ok: false, msg: 'Primero elige la marca y el modelo de la báscula.' };
-  if (WIZ.method === 'red') {
+  // Escritorio · cable serial: COM/tty, o conversor de red si se llenó la IP
+  if (WIZ.method === 'serial' || WIZ.method === 'red') {
     const raw = ($('wizHost')?.value ?? '').trim();
-    if (!raw) return { ok: false, msg: 'Escribe la dirección IP del conversor (Ej: 192.168.0.50:8899).' };
-    const m = raw.match(/^([^:\s]+)(?::(\d+))?$/);
-    if (!m) return { ok: false, msg: 'La dirección no se ve bien — usa el formato 192.168.0.50:8899.' };
-    const body = { profile_id: WIZ.profileId, host: m[1] };
-    const cfgExtra = { host: m[1] };
-    if (m[2]) { body.tcp_port = parseInt(m[2], 10); cfgExtra.tcp_port = body.tcp_port; }
-    return { ok: true, body, cfgExtra };
+    if (raw) {
+      const m = raw.match(/^([^:\s]+)(?::(\d+))?$/);
+      if (!m) return { ok: false, msg: 'La dirección de red no se ve bien — usa el formato 192.168.0.50:8899.' };
+      const body = { profile_id: WIZ.profileId, host: m[1], reverse_frame: WIZ.reverse };
+      const cfgExtra = { host: m[1], reverse_frame: WIZ.reverse };
+      if (m[2]) { body.tcp_port = parseInt(m[2], 10); cfgExtra.tcp_port = body.tcp_port; }
+      return { ok: true, body, cfgExtra };
+    }
+    const port = ($('wizPort')?.value ?? '').trim();
+    if (!port) {
+      return { ok: false, msg: 'Escribe el puerto del cable (Ej: COM3) o la dirección del conversor de red.' };
+    }
+    return {
+      ok: true,
+      body: { profile_id: WIZ.profileId, port, reverse_frame: WIZ.reverse },
+      cfgExtra: { port, reverse_frame: WIZ.reverse },
+    };
   }
-  // App móvil · cable = OTG: dispositivo USB elegido + baudios + señal
-  if (SHIM && WIZ.method === 'cable') {
+  // App móvil · OTG: dispositivo USB elegido + baudios + señal
+  if (SHIM && (WIZ.method === 'otg' || WIZ.method === 'cable')) {
     if (!WIZ.usbDevice || WIZ.usbDevice.deviceId == null) {
       return { ok: false, msg: 'Conecta el cable OTG y elige el dispositivo USB de la lista.' };
     }
@@ -1439,6 +1688,7 @@ function wizAddress() {
       transport: 'usb',
       device_id: WIZ.usbDevice.deviceId,
       baudrate: WIZ.detected?.baudrate ?? baud,
+      reverse_frame: WIZ.detected?.reverse_frame ?? WIZ.reverse,
     };
     const inv = signalInvert();
     if (inv != null) body.invert_bits = inv;
@@ -1448,6 +1698,7 @@ function wizAddress() {
         usb: { vid: WIZ.usbDevice.vid, pid: WIZ.usbDevice.pid, name: WIZ.usbDevice.name },
         baudrate: body.baudrate,
         signal: WIZ.signal,
+        reverse_frame: body.reverse_frame,
         ...(inv != null ? { invert_bits: inv } : {}),
       },
     };
@@ -1461,14 +1712,20 @@ function wizAddress() {
         : 'Escribe el puerto donde está el cable (Ej: COM3).',
     };
   }
-  // App móvil · bluetooth: señal directa/invertida/detectar
+  // App móvil · bluetooth (avanzado): señal eléctrica + números al revés
   if (SHIM && WIZ.method === 'bluetooth') {
-    const body = { profile_id: WIZ.profileId, port, transport: 'bluetooth' };
+    const body = {
+      profile_id: WIZ.profileId, port, transport: 'bluetooth',
+      reverse_frame: WIZ.detected?.reverse_frame ?? WIZ.reverse,
+    };
     const inv = signalInvert();
     if (inv != null) body.invert_bits = inv;
     return {
       ok: true, body, detect: WIZ.signal === 'auto' && !WIZ.detected,
-      cfgExtra: { port, signal: WIZ.signal, ...(inv != null ? { invert_bits: inv } : {}) },
+      cfgExtra: {
+        port, signal: WIZ.signal, reverse_frame: body.reverse_frame,
+        ...(inv != null ? { invert_bits: inv } : {}),
+      },
     };
   }
   return { ok: true, body: { profile_id: WIZ.profileId, port }, cfgExtra: { port } };
@@ -1505,12 +1762,21 @@ async function runDetect(a) {
   showHexPanel(false);
   if (r?.hex) { const el = $('hexPanel'); if (el) { el.hidden = false; el.textContent = r.hex; } }
   if (r?.ok) {
-    WIZ.detected = { invert_bits: !!r.invert_bits, baudrate: r.baudrate ?? null };
+    WIZ.detected = {
+      invert_bits: !!r.invert_bits,
+      reverse_frame: !!r.reverse_frame,
+      baudrate: r.baudrate ?? null,
+    };
     if (r.baudrate && $('wizBaud')) $('wizBaud').value = String(r.baudrate);
+    if ($('revToggle')) $('revToggle').checked = !!r.reverse_frame; // reflejar detección
     wizResult(r.parser_ok ? 'ok' : 'fail', r.message ?? 'Señal detectada.');
     if (r.parser_ok) {
       // dejarla conectada, igual que el "Probar conexión" clásico
-      const connectBody = { ...a.body, invert_bits: !!r.invert_bits };
+      const connectBody = {
+        ...a.body,
+        invert_bits: !!r.invert_bits,
+        reverse_frame: !!r.reverse_frame,
+      };
       if (r.baudrate) connectBody.baudrate = r.baudrate;
       try { await api('/api/scale/connect', { method: 'POST', body: connectBody }); APP.scaleConnected = true; }
       catch { /* el veredicto ya se mostró */ }
@@ -1741,6 +2007,26 @@ function drawSpark() {
     i ? cx.lineTo(x, y) : cx.moveTo(x, y);
   });
   cx.stroke();
+}
+
+/* ============================================================
+   ☁️ NUBE — FUERA DE LA VISTA (pedido del cliente, 2026-08)
+   La sección se OCULTA por defecto en móvil y escritorio, pero TODO el
+   código, endpoints y datos de la nube siguen intactos (auth.js, sync,
+   backend). Para volver a mostrarla:
+     - abrir la app con  ?avanzado=1   en la URL, o
+     - en la consola:    localStorage.setItem('porcipeso_avanzado','1')
+   y recargar. Para re-activarla de fábrica: borrar este bloque.
+   ============================================================ */
+const ADVANCED_UI = (() => {
+  try {
+    return localStorage.getItem('porcipeso_avanzado') === '1'
+      || new URLSearchParams(location.search).get('avanzado') === '1';
+  } catch { return false; }
+})();
+if (!ADVANCED_UI) {
+  const nb = $('nubeBox');
+  if (nb) nb.hidden = true;
 }
 
 /* ============================================================

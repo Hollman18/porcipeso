@@ -3,7 +3,7 @@
  * directo, invertido, basura y silencio — y el barrido de baudios USB.
  */
 import { describe, expect, it } from "vitest";
-import { detectSignal } from "../src/detector";
+import { detectSignal, tokenFormScore } from "../src/detector";
 import type { ScaleProfile } from "../src/models";
 import { stringToBytes } from "../src/parsers";
 import type { ByteTransport } from "../src/serial";
@@ -61,8 +61,24 @@ describe("detectSignal — Bluetooth (una sola velocidad)", () => {
     expect(r.message).toContain("La báscula responde");
     expect(r.message).toContain("126.35");
     expect(r.message).toContain("señal directa");
+    expect(r.parser).toBe("matrix"); // reporta QUÉ parser entendió la trama
     expect(t.opened).toBe(1);
     expect(t.closed).toBe(1); // siempre cierra el transporte que abre
+  });
+
+  it("perfil 'auto' (parser desconocido): prueba todos los parsers y reporta el que matcheó", async () => {
+    // sin marca elegida: profile.parser = 'auto' no existe en el registro
+    const r = await detectSignal({
+      profile: profile({ id: "auto", parser: "auto" }),
+      openTransport: async () => new FakeTransport(invertBytes(MATRIX_FRAMES)),
+      sleep: noWait,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.parser_ok).toBe(true);
+    expect(r.parser).toBe("matrix"); // lo que el flujo BT guarda en cfg.parser
+    expect(r.verdict).toBe("invertida");
+    expect(r.invert_bits).toBe(true);
+    expect(r.kg).toBeCloseTo(126.35, 2);
   });
 
   it("señal invertida (caso BC04): la corrige, reporta el peso y pide invert_bits", async () => {
@@ -116,6 +132,92 @@ describe("detectSignal — Bluetooth (una sola velocidad)", () => {
     });
     expect(hexes.length).toBeGreaterThan(0);
     expect(hexes[0]).toMatch(/^3D 20 31 30 30/); // "= 100…"
+  });
+});
+
+describe("tokenFormScore — heurística del punto decimal", () => {
+  it("puntúa la forma natural y castiga las formas al revés", () => {
+    expect(tokenFormScore("1234.0")).toBe(1); // natural, 1 decimal
+    expect(tokenFormScore("100")).toBe(1);
+    expect(tokenFormScore("0")).toBe(1);
+    expect(tokenFormScore("0.5")).toBe(1);
+    expect(tokenFormScore("0.4321")).toBe(-2); // 4 decimales: peso al revés
+    expect(tokenFormScore("001")).toBe(-2); // ceros a la IZQUIERDA sin punto
+    expect(tokenFormScore("1.2.3")).toBe(-2); // no numérico bien formado
+    expect(tokenFormScore("25000")).toBe(-2); // fuera de rango verosímil
+    expect(tokenFormScore("07.5")).toBe(0); // raro pero no descarte
+  });
+});
+
+describe("detectSignal — 4 combinaciones (normal/reversa/bits/ambas) por plausibilidad", () => {
+  it("números al revés por línea: '001' → 100 con reverse_frame", async () => {
+    const r = await detectSignal({
+      profile: profile({ id: "auto", parser: "auto" }),
+      openTransport: async () => new FakeTransport(stringToBytes("001\r\n001\r\n001\r\n")),
+      sleep: noWait,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.parser_ok).toBe(true);
+    expect(r.reverse_frame).toBe(true);
+    expect(r.invert_bits).toBe(false);
+    expect(r.kg).toBeCloseTo(100, 3);
+    expect(r.message).toContain("Los números venían al revés");
+    expect(r.message).toContain("100 kg");
+  });
+
+  it("AMBAS correcciones: bits invertidos + caracteres al revés", async () => {
+    const r = await detectSignal({
+      profile: profile({ id: "auto", parser: "auto" }),
+      openTransport: async () =>
+        new FakeTransport(invertBytes(stringToBytes("0.4321\r\n0.4321\r\n"))),
+      sleep: noWait,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.invert_bits).toBe(true);
+    expect(r.reverse_frame).toBe(true);
+    expect(r.kg).toBeCloseTo(1234.0, 3);
+    expect(r.message).toContain("Señal eléctrica invertida y números al revés");
+  });
+
+  it("desempate vs parsers auto-invertidos: stream NORMAL no se lee al revés", async () => {
+    // "= 126.35" también "matchea" con el XK3190 (leería 53.621): la
+    // heurística del punto decimal debe elegir la interpretación natural.
+    const r = await detectSignal({
+      profile: profile({ id: "auto", parser: "auto" }),
+      openTransport: async () => new FakeTransport(MATRIX_FRAMES),
+      sleep: noWait,
+    });
+    expect(r.kg).toBeCloseTo(126.35, 2);
+    expect(r.parser).toBe("matrix");
+    expect(r.reverse_frame).toBe(false);
+    expect(r.invert_bits).toBe(false);
+  });
+
+  it("stream estilo Adr99 ('=53.621 '): el valor reportado es el real 126.35", async () => {
+    const r = await detectSignal({
+      profile: profile({ id: "auto", parser: "auto" }),
+      openTransport: async () =>
+        new FakeTransport(stringToBytes("=53.621 =53.621 =53.621 ")),
+      sleep: noWait,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.parser_ok).toBe(true);
+    expect(r.kg).toBeCloseTo(126.35, 2); // jamás 53.621
+    expect(r.invert_bits).toBe(false);
+  });
+
+  it("perfil de marca elegido ('matrix') + '= 0.4321': gana matrix con números al revés", async () => {
+    const r = await detectSignal({
+      profile: profile(), // matrix-adr00
+      openTransport: async () =>
+        new FakeTransport(stringToBytes("= 0.4321= 0.4321= 0.4321")),
+      sleep: noWait,
+    });
+    expect(r.parser).toBe("matrix"); // el bonus del perfil elegido desempata
+    expect(r.reverse_frame).toBe(true);
+    expect(r.kg).toBeCloseTo(1234.0, 3);
+    expect(r.message).toContain("Los números venían al revés");
+    expect(r.message).toContain("1234 kg");
   });
 });
 

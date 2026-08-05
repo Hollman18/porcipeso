@@ -102,6 +102,13 @@ class ConnectBody(BaseModel):
     port: Optional[str] = None
     host: Optional[str] = None
     tcp_port: Optional[int] = None
+    # Correcciones de trama (toggle 🔁 del wizard / opción avanzada):
+    #  - reverse_frame: los caracteres llegan al revés ("001" = 100) —
+    #    lo aplica el parser (drivers/parsers.py:reverse_frame_active).
+    #  - invert_bits: polaridad eléctrica TTL invertida — lo aplica el
+    #    runner (drivers/runner.py:ingress).
+    reverse_frame: Optional[bool] = None
+    invert_bits: Optional[bool] = None
 
 
 class SessionBody(BaseModel):
@@ -335,6 +342,13 @@ def create_app(
             overrides["host"] = body.host
         if body.tcp_port:
             overrides["tcp_port"] = body.tcp_port
+        if body.reverse_frame is not None or body.invert_bits is not None:
+            extra = dict(profile.extra)
+            if body.reverse_frame is not None:
+                extra["reverse_frame"] = bool(body.reverse_frame)
+            if body.invert_bits is not None:
+                extra["invert_bits"] = bool(body.invert_bits)
+            overrides["extra"] = extra
         if overrides:
             profile = dataclasses.replace(profile, **overrides)
 
