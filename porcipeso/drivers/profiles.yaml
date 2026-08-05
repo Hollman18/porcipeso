@@ -1,6 +1,11 @@
 # Catálogo comercial de indicadores de peso (LatAm) — PorciPeso
 # Cada entrada mapea a porcipeso.core.models.ScaleProfile.
 # parser = clave en porcipeso.drivers.parsers.PARSER_REGISTRY.
+#
+# extra.invert_bits: true → la señal UART llega con la polaridad invertida
+#   (módulo HC-05/BC04 soldado a una línea TTL invertida). El runner
+#   (drivers/runner.py:ingress) y la app móvil (mobile/src/signal.ts)
+#   invierten cada byte (~b & 0xFF) ANTES del parser.
 profiles:
   - id: matrix-adr00
     name: "Lexus / Trumax Matrix (Adr 00)"

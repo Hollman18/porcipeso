@@ -14,16 +14,11 @@
  *  - API suficiente: scan() (emparejados + descubrimiento), connect,
  *    startNotifications con delimitador y evento 'onRead'.
  *
- * Limitación del plugin: las notificaciones entregan Strings troceados
- * por un DELIMITADOR (readUntil interno, delimitador INCLUIDO al final
- * del chunk). Concatenar los chunks reproduce el stream byte a byte,
- * y nuestros parsers toleran fragmentación arbitraria, así que basta
- * elegir un delimitador que ocurra en el protocolo:
- *  - matrix / xk3190_a12e: '=' (inicio de cada trama de 8 bytes)
- *  - generic_regex: extra.line_terminator o '\n'
- * Ajustable por perfil con extra.bt_delimiter.
+ * Se usa `read()` por sondeo en vez de notificaciones delimitadas. Así
+ * recibimos todo lo disponible aunque la trama sea fija, binaria, llegue
+ * fragmentada o todavía no contenga CR/LF. Los parsers ya reconstruyen el
+ * stream y resincronizan ante basura.
  */
-import type { PluginListenerHandle } from "@capacitor/core";
 import { Reading, ScaleProfile } from "./models";
 import { FrameParser, isParserSupported, PARSER_REGISTRY, stringToBytes } from "./parsers";
 
@@ -32,19 +27,14 @@ export interface BtDevice {
   address: string;
 }
 
-type BluetoothSerialLike = {
+export type BluetoothSerialLike = {
   isEnabled(): Promise<{ enabled: boolean }>;
   enable(): Promise<{ enabled: boolean }>;
   scan(): Promise<{ devices: Array<{ name: string; address: string }> }>;
   connect(o: { address: string }): Promise<void>;
   disconnect(o: { address: string }): Promise<void>;
   isConnected(o: { address: string }): Promise<{ connected: boolean }>;
-  startNotifications(o: { address: string; delimiter: string }): Promise<void>;
-  stopNotifications(o: { address: string }): Promise<void>;
-  addListener(
-    eventName: "onRead",
-    fn: (result: { value: string }) => void,
-  ): Promise<PluginListenerHandle>;
+  read(o: { address: string }): Promise<{ value: string }>;
 };
 
 async function loadPlugin(): Promise<BluetoothSerialLike> {
@@ -71,7 +61,10 @@ export class BluetoothScaleDriver {
   private onReading: (r: Reading) => void;
   private onError: (msg: string) => void;
   private parser: FrameParser;
-  private listener: PluginListenerHandle | null = null;
+  private bt: BluetoothSerialLike | null = null;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly pluginLoader: () => Promise<BluetoothSerialLike>;
+  private corruptReported = false;
   private connected = false;
 
   constructor(
@@ -79,6 +72,7 @@ export class BluetoothScaleDriver {
     address: string,
     onReading: (r: Reading) => void,
     onError: (msg: string) => void = () => {},
+    pluginLoader: () => Promise<BluetoothSerialLike> = loadPlugin,
   ) {
     if (!isParserSupported(profile.parser)) {
       throw new Error(
@@ -91,6 +85,7 @@ export class BluetoothScaleDriver {
     this.address = address;
     this.onReading = onReading;
     this.onError = onError;
+    this.pluginLoader = pluginLoader;
     this.parser = new PARSER_REGISTRY[profile.parser](profile);
   }
 
@@ -104,48 +99,76 @@ export class BluetoothScaleDriver {
   }
 
   async connect(): Promise<void> {
-    const bt = await loadPlugin();
+    const bt = await this.pluginLoader();
     const enabled = await bt.isEnabled();
     if (!enabled.enabled) await bt.enable();
     await bt.connect({ address: this.address });
+    this.bt = bt;
     this.connected = true;
-    this.listener = await bt.addListener("onRead", (result) => {
-      try {
-        const readings = this.parser.push(stringToBytes(result.value ?? ""));
-        for (const r of readings) this.onReading(r);
-      } catch (e) {
-        this.onError(String(e));
+    this.schedulePoll(0);
+  }
+
+  /**
+   * `read()` vacía todo el buffer disponible y conserva la fragmentación real.
+   * Es más robusto que las notificaciones del plugin, que no emiten nada hasta
+   * encontrar un delimitador y por eso se bloquean con tramas fijas o corruptas.
+   */
+  private schedulePoll(delayMs = 40): void {
+    if (!this.connected) return;
+    this.pollTimer = setTimeout(() => void this.pollOnce(), delayMs);
+  }
+
+  private async pollOnce(): Promise<void> {
+    const bt = this.bt;
+    if (!this.connected || bt === null) return;
+    try {
+      const result = await bt.read({ address: this.address });
+      const value = result.value ?? "";
+      if (value.length) {
+        // El plugin Android decodifica el UART como texto. U+FFFD significa que
+        // recibió bytes no válidos: casi siempre baud/paridad RS-232 incorrectos.
+        if (value.includes("\ufffd")) {
+          if (!this.corruptReported) {
+            this.corruptReported = true;
+            this.onError(
+              "Datos RS-232 ilegibles. El BLU2 y el indicador deben usar la misma " +
+                `configuración serial (${this.profile.baudrate ?? 9600} baudios, ` +
+                `${this.profile.bytesize ?? 8}${this.profile.parity ?? "N"}` +
+                `${this.profile.stopbits ?? 1}). Charset no corrige este problema. ` +
+                "También puede ser señal invertida: usa 🪄 Detectar en ⚙ Báscula.",
+            );
+          }
+        } else {
+          const readings = this.parser.push(stringToBytes(value));
+          if (readings.length) this.corruptReported = false;
+          for (const reading of readings) this.onReading(reading);
+        }
       }
-    });
-    await bt.startNotifications({
-      address: this.address,
-      delimiter: delimiterFor(this.profile),
-    });
+    } catch (e) {
+      this.connected = false;
+      this.onError(`Error leyendo Bluetooth: ${String(e)}`);
+    } finally {
+      this.schedulePoll();
+    }
   }
 
   async disconnect(): Promise<void> {
-    const bt = await loadPlugin();
-    try {
-      await bt.stopNotifications({ address: this.address });
-    } catch {
-      /* ya detenidas */
-    }
-    if (this.listener) {
-      await this.listener.remove();
-      this.listener = null;
-    }
+    this.connected = false;
+    if (this.pollTimer !== null) clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    const bt = this.bt ?? (await this.pluginLoader());
     try {
       await bt.disconnect({ address: this.address });
     } catch {
       /* ya desconectado */
     }
-    this.connected = false;
+    this.bt = null;
   }
 
   async isConnected(): Promise<boolean> {
     if (!this.connected) return false;
     try {
-      const bt = await loadPlugin();
+      const bt = this.bt ?? (await this.pluginLoader());
       const res = await bt.isConnected({ address: this.address });
       return res.connected;
     } catch {

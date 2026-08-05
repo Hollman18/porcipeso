@@ -530,3 +530,22 @@ body.rol-operador #bExcel,                  /* sin export */
 body.rol-operador #bPdf,
 body.rol-operador #bExportPdfDatos,
 body.rol-operador #bVerDatos{display:none !important}
+
+/* ============ wizard móvil: buscar BT/USB, señal, panel HEX ============ */
+.scanbtn{width:100%;margin-bottom:10px}
+.bt-badge{font-size:12px;font-weight:700;padding:3px 8px;border-radius:999px;
+  border:1px solid var(--panel-edge);color:var(--muted);white-space:nowrap}
+.bt-badge.paired{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+.sigsel{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.sigsel button{flex:1 1 auto;padding:10px 12px;border-radius:12px;font-size:15px;
+  font-weight:600;border:1px solid var(--panel-edge);background:transparent;cursor:pointer}
+.sigsel button.sel{border:2px solid var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+.hexpanel{margin-top:10px;padding:10px 12px;border-radius:10px;border:1px dashed var(--panel-edge);
+  font-size:12px;line-height:1.5;color:var(--muted);word-break:break-all;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-height:72px;overflow:hidden}
+
+/* ============ 🧹 liberar espacio ============ */
+.clean-sep{border:none;border-top:1px solid var(--panel-edge);margin:16px 0}
+.clean-confirm{margin-top:10px;padding:12px 14px;border-radius:12px;border:2px solid var(--red)}
+.clean-warn{font-weight:700;color:var(--red);margin-bottom:10px}
+.btn-danger{background:var(--red);color:#fff;border:none}

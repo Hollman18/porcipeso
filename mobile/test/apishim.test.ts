@@ -430,35 +430,250 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     await bt.repo.close();
   });
 
-  it("GET /api/bt/devices responde la forma que espera fillBtDevices() de app.js", async () => {
-    // app.js: const arr = Array.isArray(d) ? d : (d?.devices ?? null);
-    //         name = dev?.name; addr = dev?.address ?? dev?.addr ?? …
-    const btmod = await import("../src/bluetooth");
-    const spy = vi
-      .spyOn(btmod.BluetoothScaleDriver, "listDevices")
-      .mockResolvedValue([{ name: "BLU2", address: "00:14:03:05:59:02" }]);
+  it("GET /api/bt/devices responde {name,address,paired} (forma de scanBtDevices() en app.js)", async () => {
+    const bt = await makeBackend({
+      serial: {
+        listBt: async () => [
+          { name: "BC04-BT", address: "00:14:03:05:59:02", paired: true },
+          { name: "HC-05", address: "98:D3:31:F0:12:34", paired: false },
+        ],
+      },
+    });
     try {
-      const res = await call(backend, "GET", "/api/bt/devices");
+      const res = await call(bt, "GET", "/api/bt/devices");
       expect(res.status).toBe(200);
       expect(Array.isArray(res.json)).toBe(true);
-      expect(res.json[0]).toEqual({ name: "BLU2", address: "00:14:03:05:59:02" });
+      expect(res.json[0]).toEqual({ name: "BC04-BT", address: "00:14:03:05:59:02", paired: true });
+      expect(res.json[1].paired).toBe(false);
     } finally {
-      spy.mockRestore();
+      await bt.repo.close();
     }
   });
 
-  it("GET /api/bt/devices sin plugin BT responde 503 (la UI cae al campo manual)", async () => {
-    const btmod = await import("../src/bluetooth");
-    const spy = vi
-      .spyOn(btmod.BluetoothScaleDriver, "listDevices")
-      .mockRejectedValue(new Error("no plugin"));
+  it("GET /api/bt/devices sin plugins nativos responde 503 (web: la UI degrada)", async () => {
+    // sin inyección: en node/web no hay PorciSerial y el scan() de @e-is
+    // lanza "Method not implemented." → 503 con mensaje en humano
+    const res = await call(backend, "GET", "/api/bt/devices");
+    expect(res.status).toBe(503);
+    expect(res.json.detail).toContain("Bluetooth no disponible");
+    expect(res.json.detail).toContain("app Android");
+  });
+
+  it("GET /api/bt/devices con permiso denegado responde 403 con mensaje en humano", async () => {
+    const bt = await makeBackend({
+      serial: {
+        listBt: async () => {
+          throw new Error("permission_denied: Bluetooth");
+        },
+      },
+    });
     try {
-      const res = await call(backend, "GET", "/api/bt/devices");
-      expect(res.status).toBe(503);
-      expect(res.json.detail).toContain("Bluetooth no disponible");
+      const res = await call(bt, "GET", "/api/bt/devices");
+      expect(res.status).toBe(403);
+      expect(res.json.detail).toContain("Permiso de Bluetooth denegado");
+      expect(res.json.detail).toContain("Dispositivos cercanos");
     } finally {
-      spy.mockRestore();
+      await bt.repo.close();
     }
+  });
+
+  it("GET /api/usb/devices responde {deviceId,vid,pid,name,driver} y 503 sin plugin", async () => {
+    const usb = await makeBackend({
+      serial: {
+        listUsb: async () => [
+          { deviceId: 1002, vid: 0x1a86, pid: 0x7523, name: "USB Serial", driver: "Ch34xSerialDriver" },
+        ],
+      },
+    });
+    try {
+      const res = await call(usb, "GET", "/api/usb/devices");
+      expect(res.status).toBe(200);
+      expect(res.json).toEqual([
+        { deviceId: 1002, vid: 0x1a86, pid: 0x7523, name: "USB Serial", driver: "Ch34xSerialDriver" },
+      ]);
+    } finally {
+      await usb.repo.close();
+    }
+    // sin plugin nativo (web) → 503 degradable
+    const res503 = await call(backend, "GET", "/api/usb/devices");
+    expect(res503.status).toBe(503);
+    expect(res503.json.detail).toContain("USB no disponible");
+  });
+
+  it("POST /api/scale/detect (BT) detecta señal INVERTIDA, reporta el peso y emite HEX por WS", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    const { invertBytes } = await import("../src/signal");
+    await import("../src/detector"); // precarga: el import dinámico del shim
+    await import("../src/serial"); //   no debe caer en medio de los fake timers
+    const chunk = invertBytes(stringToBytes("= 126.35= 126.35= 126.35"));
+    const transport = {
+      label: "fake-bt",
+      open: async () => {},
+      read: async () => chunk,
+      close: async () => {},
+    };
+    const bt = await makeBackend({ serial: { makeTransport: async () => transport } });
+    const ws = new ShimWebSocket(bt.hub, "/ws");
+    const detects: any[] = [];
+    ws.onmessage = (ev) => {
+      const m = JSON.parse(ev.data);
+      if (m.type === "detect") detects.push(m);
+    };
+    try {
+      const p = call(bt, "POST", "/api/scale/detect", {
+        profile_id: "matrix-adr00",
+        transport: "bluetooth",
+        port: "00:14:03:05:59:02",
+      });
+      let settled: Awaited<typeof p> | null = null;
+      void p.then((r) => (settled = r));
+      for (let i = 0; i < 100 && settled === null; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(res.json.ok).toBe(true);
+      expect(res.json.verdict).toBe("invertida");
+      expect(res.json.invert_bits).toBe(true);
+      expect(res.json.parser_ok).toBe(true);
+      expect(res.json.kg).toBeCloseTo(126.35, 2);
+      expect(res.json.message).toContain("INVERTIDA");
+      await vi.advanceTimersByTimeAsync(10); // microtasks del hub
+      expect(detects.length).toBeGreaterThan(0);
+      expect(detects[0].hex).toMatch(/^[0-9A-F]{2}( [0-9A-F]{2})*$/);
+    } finally {
+      ws.close();
+      await bt.repo.close();
+    }
+  });
+
+  it("POST /api/scale/detect valida perfil y dirección", async () => {
+    const noProfile = await call(backend, "POST", "/api/scale/detect", {
+      profile_id: "no-existe",
+      port: "00:11:22:33:44:55",
+    });
+    expect(noProfile.status).toBe(404);
+    const noPort = await call(backend, "POST", "/api/scale/detect", {
+      profile_id: "matrix-adr00",
+    });
+    expect(noPort.status).toBe(400);
+    expect(noPort.json.detail).toContain("MAC");
+    const noDev = await call(backend, "POST", "/api/scale/detect", {
+      profile_id: "matrix-adr00",
+      transport: "usb",
+    });
+    expect(noDev.status).toBe(400);
+    expect(noDev.json.detail).toContain("device_id");
+  });
+
+  it("scale/connect transporte USB con invert_bits alimenta el MISMO pipeline de parsers", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    const { invertBytes } = await import("../src/signal");
+    // el "cable" entrega la trama con la polaridad al revés
+    const chunk = invertBytes(stringToBytes("= 126.35"));
+    let reads = 0;
+    let openedBaud: number | null = null;
+    const usb = await makeBackend({
+      serial: {
+        makeTransport: async (kind, opts) => {
+          expect(kind).toBe("usb");
+          openedBaud = opts.baud;
+          return {
+            label: "fake-usb",
+            open: async () => {},
+            read: async () => (reads++ === 0 ? chunk : new Uint8Array(0)),
+            close: async () => {},
+          };
+        },
+      },
+    });
+    try {
+      const res = await call(usb, "POST", "/api/scale/connect", {
+        profile_id: "matrix-adr00",
+        transport: "usb",
+        device_id: 1002,
+        baudrate: 4800,
+        invert_bits: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({ connected: true, transport: "usb" });
+      expect(openedBaud).toBe(4800);
+      await vi.advanceTimersByTimeAsync(200); // poll del SerialScaleDriver
+      const status = await call(usb, "GET", "/api/scale/status");
+      expect(status.json.connected).toBe(true);
+      expect(status.json.last_kg).toBeCloseTo(126.35, 2);
+    } finally {
+      await usb.stopDriver();
+      await usb.repo.close();
+    }
+  });
+
+  it("scale/connect USB sin device_id responde 400 con instrucción clara", async () => {
+    const res = await call(backend, "POST", "/api/scale/connect", {
+      profile_id: "matrix-adr00",
+      transport: "usb",
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.detail).toContain("device_id");
+  });
+
+  it("🧹 /api/mantenimiento: uso + limpiar lecturas + limpiar pesajes con dry_run", async () => {
+    // sesión CERRADA vieja con lecturas + sesión ABIERTA con lecturas
+    const rVieja = await call(backend, "POST", "/api/sessions", { lote: "L-vieja" });
+    const vieja = rVieja.json.id as number;
+    await call(backend, "POST", `/api/sessions/${vieja}/close`, {});
+    const rAbierta = await call(backend, "POST", "/api/sessions", { lote: "L-abierta" });
+    const abierta = rAbierta.json.id as number;
+    for (let i = 0; i < 5; i++) {
+      await backend.repo.insertReading(vieja, 1000 + i, 80);
+      await backend.repo.insertReading(abierta, 2000 + i, 50);
+    }
+    // la cerrada queda con fecha vieja
+    await backend.repo["drv"].run(
+      "UPDATE sesiones SET hora_entrada = '2020-01-15T10:00:00Z' WHERE id = ?",
+      [vieja],
+    );
+
+    const uso = await call(backend, "GET", "/api/mantenimiento/uso");
+    expect(uso.status).toBe(200);
+    expect(uso.json.db_bytes).toBeGreaterThan(0);
+    expect(uso.json.lecturas_total).toBe(10);
+    expect(uso.json.lecturas_borrables).toBe(5);
+    expect(uso.json.pesajes_cerrados).toBe(1);
+    expect(uso.json.pesajes_abiertos).toBe(1);
+
+    // (a) lecturas: borra SOLO las de la cerrada
+    const limpiar = await call(backend, "POST", "/api/mantenimiento/limpiar", {
+      accion: "lecturas",
+    });
+    expect(limpiar.json.borrado.lecturas).toBe(5);
+    expect(limpiar.json.lecturas_total).toBe(5); // las de la abierta sobreviven
+
+    // (b) pesajes: dry_run cuenta sin borrar…
+    for (let i = 0; i < 3; i++) await backend.repo.insertReading(vieja, 5000 + i, 80);
+    const dry = await call(backend, "POST", "/api/mantenimiento/limpiar", {
+      accion: "pesajes", antes: "2021-01-01", dry_run: true,
+    });
+    expect(dry.json.borrado).toMatchObject({ pesajes: 1, lecturas: 3, dry_run: true });
+    expect((await call(backend, "GET", `/api/sessions/${vieja}`)).status).toBe(200);
+
+    // …y el borrado real elimina la cerrada vieja pero JAMÁS la abierta
+    const real = await call(backend, "POST", "/api/mantenimiento/limpiar", {
+      accion: "pesajes", antes: "2021-01-01",
+    });
+    expect(real.json.borrado.pesajes).toBe(1);
+    expect((await call(backend, "GET", `/api/sessions/${vieja}`)).status).toBe(404);
+    expect((await call(backend, "GET", `/api/sessions/${abierta}`)).status).toBe(200);
+    expect(real.json.pesajes_abiertos).toBe(1);
+
+    // validaciones
+    const sinFecha = await call(backend, "POST", "/api/mantenimiento/limpiar", {
+      accion: "pesajes",
+    });
+    expect(sinFecha.status).toBe(422);
+    expect(sinFecha.json.detail).toContain("YYYY-MM-DD");
+    const mala = await call(backend, "POST", "/api/mantenimiento/limpiar", { accion: "todo" });
+    expect(mala.status).toBe(422);
   });
 
   it("profiles marca los parsers aún no portados", async () => {

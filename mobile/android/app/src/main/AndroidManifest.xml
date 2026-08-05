@@ -23,6 +23,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- OTG: ofrecer abrir PorciPeso al conectar un adaptador
+                 USB-serial (FTDI/CH340/CP210x/PL2303/CDC). Opcional: sin
+                 esto la app igual los ve con "Buscar dispositivos USB". -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter" />
+
         </activity>
 
         <provider
@@ -65,5 +75,10 @@
 
     <uses-feature
         android:name="android.hardware.bluetooth"
+        android:required="false" />
+
+    <!-- Cable OTG (USB serial): host USB no obligatorio para instalar. -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
         android:required="false" />
 </manifest>

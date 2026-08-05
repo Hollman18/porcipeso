@@ -62,6 +62,10 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+    // Plugin local PorciSerial (USB/OTG + Bluetooth SPP crudo):
+    // usb-serial-for-android = librería de referencia para serial USB en
+    // Android (CDC-ACM, FTDI, CH340/CH341, CP210x, PL2303). Vía JitPack.
+    implementation 'com.github.mik3y:usb-serial-for-android:3.8.1'
 }
 
 apply from: 'capacitor.build.gradle'

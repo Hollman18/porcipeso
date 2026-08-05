@@ -45,6 +45,11 @@ const fechaLarga = ts => {
   catch { return ''; }
 };
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+/* App móvil (APK / build www): el shim define window.__PORCIPESO_SHIM__ antes
+   de cargar este archivo. SHIM.native = plugins Bluetooth/USB reales.
+   En escritorio (FastAPI sirve esta carpeta sin shim.js) queda null y el
+   wizard se comporta exactamente como siempre. */
+const SHIM = (typeof window !== 'undefined' && window.__PORCIPESO_SHIM__) || null;
 
 /* ---------------- estado global ---------------- */
 const APP = {
@@ -119,6 +124,20 @@ async function api(path, opts = {}) {
   try { return await res.json(); } catch { return null; }
 }
 
+/* como api() pero conserva el {detail} del backend en el mensaje de error
+   (los endpoints nuevos del wizard responden motivos en humano) */
+async function apiJson(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body != null ? JSON.stringify(opts.body) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) throw new Error(data?.detail ? String(data.detail) : `HTTP ${res.status}`);
+  return data;
+}
+
 /* ---------------- configuración guardada (báscula real) ---------------- */
 function loadCfg() {
   try { return JSON.parse(localStorage.getItem('porcipeso_cfg') || 'null'); }
@@ -162,12 +181,23 @@ async function connectFromCfg(cfg) {
   if (!cfg?.profile_id && cfg?.method !== 'sim') throw new Error('sin báscula');
   if (cfg.method === 'sim' || cfg.profile_id === 'sim') { await startSim(); return; }
   const body = { profile_id: cfg.profile_id };
-  if (cfg.host) {
+  if (SHIM && cfg.method === 'cable' && cfg.usb) {
+    // OTG: Android asigna otro deviceId en cada conexión → re-resolver por vid:pid
+    const devices = await apiJson('/api/usb/devices');
+    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
+    const match = arr.find(d => d?.vid === cfg.usb.vid && d?.pid === cfg.usb.pid) ?? arr[0];
+    if (!match) throw new Error('sin dispositivo USB (¿cable OTG conectado?)');
+    body.transport = 'usb';
+    body.device_id = match.deviceId;
+    if (cfg.baudrate) body.baudrate = cfg.baudrate;
+  } else if (cfg.host) {
     body.host = cfg.host;
     if (cfg.tcp_port) body.tcp_port = cfg.tcp_port;
   } else if (cfg.port) {
     body.port = cfg.port;
+    if (SHIM && cfg.method === 'bluetooth') body.transport = 'bluetooth';
   }
+  if (SHIM && cfg.invert_bits != null) body.invert_bits = cfg.invert_bits;
   await api('/api/scale/connect', { method: 'POST', body });
   APP.scaleConnected = true;
 }
@@ -989,7 +1019,12 @@ const WIZ = {
   profileName: null,
   catalog: null,         // perfiles del backend (cache)
   catalogOpen: false,
+  signal: 'auto',        // auto | direct | inverted (solo app móvil)
+  usbDevice: null,       // {deviceId, vid, pid, name} elegido (OTG)
+  detected: null,        // resultado del detector {invert_bits, baudrate}
 };
+
+const BAUDRATES = [1200, 2400, 4800, 9600, 19200];
 
 const COMMON_PROFILES = [
   { id: 'matrix-adr00', name: 'Trumax / Lexus Matrix', d: 'El más usado en granjas porcinas' },
@@ -1011,8 +1046,11 @@ function initWizard() {
     WIZ.method = cfg.method;
     WIZ.profileId = cfg.profile_id ?? null;
     WIZ.profileName = cfg.name ?? null;
+    if (cfg.signal) WIZ.signal = cfg.signal;
   }
+  if (SHIM && WIZ.method === 'red') WIZ.method = null; // método oculto en el APK
   $('testResult').className = 'test-result';
+  showHexPanel(false);
   wizGo(1);
 }
 
@@ -1026,9 +1064,25 @@ function wizGo(step) {
     dot.classList.toggle('done', i < step);
   }
   $('testResult').className = 'test-result';
+  showHexPanel(false);
   if (step === 2) renderCommons();
   if (step === 3) renderAddr();
   window.scrollTo({ top: 0 });
+}
+
+function showHexPanel(show) {
+  const el = $('hexPanel');
+  if (!el) return;
+  el.hidden = !show;
+  if (show) el.textContent = 'Esperando bytes…';
+}
+
+/* PODA (app móvil): el método Red necesita un socket TCP crudo que no existe
+   dentro del WebView/shim — no se muestra una opción que no funciona.
+   Bluetooth, Cable (OTG) y Simulada sí son 100% funcionales en el APK. */
+if (SHIM) {
+  const redCard = document.querySelector('#wizPane1 [data-method="red"]');
+  if (redCard) redCard.hidden = true;
 }
 
 for (const b of document.querySelectorAll('#wizPane1 [data-method]')) {
@@ -1116,6 +1170,33 @@ function renderAddr() {
     return;
   }
   if (WIZ.method === 'cable') {
+    if (SHIM) {
+      // App móvil: cable = OTG (USB serial al teléfono)
+      $('wizQ3').textContent = '¿Qué hay conectado al teléfono?';
+      const savedBaud = same && cfg?.baudrate ? Number(cfg.baudrate) : 9600;
+      box.innerHTML = `
+        <button class="btn-primary scanbtn" id="bUsbScan" type="button">🔍 Buscar dispositivos USB</button>
+        <div class="btlist" id="usbList"></div>
+        <label class="addrlbl">Velocidad (baudios)
+          <select id="wizBaud">${BAUDRATES.map(b =>
+            `<option value="${b}"${b === savedBaud ? ' selected' : ''}>${b}</option>`).join('')}
+          </select>
+        </label>
+        ${signalSelectorHtml()}
+        <p class="wizhelp">🔌 Conecta el indicador al teléfono con un <b>cable OTG</b> y un adaptador
+          USB-serial (FTDI, CH340, CP210x, PL2303 o CDC). Si Android pregunta si permites el
+          acceso al dispositivo USB, acepta.</p>
+        <details class="wizhelp-more">
+          <summary>¿No aparece nada?</summary>
+          <p>Prueba otro cable OTG (algunos son solo de carga), revisa que el adaptador esté bien
+          puesto y toca «Buscar dispositivos USB» de nuevo. Con «🪄 Detectar automáticamente» yo
+          pruebo todas las velocidades (1200–19200) y las dos polaridades de señal.</p>
+        </details>`;
+      $('bUsbScan').onclick = () => { scanUsbDevices().catch(() => {}); };
+      bindSignalSel();
+      scanUsbDevices().catch(() => {});
+      return;
+    }
     $('wizQ3').textContent = '¿En qué puerto está el cable?';
     box.innerHTML = `
       <label class="addrlbl">Puerto
@@ -1140,14 +1221,42 @@ function renderAddr() {
     return;
   }
   // bluetooth
-  $('wizQ3').textContent = '¿Dónde está el adaptador BLU2?';
+  $('wizQ3').textContent = '¿Dónde está el adaptador Bluetooth?';
+  if (SHIM) {
+    // App móvil: buscador de verdad (emparejados + cercanos) + señal
+    box.innerHTML = `
+      <button class="btn-primary scanbtn" id="bBtScan" type="button">🔍 Buscar básculas Bluetooth</button>
+      <div class="btlist" id="btList"></div>
+      <label class="addrlbl">Dirección del adaptador
+        <input id="wizPort" placeholder="Ej: 00:14:03:xx:xx:xx" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
+      </label>
+      <p class="wizhelp">¿No aparece? Empareja primero el módulo en <b>Ajustes → Bluetooth</b>
+        (PIN <b>1234</b>) y vuelve a buscar.</p>
+      ${signalSelectorHtml()}
+      <details class="wizhelp-more">
+        <summary>Símbolos raros, o no llega el peso</summary>
+        <p>Puede ser <b>señal invertida</b> (módulo HC-05/BC04 soldado a una línea TTL al revés):
+        usa «🪄 Detectar automáticamente» y yo la corrijo solo.<br><br>
+        También puede ser la <b>velocidad</b>: en Bluetooth los baudios los fija el módulo
+        (HC-05/BLU2), <b>no se pueden cambiar desde el celular</b> — si el módulo quedó a otra
+        velocidad que el indicador (ej. 38400 vs 9600), hay que reconfigurar el módulo con
+        comandos AT.</p>
+      </details>`;
+    $('bBtScan').onclick = () => { scanBtDevices().catch(() => {}); };
+    bindSignalSel();
+    return;
+  }
   if (IS_MOBILE) {
     box.innerHTML = `
       <div class="btlist" id="btList"><div class="empty">Buscando dispositivos emparejados…</div></div>
       <label class="addrlbl">Dirección del adaptador
         <input id="wizPort" placeholder="Ej: 00:1D:43:xx:xx:xx" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
       </label>
-      <p class="wizhelp">📱 Primero <b>empareja el BLU2</b> en los ajustes Bluetooth del teléfono (PIN <b>1234</b>). Después vuelve aquí y elígelo de la lista.</p>`;
+      <p class="wizhelp">📱 Primero <b>empareja el BLU2</b> en los ajustes Bluetooth del teléfono (PIN <b>1234</b>). Después vuelve aquí y elígelo de la lista.</p>
+      <details class="wizhelp-more">
+        <summary>Si aparecen símbolos extraños o no llega el peso</summary>
+        <p>El BLU2 y el indicador deben tener exactamente los mismos <b>baudios, bits, paridad y bits de parada</b> (por ejemplo, 9600 8N1). Cambiar “Charset” en una app terminal no repara una configuración serial incorrecta.</p>
+      </details>`;
     fillBtDevices();
   } else {
     box.innerHTML = `
@@ -1185,6 +1294,125 @@ async function fillBtDevices() {
   }
 }
 
+/* ---- señal directa / invertida / detectar (app móvil) ---- */
+function signalSelectorHtml() {
+  const opts = [
+    ['auto', '🪄 Detectar automáticamente'],
+    ['direct', '⚡ Directa (normal)'],
+    ['inverted', '🔄 Invertida'],
+  ];
+  return `
+    <div class="addrlbl">Señal
+      <div class="sigsel" id="sigSel">
+        ${opts.map(([v, t]) =>
+          `<button type="button" data-sig="${v}"${WIZ.signal === v ? ' class="sel"' : ''}>${t}</button>`).join('')}
+      </div>
+    </div>
+    <p class="wizhelp">Si el módulo va soldado a la tarjeta del indicador y llegan símbolos raros,
+      la señal puede venir <b>invertida</b>. «Detectar» lo resuelve solo al probar la conexión.</p>`;
+}
+
+function bindSignalSel() {
+  const sel = $('sigSel');
+  if (!sel) return;
+  for (const b of sel.querySelectorAll('[data-sig]')) {
+    b.onclick = () => {
+      WIZ.signal = b.dataset.sig;
+      WIZ.detected = null;                 // cambió la elección: olvidar detección previa
+      for (const x of sel.querySelectorAll('[data-sig]')) x.classList.toggle('sel', x === b);
+    };
+  }
+}
+
+/* invert_bits efectivo según el selector (null = no mandar nada) */
+function signalInvert() {
+  if (WIZ.signal === 'inverted') return true;
+  if (WIZ.signal === 'direct') return false;
+  if (WIZ.detected) return !!WIZ.detected.invert_bits;   // 🪄 ya detectado
+  const cfg = loadCfg();
+  return cfg?.invert_bits != null ? !!cfg.invert_bits : null;
+}
+
+/* ---- buscador Bluetooth (app móvil): emparejados + cercanos ---- */
+async function scanBtDevices() {
+  const list = $('btList'), btn = $('bBtScan');
+  if (!list) return;
+  if (btn) btn.disabled = true;
+  list.innerHTML = '<div class="empty">Buscando… deja el módulo encendido (tarda unos segundos)</div>';
+  try {
+    const devices = await apiJson('/api/bt/devices');
+    if (!list.isConnected) return;
+    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
+    if (!arr.length) {
+      list.innerHTML = '<div class="empty">No encontré dispositivos. Empareja primero el módulo en Ajustes → Bluetooth (PIN 1234) y vuelve a buscar.</div>';
+      return;
+    }
+    list.innerHTML = '<div class="bt-title">Toca el tuyo para elegirlo:</div>';
+    for (const dev of arr) {
+      const name = dev?.name || 'Dispositivo sin nombre';
+      const addr = dev?.address ?? '';
+      const b = document.createElement('button');
+      b.className = 'bt-item';
+      b.innerHTML = `<span class="bt-n">${escapeHtml(name)}</span>` +
+        `<span class="bt-a mono">${escapeHtml(addr)}</span>` +
+        `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
+      b.onclick = () => {
+        const inp = $('wizPort');
+        if (inp) inp.value = addr;
+        for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
+        if (!dev?.paired) {
+          wizResult('', 'Ese módulo aún no está emparejado: empareja primero en Ajustes → Bluetooth (PIN 1234).');
+        }
+      };
+      list.appendChild(b);
+    }
+  } catch (e) {
+    if (list.isConnected) list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos Bluetooth.')}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ---- buscador USB/OTG (app móvil) ---- */
+async function scanUsbDevices() {
+  const list = $('usbList'), btn = $('bUsbScan');
+  if (!list) return;
+  if (btn) btn.disabled = true;
+  list.innerHTML = '<div class="empty">Buscando dispositivos USB…</div>';
+  try {
+    const devices = await apiJson('/api/usb/devices');
+    if (!list.isConnected) return;
+    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
+    if (!arr.length) {
+      WIZ.usbDevice = null;
+      list.innerHTML = '<div class="empty">No veo nada conectado por OTG. Conecta el cable y vuelve a buscar.</div>';
+      return;
+    }
+    list.innerHTML = '<div class="bt-title">Toca el tuyo para elegirlo:</div>';
+    const cfg = loadCfg();
+    for (const dev of arr) {
+      const vidpid = `${Number(dev?.vid).toString(16).padStart(4, '0')}:${Number(dev?.pid).toString(16).padStart(4, '0')}`;
+      const b = document.createElement('button');
+      b.className = 'bt-item';
+      b.innerHTML = `<span class="bt-n">${escapeHtml(dev?.name || 'Adaptador USB-serial')}</span>` +
+        `<span class="bt-a mono">${escapeHtml(vidpid)} · ${escapeHtml(dev?.driver ?? '')}</span>`;
+      const select = () => {
+        WIZ.usbDevice = { deviceId: dev?.deviceId, vid: dev?.vid, pid: dev?.pid, name: dev?.name ?? '' };
+        for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
+      };
+      b.onclick = select;
+      list.appendChild(b);
+      // preselección: único dispositivo, o el mismo vid:pid guardado
+      if (arr.length === 1 || (cfg?.usb && cfg.usb.vid === dev?.vid && cfg.usb.pid === dev?.pid)) select();
+    }
+  } catch (e) {
+    WIZ.usbDevice = null;
+    if (list.isConnected) list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos USB.')}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 /* ---- probar + guardar ---- */
 function wizAddress() {
   // → {ok, body?, cfgExtra?, msg?}
@@ -1200,13 +1428,47 @@ function wizAddress() {
     if (m[2]) { body.tcp_port = parseInt(m[2], 10); cfgExtra.tcp_port = body.tcp_port; }
     return { ok: true, body, cfgExtra };
   }
+  // App móvil · cable = OTG: dispositivo USB elegido + baudios + señal
+  if (SHIM && WIZ.method === 'cable') {
+    if (!WIZ.usbDevice || WIZ.usbDevice.deviceId == null) {
+      return { ok: false, msg: 'Conecta el cable OTG y elige el dispositivo USB de la lista.' };
+    }
+    const baud = parseInt($('wizBaud')?.value ?? '9600', 10) || 9600;
+    const body = {
+      profile_id: WIZ.profileId,
+      transport: 'usb',
+      device_id: WIZ.usbDevice.deviceId,
+      baudrate: WIZ.detected?.baudrate ?? baud,
+    };
+    const inv = signalInvert();
+    if (inv != null) body.invert_bits = inv;
+    return {
+      ok: true, body, detect: WIZ.signal === 'auto' && !WIZ.detected,
+      cfgExtra: {
+        usb: { vid: WIZ.usbDevice.vid, pid: WIZ.usbDevice.pid, name: WIZ.usbDevice.name },
+        baudrate: body.baudrate,
+        signal: WIZ.signal,
+        ...(inv != null ? { invert_bits: inv } : {}),
+      },
+    };
+  }
   const port = ($('wizPort')?.value ?? '').trim();
   if (!port) {
     return {
       ok: false,
       msg: WIZ.method === 'bluetooth'
-        ? 'Falta la dirección: elige el BLU2 de la lista o escribe el puerto.'
+        ? 'Falta la dirección: busca la báscula con 🔍 o escribe la dirección del módulo.'
         : 'Escribe el puerto donde está el cable (Ej: COM3).',
+    };
+  }
+  // App móvil · bluetooth: señal directa/invertida/detectar
+  if (SHIM && WIZ.method === 'bluetooth') {
+    const body = { profile_id: WIZ.profileId, port, transport: 'bluetooth' };
+    const inv = signalInvert();
+    if (inv != null) body.invert_bits = inv;
+    return {
+      ok: true, body, detect: WIZ.signal === 'auto' && !WIZ.detected,
+      cfgExtra: { port, signal: WIZ.signal, ...(inv != null ? { invert_bits: inv } : {}) },
     };
   }
   return { ok: true, body: { profile_id: WIZ.profileId, port }, cfgExtra: { port } };
@@ -1219,6 +1481,45 @@ function wizResult(cls, text) {
 }
 
 let lastKg = null;
+
+/* 🪄 Detector (app móvil): escucha bytes crudos, decide directa/invertida
+   (y en USB barre 1200→19200 baudios) y muestra el veredicto en humano.
+   El panel HEX en vivo se alimenta con los mensajes WS {"type":"detect"}. */
+async function runDetect(a) {
+  showHexPanel(true);
+  const usb = a.body.transport === 'usb';
+  wizResult('', usb
+    ? 'Escuchando la báscula… pruebo cada velocidad y las dos polaridades (hasta ~20 s).'
+    : 'Escuchando la báscula… primero señal directa, luego invertida (unos segundos).');
+  const body = { profile_id: WIZ.profileId, transport: a.body.transport ?? 'bluetooth' };
+  if (usb) { body.device_id = a.body.device_id; body.baudrates = BAUDRATES; }
+  else body.port = a.body.port;
+  let r;
+  try {
+    r = await apiJson('/api/scale/detect', { method: 'POST', body });
+  } catch (e) {
+    showHexPanel(false);
+    wizResult('fail', e?.message ?? 'No pude escuchar la báscula.');
+    return;
+  }
+  showHexPanel(false);
+  if (r?.hex) { const el = $('hexPanel'); if (el) { el.hidden = false; el.textContent = r.hex; } }
+  if (r?.ok) {
+    WIZ.detected = { invert_bits: !!r.invert_bits, baudrate: r.baudrate ?? null };
+    if (r.baudrate && $('wizBaud')) $('wizBaud').value = String(r.baudrate);
+    wizResult(r.parser_ok ? 'ok' : 'fail', r.message ?? 'Señal detectada.');
+    if (r.parser_ok) {
+      // dejarla conectada, igual que el "Probar conexión" clásico
+      const connectBody = { ...a.body, invert_bits: !!r.invert_bits };
+      if (r.baudrate) connectBody.baudrate = r.baudrate;
+      try { await api('/api/scale/connect', { method: 'POST', body: connectBody }); APP.scaleConnected = true; }
+      catch { /* el veredicto ya se mostró */ }
+    }
+  } else {
+    wizResult('fail', r?.message ?? 'No pude detectar la señal.');
+  }
+}
+
 $('bProbar').onclick = async () => {
   const a = wizAddress();
   if (!a.ok) { wizResult('fail', a.msg); return; }
@@ -1226,6 +1527,10 @@ $('bProbar').onclick = async () => {
   wizResult('', 'Probando…');
   const t0 = Date.now();
   try {
+    if (SHIM && a.detect) {
+      await runDetect(a);
+      return;
+    }
     if (WIZ.method === 'sim') {
       await startSim();
       wizResult('ok', 'Báscula simulada activa ✓ — guarda y ve al módulo Pesaje.');
@@ -1242,8 +1547,12 @@ $('bProbar').onclick = async () => {
       wizResult('ok', `La báscula responde: ${fmt(kg)} kg ✓`);
     } else {
       const st = await api('/api/scale/status').catch(() => null);
-      if (st?.connected) {
-        wizResult('ok', 'Conectada ✓ — aún no recibo peso; revisa que la báscula esté encendida.');
+      if (st?.error) {
+        wizResult('fail', st.error);
+      } else if (st?.connected) {
+        wizResult('fail', WIZ.method === 'bluetooth'
+          ? 'Bluetooth conectado, pero no llegó un peso válido. Revisa el modelo elegido y que el BLU2 tenga los mismos parámetros RS-232 del indicador.'
+          : 'Conectada, pero no llegó un peso válido. Revisa que la báscula esté encendida y el modelo elegido.');
       } else {
         wizResult('fail', 'La báscula no responde. Revisa la conexión, la dirección y que esté encendida.');
       }
@@ -1268,6 +1577,112 @@ $('bGuardarCfg').onclick = () => {
   if (WIZ.method !== 'sim') APP.simActive = false;
   wizResult('ok', `Guardado: ${cfg.name} ✓ — ya puedes ir al módulo Pesaje.`);
 };
+
+/* ============================================================
+   🧹 LIBERAR ESPACIO (lecturas crudas + pesajes viejos, manual)
+   Mismos endpoints en escritorio (FastAPI) y en la app (shim):
+   GET /api/mantenimiento/uso · POST /api/mantenimiento/limpiar
+   ============================================================ */
+function fmtBytes(b) {
+  const n = Number(b) || 0;
+  if (n >= 1024 * 1024) return fmt(n / (1024 * 1024), 1) + ' MB';
+  if (n >= 1024) return fmt(n / 1024, 0) + ' KB';
+  return n + ' B';
+}
+
+async function refreshCleanBox() {
+  const el = $('cleanUso');
+  if (!el) return;
+  try {
+    const u = await apiJson('/api/mantenimiento/uso');
+    const partes = [
+      `La app ocupa <b>${fmtBytes(u?.db_bytes)}</b>.`,
+      `Lecturas crudas: <b>${Number(u?.lecturas_total) || 0}</b> (${Number(u?.lecturas_borrables) || 0} borrables).`,
+      `Pesajes cerrados: <b>${Number(u?.pesajes_cerrados) || 0}</b>${u?.pesaje_mas_viejo ? ` (el más viejo: ${escapeHtml(fechaCorta(u.pesaje_mas_viejo))})` : ''}.`,
+    ];
+    el.innerHTML = partes.join(' ');
+    $('bCleanLecturas').disabled = !(Number(u?.lecturas_borrables) > 0);
+  } catch {
+    el.textContent = 'No pude calcular el uso de espacio — ¿está corriendo el programa?';
+  }
+}
+
+function cleanResult(cls, text) {
+  const res = $('cleanResult');
+  if (!res) return;
+  res.className = 'test-result show' + (cls ? ' ' + cls : '');
+  res.textContent = text;
+}
+
+if ($('cleanBox')) {
+  $('cleanBox').addEventListener('toggle', () => {
+    if ($('cleanBox').open) refreshCleanBox().catch(() => {});
+  });
+
+  /* (a) lecturas crudas de pesajes cerrados — siempre seguro */
+  $('bCleanLecturas').onclick = async () => {
+    $('bCleanLecturas').disabled = true;
+    try {
+      const r = await apiJson('/api/mantenimiento/limpiar', { method: 'POST', body: { accion: 'lecturas' } });
+      const n = Number(r?.borrado?.lecturas) || 0;
+      cleanResult('ok', n
+        ? `✓ Listo: borré ${n.toLocaleString('es-CO')} lecturas crudas. Tus pesajes quedaron intactos.`
+        : 'No había lecturas crudas para borrar.');
+    } catch (e) {
+      cleanResult('fail', e?.message ?? 'No pude borrar las lecturas.');
+    } finally {
+      refreshCleanBox().catch(() => {});
+    }
+  };
+
+  /* (b) pesajes cerrados anteriores a una fecha — confirmación DOBLE */
+  $('bCleanPesajes').onclick = async () => {
+    const fecha = ($('cleanFecha').value || '').trim();
+    $('cleanConfirm').hidden = true;
+    if (!fecha) { cleanResult('fail', 'Primero elige la fecha: se borran los pesajes cerrados ANTERIORES a ese día.'); return; }
+    $('bCleanPesajes').disabled = true;
+    try {
+      const dry = await apiJson('/api/mantenimiento/limpiar', {
+        method: 'POST', body: { accion: 'pesajes', antes: fecha, dry_run: true },
+      });
+      const n = Number(dry?.borrado?.pesajes) || 0;
+      if (!n) { cleanResult('ok', 'No hay pesajes cerrados anteriores a esa fecha — nada que borrar.'); return; }
+      const ev = Number(dry?.borrado?.eventos) || 0;
+      $('cleanConfirmTxt').textContent =
+        `Se borrarán ${n} pesaje${n === 1 ? '' : 's'} cerrado${n === 1 ? '' : 's'} con sus ${ev} movimientos ` +
+        `y sus lecturas — esto NO se puede deshacer. Los pesajes abiertos no se tocan.`;
+      $('cleanConfirm').hidden = false;
+      cleanResult('', '');
+      $('cleanResult').className = 'test-result';
+    } catch (e) {
+      cleanResult('fail', e?.message ?? 'No pude contar los pesajes.');
+    } finally {
+      $('bCleanPesajes').disabled = false;
+    }
+  };
+
+  $('bCleanCancelar').onclick = () => { $('cleanConfirm').hidden = true; };
+
+  $('bCleanConfirmar').onclick = async () => {
+    const fecha = ($('cleanFecha').value || '').trim();
+    if (!fecha) { $('cleanConfirm').hidden = true; return; }
+    $('bCleanConfirmar').disabled = true;
+    try {
+      const r = await apiJson('/api/mantenimiento/limpiar', {
+        method: 'POST', body: { accion: 'pesajes', antes: fecha },
+      });
+      const b = r?.borrado ?? {};
+      cleanResult('ok', `✓ Borré ${Number(b.pesajes) || 0} pesajes (${Number(b.eventos) || 0} movimientos, ` +
+        `${Number(b.lecturas) || 0} lecturas). Ahora la app ocupa ${fmtBytes(r?.db_bytes)}.`);
+    } catch (e) {
+      cleanResult('fail', e?.message ?? 'No pude borrar los pesajes.');
+    } finally {
+      $('bCleanConfirmar').disabled = false;
+      $('cleanConfirm').hidden = true;
+      refreshCleanBox().catch(() => {});
+    }
+  };
+}
 
 /* ============================================================
    WEBSOCKET (reconexión suave)
@@ -1297,6 +1712,15 @@ function routeMessage(m) {
   if (m.type === 'reading') { lastKg = Number(m.kg ?? 0); onReading(m); }
   else if (m.type === 'event') onEvent(m.event ?? m.data ?? m);
   else if (m.type === 'snapshot') onSnapshot(m.snapshot ?? m.data ?? m);
+  else if (m.type === 'detect') onDetectHex(m);
+}
+
+/* panel HEX en vivo del detector de señal (wizard, app móvil) */
+function onDetectHex(m) {
+  const el = $('hexPanel');
+  if (!el || el.hidden) return;
+  const baud = m?.baud != null ? `@${m.baud} baudios · ` : '';
+  el.textContent = baud + String(m?.hex ?? '');
 }
 
 /* ---------------- curva bajo el peso ---------------- */

@@ -297,7 +297,7 @@
             </button>
             <button class="methodcard" data-method="cable">
               <span class="m-ic">🔌</span><span class="m-t">Cable</span>
-              <span class="m-d">Cable USB-serial directo al computador</span>
+              <span class="m-d">Cable USB-serial al computador, o al teléfono con adaptador OTG</span>
             </button>
             <button class="methodcard" data-method="red">
               <span class="m-ic">🌐</span><span class="m-t">Red</span>
@@ -333,6 +333,8 @@
             <button id="bGuardarCfg">Guardar</button>
           </div>
           <div class="test-result" id="testResult"></div>
+          <!-- Detector de señal (app móvil): últimos bytes crudos en HEX -->
+          <div class="hexpanel mono" id="hexPanel" hidden></div>
         </div>
 
       </div>
@@ -356,6 +358,35 @@
           </div>
           <div class="test-result" id="nubeResult"></div>
           <p class="nube-estado" id="nubeEstado" hidden></p>
+        </div>
+      </details>
+
+      <!-- 🧹 LIBERAR ESPACIO: lecturas crudas y pesajes viejos (manual) -->
+      <details class="collap nube" id="cleanBox">
+        <summary><span class="ct">🧹 Liberar espacio</span><span class="caret" aria-hidden="true">▸</span></summary>
+        <div class="nube-body">
+          <p class="wizhelp" id="cleanUso">Calculando cuánto espacio ocupa la app…</p>
+          <div class="config-actions">
+            <button id="bCleanLecturas">Borrar lecturas crudas de pesajes cerrados</button>
+          </div>
+          <p class="wizhelp">Las lecturas crudas son el "electrocardiograma" de la báscula
+            (solo auditoría). Borrarlas <b>no toca</b> tus pesajes ni sus totales, y el
+            pesaje en curso nunca se toca.</p>
+          <hr class="clean-sep">
+          <label class="addrlbl">Borrar pesajes cerrados anteriores a
+            <input id="cleanFecha" type="date">
+          </label>
+          <div class="config-actions">
+            <button id="bCleanPesajes">Borrar pesajes viejos…</button>
+          </div>
+          <div class="clean-confirm" id="cleanConfirm" hidden>
+            <p class="clean-warn" id="cleanConfirmTxt"></p>
+            <div class="config-actions">
+              <button class="btn-danger" id="bCleanConfirmar">Sí, borrar definitivamente</button>
+              <button id="bCleanCancelar">Cancelar</button>
+            </div>
+          </div>
+          <div class="test-result" id="cleanResult"></div>
         </div>
       </details>
     </section>

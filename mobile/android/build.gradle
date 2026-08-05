@@ -21,6 +21,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // usb-serial-for-android (plugin local PorciSerial) se publica en JitPack
+        maven { url 'https://jitpack.io' }
     }
 }
 

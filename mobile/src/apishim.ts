@@ -22,7 +22,16 @@ import {
 import { isParserSupported } from "./parsers";
 import { SimLiveScale, SimLiveOptions } from "./simlive";
 import { downloadAndInstallApk, fetchUpdateStatus } from "./update";
-import type { BluetoothScaleDriver } from "./bluetooth";
+import type { ByteTransport, UsbDeviceInfo } from "./serial";
+
+/** Velocidades del barrido automático del detector (método Cable/OTG). */
+export const DETECT_BAUDRATES = [1200, 2400, 4800, 9600, 19200] as const;
+
+/** Contrato mínimo de un driver de báscula activo (BT clásico, BT crudo o USB). */
+export interface ScaleDriverLike {
+  disconnect(): Promise<void>;
+  isConnected(): Promise<boolean>;
+}
 
 export const READING_BROADCAST_MIN_S = 0.2; // throttle ~5 msgs/s (igual que app.py)
 
@@ -126,7 +135,16 @@ export interface BackendDeps {
     address: string,
     onReading: (r: Reading) => void,
     onError: (msg: string) => void,
-  ) => Promise<BluetoothScaleDriver>;
+  ) => Promise<ScaleDriverLike>;
+  /** Capa serial nativa (inyectable en tests): listados BT/USB y transportes. */
+  serial?: {
+    listBt?: () => Promise<Array<{ name: string; address: string; paired: boolean }>>;
+    listUsb?: () => Promise<UsbDeviceInfo[]>;
+    makeTransport?: (
+      kind: "bluetooth" | "usb",
+      opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
+    ) => Promise<ByteTransport>;
+  };
   /** Exportador nativo (Filesystem+Share); si falta, descarga web. */
   shareCsv?: (filename: string, csv: string) => Promise<void>;
   /** Sync a la nube (opcional): resuelve /api/cloud/* y recibe el aviso
@@ -163,13 +181,14 @@ export class LocalBackend {
   private profiles: ScaleProfile[];
   private simOptions: SimLiveOptions;
   private createBtDriver: BackendDeps["createBtDriver"];
+  private serialDeps: BackendDeps["serial"];
   private shareCsvFn: BackendDeps["shareCsv"];
   private cloud: BackendDeps["cloud"];
 
   engine: WeighingEngine | null = null;
   currentSessionId: number | null = null;
   sim: SimLiveScale | null = null;
-  btDriver: BluetoothScaleDriver | null = null;
+  btDriver: ScaleDriverLike | null = null;
   driverProfile: ScaleProfile | null = null;
   driverError: string | null = null;
   lastReading: Reading | null = null;
@@ -184,6 +203,7 @@ export class LocalBackend {
     this.profiles = deps.profiles;
     this.simOptions = deps.simOptions ?? {};
     this.createBtDriver = deps.createBtDriver;
+    this.serialDeps = deps.serial;
     this.shareCsvFn = deps.shareCsv;
     this.cloud = deps.cloud;
   }
@@ -249,6 +269,9 @@ export class LocalBackend {
   // ---------------------------------------------------------- lecturas
 
   onReading = (reading: Reading): void => {
+    // Una lectura válida demuestra que cualquier error transitorio anterior
+    // (incluido framing serial mientras arrancaba el indicador) ya se resolvió.
+    this.driverError = null;
     this.lastReading = reading;
     if (this.engine !== null) {
       try {
@@ -360,7 +383,9 @@ export class LocalBackend {
     if (method === "GET" && path === "/api/profiles") return this.getProfiles();
     if (method === "POST" && path === "/api/scale/connect") return this.scaleConnect(body);
     if (method === "GET" && path === "/api/scale/status") return this.scaleStatus();
+    if (method === "POST" && path === "/api/scale/detect") return this.scaleDetect(body);
     if (method === "GET" && path === "/api/bt/devices") return this.btDevices();
+    if (method === "GET" && path === "/api/usb/devices") return this.usbDevices();
 
     // Auto-actualización: mismo contrato que porcipeso/api/updatecheck.py
     if (method === "GET" && path === "/api/update/status") return ok(await fetchUpdateStatus());
@@ -369,6 +394,14 @@ export class LocalBackend {
     if (method === "POST" && path === "/api/sim/start") return this.simStart();
     if (method === "POST" && path === "/api/sim/action") return this.simAction(body);
     if (method === "POST" && path === "/api/sim/stop") return this.simStop();
+
+    // 🧹 Liberar espacio: mismo contrato que porcipeso/api/app.py
+    if (method === "GET" && path === "/api/mantenimiento/uso") {
+      return ok(await this.repo.storageUsage());
+    }
+    if (method === "POST" && path === "/api/mantenimiento/limpiar") {
+      return this.mantenimientoLimpiar(body);
+    }
 
     if (method === "POST" && path === "/api/sessions") return this.createSession(body);
     if (method === "GET" && path === "/api/sessions") {
@@ -444,13 +477,56 @@ export class LocalBackend {
     return ok(out);
   }
 
+  /** {name, address, paired}: emparejados (plugin local) + cercanos (discovery @e-is). */
   private async btDevices(): Promise<JsonResponse> {
     try {
-      const { BluetoothScaleDriver } = await import("./bluetooth");
-      return ok(await BluetoothScaleDriver.listDevices());
+      const list = this.serialDeps?.listBt ?? (await import("./serial")).listBtDevices;
+      return ok(await list());
     } catch (e) {
-      return err(503, `Bluetooth no disponible: ${String(e)}`);
+      const { humanizeSerialError } = await import("./serial");
+      const msg = humanizeSerialError(e);
+      // permiso denegado → 403 con el mensaje en humano; el resto → 503
+      if (/permiso .*denegado/i.test(msg)) return err(403, msg);
+      return err(503, `Bluetooth no disponible: ${msg}`);
     }
+  }
+
+  /** {deviceId, vid, pid, name, driver}: dispositivos serial por OTG. */
+  private async usbDevices(): Promise<JsonResponse> {
+    try {
+      const list = this.serialDeps?.listUsb ?? (await import("./serial")).listUsbDevices;
+      return ok(await list());
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      return err(503, `USB no disponible: ${humanizeSerialError(e)}`);
+    }
+  }
+
+  /** Fábrica de transportes de bytes (BT SPP crudo / USB OTG). */
+  private async makeTransport(
+    kind: "bluetooth" | "usb",
+    opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
+  ): Promise<ByteTransport> {
+    if (this.serialDeps?.makeTransport) return this.serialDeps.makeTransport(kind, opts);
+    const serial = await import("./serial");
+    if (kind === "usb") {
+      return new serial.UsbTransport({
+        deviceId: opts.deviceId as number,
+        baudRate: opts.baud ?? opts.profile.baudrate ?? 9600,
+        dataBits: opts.profile.bytesize ?? 8,
+        stopBits: opts.profile.stopbits ?? 1,
+        parity: opts.profile.parity ?? "N",
+      });
+    }
+    return new serial.RawBtTransport(opts.address as string);
+  }
+
+  private unsupportedProfileError(profile: ScaleProfile): JsonResponse {
+    return err(
+      400,
+      `el perfil '${profile.id}' aún no está soportado en la app móvil ` +
+        "(usa Matrix, XK3190 o el genérico regex, o la báscula simulada)",
+    );
   }
 
   private async scaleConnect(body: Record<string, unknown>): Promise<JsonResponse> {
@@ -461,14 +537,20 @@ export class LocalBackend {
     if (!found) return err(404, `perfil desconocido: ${profileId}`);
     const profile: ScaleProfile = { ...found, extra: { ...found.extra } };
     if (body["port"]) profile.port = String(body["port"]);
-
-    if (!isParserSupported(profile.parser)) {
-      return err(
-        400,
-        `el perfil '${profile.id}' aún no está soportado en la app móvil ` +
-          "(usa Matrix, XK3190 o el genérico regex, o la báscula simulada)",
-      );
+    // Señal invertida (wizard paso 3 / detector): pisa lo que diga el catálogo.
+    if (body["invert_bits"] !== undefined && body["invert_bits"] !== null) {
+      profile.extra["invert_bits"] = Boolean(body["invert_bits"]);
     }
+    // Baudios elegidos en el wizard (solo tiene efecto en USB/OTG).
+    if (body["baudrate"] != null && Number.isFinite(Number(body["baudrate"]))) {
+      profile.baudrate = Number(body["baudrate"]);
+    }
+
+    if (!isParserSupported(profile.parser)) return this.unsupportedProfileError(profile);
+
+    const kind = String(body["transport"] ?? "bluetooth") === "usb" ? "usb" : "bluetooth";
+    if (kind === "usb") return this.usbConnect(profile, body);
+
     // En el teléfono el "puerto" es la dirección MAC Bluetooth del
     // conversor SPP (ej. 00:14:03:05:59:02) — va en el campo Puerto de
     // la vista Báscula.
@@ -497,6 +579,93 @@ export class LocalBackend {
       return err(400, this.driverError);
     }
     return ok({ connected: true, profile_id: profile.id, transport: "bluetooth" });
+  }
+
+  /** Conexión por cable USB/OTG: mismo pipeline de parsers que Bluetooth. */
+  private async usbConnect(
+    profile: ScaleProfile,
+    body: Record<string, unknown>,
+  ): Promise<JsonResponse> {
+    const deviceId = Number(body["device_id"]);
+    if (!Number.isFinite(deviceId)) {
+      return err(400, "falta 'device_id': elige el dispositivo USB de la lista");
+    }
+    await this.stopDriver();
+    this.ensureEngine();
+    this.driverError = null;
+    try {
+      const transport = await this.makeTransport("usb", {
+        profile,
+        deviceId,
+        baud: profile.baudrate ?? 9600,
+      });
+      const { SerialScaleDriver } = await import("./serialdriver");
+      const driver = new SerialScaleDriver(profile, transport, this.onReading, (msg) => {
+        this.driverError = msg;
+      });
+      await driver.connect();
+      this.btDriver = driver;
+      this.driverProfile = profile;
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      this.driverError = humanizeSerialError(e);
+      return err(400, this.driverError);
+    }
+    return ok({ connected: true, profile_id: profile.id, transport: "usb" });
+  }
+
+  /**
+   * Detector de señal directa/invertida (y barrido de baudios en USB).
+   * Emite {"type":"detect",hex,baud} por el WS para el panel HEX en vivo
+   * y responde el veredicto en humano (ver detector.ts).
+   */
+  private async scaleDetect(body: Record<string, unknown>): Promise<JsonResponse> {
+    const profileId = String(body["profile_id"] ?? "");
+    const found = this.profiles.find((p) => p.id === profileId);
+    if (!found) return err(404, `perfil desconocido: ${profileId}`);
+    const profile: ScaleProfile = { ...found, extra: { ...found.extra } };
+    delete profile.extra["invert_bits"]; // la polaridad la decide el detector
+    if (!isParserSupported(profile.parser)) return this.unsupportedProfileError(profile);
+
+    const kind = String(body["transport"] ?? "bluetooth") === "usb" ? "usb" : "bluetooth";
+    const address = String(body["port"] ?? "").trim();
+    const deviceId = Number(body["device_id"]);
+    if (kind === "bluetooth" && !address) {
+      return err(400, "falta 'port': la dirección Bluetooth (MAC) del indicador");
+    }
+    if (kind === "usb" && !Number.isFinite(deviceId)) {
+      return err(400, "falta 'device_id': elige el dispositivo USB de la lista");
+    }
+    let baudrates: number[] | null = null;
+    if (kind === "usb") {
+      const raw = body["baudrates"];
+      baudrates =
+        Array.isArray(raw) && raw.length
+          ? raw.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+          : [...DETECT_BAUDRATES];
+    }
+
+    await this.stopDriver(); // libera el SPP / puerto USB para poder escuchar
+    let lastHexAt = 0;
+    try {
+      const { detectSignal } = await import("./detector");
+      const result = await detectSignal({
+        profile,
+        baudrates,
+        openTransport: (baud) =>
+          this.makeTransport(kind, { profile, address, deviceId, baud }),
+        onHex: (hex, baud) => {
+          const now = Date.now();
+          if (now - lastHexAt < 250) return;
+          lastHexAt = now;
+          this.hub.broadcast({ type: "detect", hex, baud });
+        },
+      });
+      return ok(result);
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      return err(502, humanizeSerialError(e));
+    }
   }
 
   private async scaleStatus(): Promise<JsonResponse> {
@@ -572,6 +741,30 @@ export class LocalBackend {
     const wasRunning = this.sim !== null;
     await this.stopDriver();
     return ok({ connected: false, stopped: wasRunning });
+  }
+
+  // ------------------------------------------------------ liberar espacio
+
+  /** 'lecturas' (siempre seguro) o 'pesajes' + antes=YYYY-MM-DD (dry_run cuenta). */
+  private async mantenimientoLimpiar(body: Record<string, unknown>): Promise<JsonResponse> {
+    await this.flush(); // escrituras en vuelo persistidas antes de contar/borrar
+    const accion = String(body["accion"] ?? "");
+    if (accion === "lecturas") {
+      const borradas = await this.repo.cleanupReadings();
+      return ok({ borrado: { lecturas: borradas }, ...(await this.repo.storageUsage()) });
+    }
+    if (accion === "pesajes") {
+      const antes = String(body["antes"] ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(antes)) {
+        return err(
+          422,
+          "falta 'antes' con formato YYYY-MM-DD (se borran pesajes cerrados anteriores a esa fecha)",
+        );
+      }
+      const result = await this.repo.cleanupSessions(antes, Boolean(body["dry_run"]));
+      return ok({ borrado: result, ...(await this.repo.storageUsage()) });
+    }
+    return err(422, `acción desconocida: '${accion}' (esperado: 'lecturas' o 'pesajes')`);
   }
 
   // --------------------------------------------------------------- sesiones
@@ -763,6 +956,24 @@ export class LocalBackend {
 }
 
 async function defaultBtFactory(): Promise<NonNullable<BackendDeps["createBtDriver"]>> {
+  // Con el plugin local (APK): canal SPP CRUDO — los bytes llegan intactos,
+  // así que extra.invert_bits funciona y no hay pérdida por decodificación
+  // UTF-8 (el plugin @e-is convierte los bytes >= 0x80 en U+FFFD).
+  const serial = await import("./serial");
+  if (serial.nativeSerialAvailable()) {
+    const { SerialScaleDriver } = await import("./serialdriver");
+    return async (profile, address, onReading, onError) => {
+      const driver = new SerialScaleDriver(
+        profile,
+        new serial.RawBtTransport(address),
+        onReading,
+        onError,
+      );
+      await driver.connect();
+      return driver;
+    };
+  }
+  // Fallback (web / APK viejo): plugin @e-is basado en texto.
   const { BluetoothScaleDriver } = await import("./bluetooth");
   return async (profile, address, onReading, onError) => {
     const driver = new BluetoothScaleDriver(profile, address, onReading, onError);

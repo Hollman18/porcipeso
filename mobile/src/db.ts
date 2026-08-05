@@ -469,6 +469,106 @@ export class Repo {
     return Number(rows[0]?.["n"] ?? 0);
   }
 
+  // ------------------------------------------------- mantenimiento/espacio
+  // "🧹 Liberar espacio" — mismo contrato que porcipeso/db/repo.py
+  // (storage_usage / cleanup_readings / cleanup_sessions).
+
+  private async scalar(sql: string, params: unknown[] = []): Promise<unknown> {
+    const rows = await this.drv.query(sql, params);
+    const first = rows[0];
+    return first ? Object.values(first)[0] : null;
+  }
+
+  async storageUsage(): Promise<Record<string, unknown>> {
+    const pages = Number(await this.scalar("PRAGMA page_count"));
+    const pageSize = Number(await this.scalar("PRAGMA page_size"));
+    return {
+      db_bytes: pages * pageSize,
+      lecturas_total: Number(await this.scalar("SELECT COUNT(*) FROM lecturas_crudas")),
+      lecturas_borrables: Number(
+        await this.scalar(
+          `SELECT COUNT(*) FROM lecturas_crudas lc
+             LEFT JOIN sesiones s ON s.id = lc.sesion_id
+            WHERE s.id IS NULL OR s.estado != 'abierta'`,
+        ),
+      ),
+      pesajes_cerrados: Number(
+        await this.scalar("SELECT COUNT(*) FROM sesiones WHERE estado != 'abierta'"),
+      ),
+      pesajes_abiertos: Number(
+        await this.scalar("SELECT COUNT(*) FROM sesiones WHERE estado = 'abierta'"),
+      ),
+      pesaje_mas_viejo: (await this.scalar(
+        "SELECT MIN(hora_entrada) FROM sesiones WHERE estado != 'abierta'",
+      )) as string | null,
+    };
+  }
+
+  /** Borra TODAS las lecturas crudas salvo las de sesiones ABIERTAS (seguro). */
+  async cleanupReadings(): Promise<number> {
+    const { changes } = await this.drv.run(
+      `DELETE FROM lecturas_crudas WHERE rowid IN (
+           SELECT lc.rowid FROM lecturas_crudas lc
+           LEFT JOIN sesiones s ON s.id = lc.sesion_id
+           WHERE s.id IS NULL OR s.estado != 'abierta'
+       )`,
+    );
+    if (changes) await this.vacuum();
+    return changes;
+  }
+
+  /**
+   * Borra pesajes CERRADOS/ANULADOS anteriores a `antes` (YYYY-MM-DD) con
+   * sus eventos, lecturas y pendientes de sync. Las sesiones abiertas
+   * JAMÁS se tocan. `dryRun` solo cuenta (confirmación doble de la UI).
+   */
+  async cleanupSessions(
+    antes: string,
+    dryRun = false,
+  ): Promise<{ pesajes: number; eventos: number; lecturas: number; dry_run: boolean }> {
+    const rows = await this.drv.query(
+      "SELECT id FROM sesiones WHERE estado != 'abierta' AND hora_entrada < ?",
+      [antes],
+    );
+    const ids = rows.map((r) => Number(r["id"]));
+    const marks = ids.map(() => "?").join(",") || "NULL";
+    const eventos = Number(
+      await this.scalar(
+        `SELECT COUNT(*) FROM eventos_pesaje WHERE sesion_id IN (${marks})`, ids,
+      ),
+    );
+    const lecturas = Number(
+      await this.scalar(
+        `SELECT COUNT(*) FROM lecturas_crudas WHERE sesion_id IN (${marks})`, ids,
+      ),
+    );
+    const result = { pesajes: ids.length, eventos, lecturas, dry_run: dryRun };
+    if (dryRun || !ids.length) return result;
+    await this.drv.run(
+      `DELETE FROM lecturas_crudas WHERE sesion_id IN (${marks})`, ids);
+    await this.drv.run(
+      `DELETE FROM sync_outbox WHERE (tipo = 'evento' AND ref_id IN (
+           SELECT id FROM eventos_pesaje WHERE sesion_id IN (${marks})
+       ))`, ids);
+    await this.drv.run(
+      `DELETE FROM sync_outbox WHERE tipo = 'sesion' AND ref_id IN (${marks})`, ids);
+    await this.drv.run(
+      `UPDATE eventos_pesaje SET evento_relacionado_id = NULL
+        WHERE sesion_id IN (${marks})`, ids);
+    await this.drv.run(`DELETE FROM eventos_pesaje WHERE sesion_id IN (${marks})`, ids);
+    await this.drv.run(`DELETE FROM sesiones WHERE id IN (${marks})`, ids);
+    await this.vacuum();
+    return result;
+  }
+
+  private async vacuum(): Promise<void> {
+    try {
+      await this.drv.run("VACUUM");
+    } catch {
+      /* DB ocupada: el espacio libre se reutiliza igual */
+    }
+  }
+
   // --------------------------------------------------------------- outbox
 
   private async outboxAdd(tipo: string, refId: number, payload: Record<string, unknown>): Promise<void> {

@@ -82,6 +82,13 @@ const hub = new Hub();
 let ready: Promise<LocalBackend> | null = null;
 const getBackend = (): Promise<LocalBackend> => (ready ??= initBackend(hub));
 
+// Bandera SÍNCRONA para app.js (corre después de este bundle): estamos en
+// la app móvil (shim presente) y, si native, con plugins Bluetooth/USB
+// reales. app.js la usa para el wizard (buscar BT, OTG, detector de señal).
+(window as unknown as Record<string, unknown>)["__PORCIPESO_SHIM__"] = {
+  native: Capacitor.isNativePlatform(),
+};
+
 installShim(hub, getBackend);
 void getBackend(); // warm-up: la DB queda lista antes del primer toque
 

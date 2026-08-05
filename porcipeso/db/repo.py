@@ -322,6 +322,108 @@ class Repo:
             ).fetchone()
         return int(n)
 
+    # ------------------------------------------------- mantenimiento/espacio
+    # "🧹 Liberar espacio": mismo contrato que el shim móvil
+    # (mobile/src/apishim.ts — /api/mantenimiento/uso|limpiar).
+
+    def storage_usage(self) -> dict[str, Any]:
+        """Cuánto ocupa la base y qué se puede liberar (todo contable)."""
+        with self._lock:
+            (pages,) = self._conn.execute("PRAGMA page_count").fetchone()
+            (page_size,) = self._conn.execute("PRAGMA page_size").fetchone()
+            (lect_total,) = self._conn.execute(
+                "SELECT COUNT(*) FROM lecturas_crudas").fetchone()
+            (lect_borrables,) = self._conn.execute(
+                """SELECT COUNT(*) FROM lecturas_crudas lc
+                   LEFT JOIN sesiones s ON s.id = lc.sesion_id
+                   WHERE s.id IS NULL OR s.estado != 'abierta'""").fetchone()
+            (cerrados,) = self._conn.execute(
+                "SELECT COUNT(*) FROM sesiones WHERE estado != 'abierta'"
+            ).fetchone()
+            (abiertos,) = self._conn.execute(
+                "SELECT COUNT(*) FROM sesiones WHERE estado = 'abierta'"
+            ).fetchone()
+            (mas_viejo,) = self._conn.execute(
+                "SELECT MIN(hora_entrada) FROM sesiones WHERE estado != 'abierta'"
+            ).fetchone()
+        return {
+            "db_bytes": int(pages) * int(page_size),
+            "lecturas_total": int(lect_total),
+            "lecturas_borrables": int(lect_borrables),
+            "pesajes_cerrados": int(cerrados),
+            "pesajes_abiertos": int(abiertos),
+            "pesaje_mas_viejo": mas_viejo,
+        }
+
+    def cleanup_readings(self) -> int:
+        """Borra TODAS las lecturas crudas salvo las de sesiones ABIERTAS.
+
+        Siempre seguro: las lecturas crudas son solo auditoría/replay; los
+        pesajes, eventos y totales no se tocan. Retorna filas borradas.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                """DELETE FROM lecturas_crudas WHERE rowid IN (
+                       SELECT lc.rowid FROM lecturas_crudas lc
+                       LEFT JOIN sesiones s ON s.id = lc.sesion_id
+                       WHERE s.id IS NULL OR s.estado != 'abierta'
+                   )"""
+            )
+            self._conn.commit()
+            deleted = int(cur.rowcount)
+        if deleted:
+            self.vacuum()
+        return deleted
+
+    def cleanup_sessions(self, antes: str, dry_run: bool = False) -> dict[str, Any]:
+        """Borra pesajes CERRADOS/ANULADOS con hora_entrada anterior a ``antes``
+        (fecha ISO 'YYYY-MM-DD'), con sus eventos y lecturas. Las sesiones
+        abiertas JAMÁS se tocan. ``dry_run`` solo cuenta (para el mensaje
+        de confirmación doble de la UI). Irreversible.
+        """
+        with self._lock:
+            ids = [r[0] for r in self._conn.execute(
+                "SELECT id FROM sesiones WHERE estado != 'abierta' AND hora_entrada < ?",
+                (antes,),
+            )]
+            marks = ",".join("?" * len(ids)) or "NULL"
+            (eventos,) = self._conn.execute(
+                f"SELECT COUNT(*) FROM eventos_pesaje WHERE sesion_id IN ({marks})",
+                ids,
+            ).fetchone()
+            (lecturas,) = self._conn.execute(
+                f"SELECT COUNT(*) FROM lecturas_crudas WHERE sesion_id IN ({marks})",
+                ids,
+            ).fetchone()
+            result = {
+                "pesajes": len(ids),
+                "eventos": int(eventos),
+                "lecturas": int(lecturas),
+                "dry_run": bool(dry_run),
+            }
+            if dry_run or not ids:
+                return result
+            self._conn.execute(
+                f"DELETE FROM lecturas_crudas WHERE sesion_id IN ({marks})", ids)
+            self._conn.execute(
+                f"UPDATE eventos_pesaje SET evento_relacionado_id = NULL "
+                f"WHERE sesion_id IN ({marks})", ids)
+            self._conn.execute(
+                f"DELETE FROM eventos_pesaje WHERE sesion_id IN ({marks})", ids)
+            self._conn.execute(
+                f"DELETE FROM sesiones WHERE id IN ({marks})", ids)
+            self._conn.commit()
+        self.vacuum()
+        return result
+
+    def vacuum(self) -> None:
+        """Compacta el archivo para devolver el espacio al sistema."""
+        with self._lock:
+            try:
+                self._conn.execute("VACUUM")
+            except sqlite3.OperationalError:
+                pass  # DB ocupada: el espacio se reutiliza igual
+
     # ---------------------------------------------------------------- stats
 
     def stats_global(

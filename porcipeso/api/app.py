@@ -18,6 +18,7 @@ import contextlib
 import dataclasses
 import io
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -128,6 +129,14 @@ class ConfirmBody(BaseModel):
 
 class MotivoBody(BaseModel):
     motivo: str
+
+
+class LimpiarBody(BaseModel):
+    """🧹 Liberar espacio: 'lecturas' (siempre seguro) o 'pesajes' cerrados
+    anteriores a una fecha (irreversible; dry_run cuenta sin borrar)."""
+    accion: Literal["lecturas", "pesajes"]
+    antes: Optional[str] = None       # YYYY-MM-DD (solo accion='pesajes')
+    dry_run: bool = False
 
 
 class CloudProbeBody(BaseModel):
@@ -463,6 +472,31 @@ def create_app(
         desde: Optional[str] = None, hasta: Optional[str] = None
     ) -> dict[str, Any]:
         return repo.stats_global(desde=desde, hasta=hasta)
+
+    # ------------------------------------------------ 🧹 liberar espacio
+    # Mismo contrato que el shim móvil (mobile/src/apishim.ts): la UI
+    # de "Liberar espacio" funciona idéntica en escritorio y en el APK.
+
+    @app.get("/api/mantenimiento/uso")
+    def mantenimiento_uso() -> dict[str, Any]:
+        return repo.storage_usage()
+
+    @app.post("/api/mantenimiento/limpiar")
+    def mantenimiento_limpiar(body: LimpiarBody) -> dict[str, Any]:
+        if body.accion == "lecturas":
+            # Siempre seguro: solo lecturas crudas de pesajes NO abiertos.
+            borradas = repo.cleanup_readings()
+            return {"borrado": {"lecturas": borradas}, **repo.storage_usage()}
+        if body.accion == "pesajes":
+            antes = (body.antes or "").strip()
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", antes):
+                raise HTTPException(
+                    422, "falta 'antes' con formato YYYY-MM-DD "
+                         "(se borran pesajes cerrados anteriores a esa fecha)")
+            result = repo.cleanup_sessions(antes, dry_run=body.dry_run)
+            return {"borrado": result, **repo.storage_usage()}
+        raise HTTPException(422, f"acción desconocida: {body.accion!r} "
+                                 "(esperado: 'lecturas' o 'pesajes')")
 
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: int) -> dict[str, Any]:
