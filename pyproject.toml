@@ -14,8 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# playwright: tests de UI real (tests/e2e/test_ui_playwright.py); si el
-# paquete o el navegador faltan, esos tests se saltan solos.
+# playwright: tests e2e de la UI real (tests/e2e/test_ui_playwright.py y
+# tests/e2e/test_ui_conexion.py); si el paquete o el navegador faltan,
+# esas suites se saltan solas (importorskip).
 dev = ["pytest", "httpx", "websockets", "playwright"]
 build = ["pillow", "pyinstaller"]
 # Servidor nube (porcipeso.cloud): JWT + hashing Argon2id.

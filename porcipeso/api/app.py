@@ -397,6 +397,21 @@ def create_app(
         return {"connected": True, "profile_id": profile.id,
                 "transport": profile.transport}
 
+    @app.post("/api/scale/disconnect")
+    def scale_disconnect() -> dict[str, Any]:
+        """Corta el driver activo (real o simulado) SIN tocar la config guardada.
+
+        La configuración vive en el cliente (localStorage): desconectar solo
+        detiene el hilo del driver; reconectar es POST /api/scale/connect de
+        nuevo. Idempotente: sin driver activo responde igual.
+        """
+        was_connected = bool(
+            st.driver_thread is not None and st.driver_thread.is_alive()
+        )
+        stop_driver()
+        st.driver_error = None
+        return {"connected": False, "disconnected": was_connected}
+
     @app.get("/api/scale/status")
     def scale_status() -> dict[str, Any]:
         thread = st.driver_thread

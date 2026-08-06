@@ -436,6 +436,7 @@ export class LocalBackend {
     if (method === "GET" && path === "/api/profiles") return this.getProfiles();
     if (method === "POST" && path === "/api/scale/connect") return this.scaleConnect(body);
     if (method === "GET" && path === "/api/scale/status") return this.scaleStatus();
+    if (method === "POST" && path === "/api/scale/disconnect") return this.scaleDisconnect();
     if (method === "POST" && path === "/api/scale/detect") return this.scaleDetect(body);
     if (method === "GET" && path === "/api/bt/devices") return this.btDevices();
     if (method === "POST" && path === "/api/bt/discovery/start") return this.btDiscoveryStart();
@@ -797,6 +798,18 @@ export class LocalBackend {
       const { humanizeSerialError } = await import("./serial");
       return err(502, humanizeSerialError(e));
     }
+  }
+
+  /**
+   * Corta el driver activo (BT/USB/sim) SIN tocar la config guardada —
+   * mismo contrato que POST /api/scale/disconnect de app.py. Idempotente.
+   */
+  private async scaleDisconnect(): Promise<JsonResponse> {
+    const wasConnected =
+      (this.sim !== null && this.sim.running) || this.btDriver !== null;
+    await this.stopDriver();
+    this.driverError = null;
+    return ok({ connected: false, disconnected: wasConnected });
   }
 
   private async scaleStatus(): Promise<JsonResponse> {

@@ -51,6 +51,16 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
    wizard se comporta exactamente como siempre. */
 const SHIM = (typeof window !== 'undefined' && window.__PORCIPESO_SHIM__) || null;
 
+/* Flag AVANZADO (mismo mecanismo que la sección Nube): destapa opciones
+   que el usuario común no necesita — la Nube y el método Cable serial.
+   Activar: abrir con ?avanzado=1, o localStorage porcipeso_avanzado='1'. */
+const ADVANCED_UI = (() => {
+  try {
+    return localStorage.getItem('porcipeso_avanzado') === '1'
+      || new URLSearchParams(location.search).get('avanzado') === '1';
+  } catch { return false; }
+})();
+
 /* ---------------- estado global ---------------- */
 const APP = {
   session: null,       // {id, nombre}
@@ -84,7 +94,7 @@ function setModule(mod) {
   }
   try { history.replaceState(null, '', '#' + mod); } catch { /* sin history */ }
   if (mod === 'datos') refreshDatos().catch(() => {});
-  if (mod === 'bascula') initWizard();
+  if (mod === 'bascula') initBascula();
   window.scrollTo({ top: 0 });
 }
 for (const b of document.querySelectorAll('[data-mod]')) {
@@ -190,6 +200,8 @@ async function connectFromCfg(cfg) {
     body.transport = 'usb';
     body.device_id = match.deviceId;
     if (cfg.baudrate) body.baudrate = cfg.baudrate;
+    // perfil "auto" (OTG a prueba de tontos): reconecta con el parser detectado
+    if (cfg.profile_id === 'auto' && cfg.parser) body.parser = cfg.parser;
   } else if (cfg.host) {
     body.host = cfg.host;
     if (cfg.tcp_port) body.tcp_port = cfg.tcp_port;
@@ -313,7 +325,7 @@ function obFinish(goWizard = false) {
     if (OB.maxSeen >= 2) localStorage.setItem('porcipeso_howto', '1'); // ya vio los 3 pasos
   } catch { /* sin storage */ }
   try { $('dlgOnboard').close(); } catch { /* cerrado */ }
-  if (goWizard) setModule('bascula');
+  if (goWizard) { setModule('bascula'); openWizard(); }
 }
 $('obNext').onclick = () => { OB.i === OB.n - 1 ? obFinish() : obShow(OB.i + 1); };
 $('obSkip').onclick = () => obFinish();
@@ -608,6 +620,7 @@ const hist = [];
 function onReading(m) {
   const kg = Number(m?.kg ?? 0);
   APP.lastReadingAt = Date.now();
+  connCardLive(kg); // chip vivo de la tarjeta ⚙ Báscula (si está a la vista)
   if (m?.fase) { APP.faseSupported = true; if (APP.session) applyFase(m.fase, m); }
   setLed(ledText(m, kg));
   $('led').classList.add('pulse');
@@ -1095,6 +1108,134 @@ $('bExportDatos').onclick = () => {
 };
 
 /* ============================================================
+   MÓDULO BÁSCULA — INICIO: TARJETA DE ESTADO
+   Con config guardada → tarjeta (nombre, método, estado vivo,
+   Conectar/Desconectar/Cambiar). Sin config → botón grande que
+   abre el wizard. Desconectar corta el driver pero CONSERVA la
+   config: reconectar es un solo toque.
+   ============================================================ */
+const CC_FRESH_MS = 6000; // lectura "viva" = llegó hace menos de esto
+
+function methodIcon(m) {
+  return m === 'otg' ? '🔌' : m === 'serial' ? '🖥' : m === 'sim' ? '🎛' : '📶';
+}
+
+/* métodos visibles del paso 1 en ESTA plataforma (para el salto de pregunta) */
+function visibleMethods() {
+  const out = ['bluetooth'];
+  if (SHIM) out.push('otg');
+  else if (ADVANCED_UI) out.push('serial');
+  return out;
+}
+
+function initBascula() { showBasculaHome(); }
+
+/* msg opcional {cls,text} → se muestra en el resultado de la tarjeta */
+function showBasculaHome(msg) {
+  $('wizard').hidden = true;
+  $('connHome').hidden = false;
+  const cfg = loadCfg();
+  const has = !!cfg?.profile_id;
+  $('connEmpty').hidden = has;
+  $('connCard').hidden = !has;
+  $('basculaTitle').textContent = has ? 'Báscula' : 'Conectar la báscula';
+  if (has) {
+    const m = migrateMethod(cfg.method);
+    $('ccName').textContent = cfg.name ?? 'Báscula';
+    $('ccIcon').textContent = methodIcon(m);
+    $('ccMethod').textContent = METHOD_LABEL[m] ?? '';
+  }
+  const res = $('ccResult');
+  if (msg?.text) {
+    res.className = 'test-result show' + (msg.cls ? ' ' + msg.cls : '');
+    res.textContent = msg.text;
+  } else {
+    res.className = 'test-result';
+    res.textContent = '';
+  }
+  updateConnCard().catch(() => {});
+}
+
+async function updateConnCard() {
+  if ($('connCard').hidden) return;
+  const st = await scaleStatus(); // también refresca APP.scaleConnected
+  renderConnChip(st);
+}
+
+function renderConnChip(st) {
+  const chip = $('ccChip');
+  const connected = APP.scaleConnected;
+  const ts = st?.last_ts_ms != null ? parseTs(st.last_ts_ms) : null;
+  const fresh = (APP.lastReadingAt && Date.now() - APP.lastReadingAt < CC_FRESH_MS)
+    || (ts != null && Date.now() - ts < CC_FRESH_MS);
+  if (connected && fresh && st?.last_kg != null) {
+    chip.className = 'chip ok';
+    chip.textContent = `Conectada · ${fmt(st.last_kg)} kg`;
+  } else if (connected) {
+    chip.className = 'chip';
+    chip.textContent = 'Sin señal';
+  } else {
+    chip.className = 'chip err';
+    chip.textContent = st === null ? 'Programa apagado' : 'Sin conectar';
+  }
+  $('bccDisconnect').hidden = !connected;
+  $('bccConnect').hidden = connected;
+}
+
+/* latido en vivo: cada lectura del WS refresca el chip sin esperar el poll */
+function connCardLive(kg) {
+  if ($('connCard').hidden || !$('modBascula').classList.contains('active')) return;
+  if (!APP.scaleConnected) return;
+  const chip = $('ccChip');
+  chip.className = 'chip ok';
+  chip.textContent = `Conectada · ${fmt(Number(kg))} kg`;
+  $('bccDisconnect').hidden = false;
+  $('bccConnect').hidden = true;
+}
+
+/* poll suave mientras la tarjeta está a la vista (estado + "Sin señal") */
+setInterval(() => {
+  if (!$('modBascula').classList.contains('active') || $('connCard').hidden) return;
+  updateConnCard().catch(() => {});
+}, 2500);
+
+$('bConnStart').onclick = () => openWizard();
+$('bccChange').onclick = () => openWizard();
+
+$('bccDisconnect').onclick = async () => {
+  const b = $('bccDisconnect');
+  b.disabled = true;
+  try {
+    await apiJson('/api/scale/disconnect', { method: 'POST', body: {} });
+    APP.scaleConnected = false;
+    APP.simActive = false;
+    APP.lastReadingAt = 0;
+    refreshSimUi();
+    showBasculaHome({ cls: '', text: 'Báscula desconectada. Tu configuración queda guardada — reconectas con un toque.' });
+  } catch (e) {
+    showBasculaHome({ cls: 'fail', text: e?.message ?? 'No pude desconectar la báscula.' });
+  } finally {
+    b.disabled = false;
+  }
+};
+
+$('bccConnect').onclick = async () => {
+  const b = $('bccConnect');
+  b.disabled = true;
+  const res = $('ccResult');
+  res.className = 'test-result show';
+  res.textContent = 'Conectando…';
+  try {
+    await connectFromCfg(loadCfg());
+    showBasculaHome({ cls: 'ok', text: '✓ Conectada — esperando la primera lectura de la báscula…' });
+  } catch {
+    showBasculaHome({ cls: 'fail', text: 'No pude conectar. Revisa que la báscula esté encendida, o toca «Cambiar de báscula».' });
+  } finally {
+    b.disabled = false;
+  }
+};
+
+/* ============================================================
    MÓDULO BÁSCULA — WIZARD DE CONEXIÓN (método → marca → dirección)
    ============================================================ */
 const WIZ = {
@@ -1143,13 +1284,28 @@ function initWizard() {
     if (cfg.signal) WIZ.signal = cfg.signal;
     WIZ.reverse = !!cfg.reverse_frame;
   }
-  // métodos que no existen en esta plataforma no se precargan
+  // métodos que no existen (o están tapados) en esta plataforma no se precargan
   if (SHIM && WIZ.method === 'serial') WIZ.method = null;
   if (!SHIM && WIZ.method === 'otg') WIZ.method = null;
+  if (!SHIM && !ADVANCED_UI && WIZ.method === 'serial') WIZ.method = null;
   $('testResult').className = 'test-result';
   showHexPanel(false);
   wizGo(1);
 }
+
+/* abre el wizard (tapa la tarjeta). Si en esta plataforma queda UNA sola
+   opción de conexión (ej. escritorio sin avanzado = solo Bluetooth), la
+   pregunta "¿cómo la vas a conectar?" se salta y entra directo. */
+function openWizard() {
+  $('connHome').hidden = true;
+  $('wizard').hidden = false;
+  $('basculaTitle').textContent = 'Conectar la báscula';
+  initWizard();
+  $('bWizHome').hidden = !loadCfg()?.profile_id; // ◂ Volver a la tarjeta
+  const methods = visibleMethods();
+  if (methods.length === 1) chooseMethod(methods[0]);
+}
+$('bWizHome').onclick = () => showBasculaHome();
 
 function wizGo(step) {
   for (const [i, id] of [[1, 'wizPane1'], [2, 'wizPane2'], [3, 'wizPane3']]) {
@@ -1160,13 +1316,14 @@ function wizGo(step) {
     dot.classList.toggle('active', i === step);
     dot.classList.toggle('done', i < step);
   }
-  // BT automático (APK): una sola pantalla, sin pasos ni Probar/Guardar —
+  // BT/OTG automático (APK): una sola pantalla, sin pasos ni Probar/Guardar —
   // tocar el dispositivo hace todo (detectar, conectar, guardar).
-  const btAuto = SHIM && WIZ.method === 'bluetooth' && !WIZ.advanced;
+  const autoFlow = SHIM && !WIZ.advanced
+    && (WIZ.method === 'bluetooth' || WIZ.method === 'otg');
   const steps = document.querySelector('#wizard .wizsteps');
-  if (steps) steps.hidden = btAuto && step === 3;
+  if (steps) steps.hidden = autoFlow && step === 3;
   const actions = $('bProbar')?.closest('.config-actions');
-  if (actions) actions.hidden = btAuto && step === 3;
+  if (actions) actions.hidden = autoFlow && step === 3;
   $('testResult').className = 'test-result';
   showHexPanel(false);
   if (step === 2) renderCommons();
@@ -1184,33 +1341,44 @@ function showHexPanel(show) {
 /* Tarjetas por plataforma (paso 1 = UNA sola pregunta):
    - 📶 Bluetooth: siempre (en el APK es el camino principal, automático).
    - 🔌 OTG: solo en la app Android (cable USB al celular).
-   - 🖥 Cable serial: solo en escritorio (COM/tty y conversor de red).
+   - 🖥 Cable serial: solo en escritorio Y con el flag avanzado
+     (?avanzado=1 / localStorage porcipeso_avanzado — igual que la Nube).
    La báscula simulada vive en el módulo Pesaje ("Usar báscula simulada"). */
 {
   const otgCard = document.querySelector('#wizPane1 [data-method="otg"]');
   const serialCard = document.querySelector('#wizPane1 [data-method="serial"]');
   if (otgCard) otgCard.hidden = !SHIM;
-  if (serialCard) serialCard.hidden = !!SHIM;
+  if (serialCard) serialCard.hidden = !!SHIM || !ADVANCED_UI;
+}
+
+function chooseMethod(m) {
+  WIZ.method = m;
+  if (WIZ.profileId === 'sim') { WIZ.profileId = null; WIZ.profileName = null; }
+  // Bluetooth y OTG en el APK: SIN marcas ni catálogo — directo a buscar y
+  // auto-detectar (paso 3). Las marcas/velocidades quedan solo en Cable
+  // serial y en "Ajustes avanzados" de Bluetooth/OTG.
+  if (SHIM && !WIZ.advanced && (m === 'bluetooth' || m === 'otg')) {
+    wizGo(3);
+  } else {
+    wizGo(2);
+  }
 }
 
 for (const b of document.querySelectorAll('#wizPane1 [data-method]')) {
-  b.addEventListener('click', () => {
-    WIZ.method = b.dataset.method;
-    if (WIZ.profileId === 'sim') { WIZ.profileId = null; WIZ.profileName = null; }
-    // Bluetooth en el APK: SIN marcas ni catálogo — directo a buscar y
-    // auto-detectar (paso 3). Las marcas quedan solo en OTG/Cable serial
-    // (y en "Ajustes avanzados" del Bluetooth).
-    if (WIZ.method === 'bluetooth' && SHIM && !WIZ.advanced) {
-      wizGo(3);
-    } else {
-      wizGo(2);
-    }
-  });
+  b.addEventListener('click', () => chooseMethod(b.dataset.method));
 }
-$('bWizBack2').onclick = () => { WIZ.advanced = false; wizGo(1); };
+$('bWizBack2').onclick = () => {
+  WIZ.advanced = false;
+  // con UNA sola opción de conexión el paso 1 se saltó: atrás = inicio
+  if (visibleMethods().length === 1) { showBasculaHome(); return; }
+  wizGo(1);
+};
 $('bWizBack3').onclick = () => {
   if (WIZ.method === 'sim') { wizGo(1); return; }
-  if (WIZ.method === 'bluetooth' && SHIM && !WIZ.advanced) { wizGo(1); return; }
+  if (SHIM && !WIZ.advanced && (WIZ.method === 'bluetooth' || WIZ.method === 'otg')) {
+    wizGo(1);
+    return;
+  }
   wizGo(2);
 };
 
@@ -1283,8 +1451,16 @@ function renderAddr() {
     return;
   }
   if (WIZ.method === 'otg' || WIZ.method === 'cable') {
+    // ============ CAMINO PRINCIPAL OTG (a prueba de tontos) ============
+    // Igual que Bluetooth: sin marcas, sin baudios, sin señal — buscar →
+    // tocar el dispositivo USB → detección automática completa (todas las
+    // velocidades × 4 combinaciones × todos los parsers, perfil "auto").
+    if (SHIM && !WIZ.advanced) {
+      renderOtgAuto();
+      return;
+    }
     if (SHIM) {
-      // App móvil: OTG (USB serial al teléfono)
+      // App móvil, "Ajustes avanzados": marca elegida a mano + baudios + señal
       $('wizQ3').textContent = '¿Qué hay conectado al teléfono?';
       const savedBaud = same && cfg?.baudrate ? Number(cfg.baudrate) : 9600;
       box.innerHTML = `
@@ -1721,7 +1897,8 @@ async function btAutoConnect(dev) {
     if (r.invert_bits) fixes.push('señal invertida corregida sola');
     if (r.reverse_frame) fixes.push('números al revés corregidos solos');
     const kgTxt = r.kg != null ? `la báscula responde: ${fmt(r.kg)} kg` : 'la báscula responde';
-    wizResult('ok', `✓ Conectada — ${kgTxt}${fixes.length ? ` (${fixes.join(' y ')})` : ''}. ¡Ya puedes ir a Pesaje!`);
+    // aterriza en la tarjeta de estado: chip verde + Desconectar a la vista
+    showBasculaHome({ cls: 'ok', text: `✓ Conectada — ${kgTxt}${fixes.length ? ` (${fixes.join(' y ')})` : ''}. ¡Ya puedes ir a Pesaje!` });
   } else {
     if (status) status.textContent = '';
     const msg = (r?.ok && !r?.parser_ok)
@@ -1745,7 +1922,151 @@ function btAutoRetry(dev) {
   status.appendChild(b);
 }
 
-/* ---- buscador USB/OTG (app móvil) ---- */
+/* ---- OTG AUTOMÁTICO (camino principal en la app, igual que BT) ----
+   buscar dispositivos USB → tocar → detección completa (el detector barre
+   todas las velocidades y, sobre CADA captura, analiza todos los parsers ×
+   las 4 combinaciones — analyzeCombos) → conectar → guardar. El usuario
+   jamás elige marca ni baudios. */
+function renderOtgAuto() {
+  $('wizQ3').textContent = 'Elige tu báscula';
+  $('wizSel').textContent = '🔌 OTG — sin configurar nada: yo detecto la marca, la velocidad y la señal';
+  const box = $('wizAddr');
+  box.innerHTML = `
+    <div class="bt-auto-status" id="otgAutoStatus">🔍 Buscando dispositivos USB…</div>
+    <div class="btlist" id="usbList"></div>
+    <div class="config-actions">
+      <button id="bUsbScan" type="button">🔍 Buscar de nuevo</button>
+    </div>
+    <p class="wizhelp">🔌 Conecta el indicador al teléfono con un <b>cable OTG</b> y un
+      adaptador USB-serial (FTDI, CH340, CP210x, PL2303 o CDC). Si Android pregunta
+      si permites el acceso al dispositivo USB, acepta.</p>
+    <details class="wizhelp-more">
+      <summary>¿No aparece nada?</summary>
+      <p>Prueba otro cable OTG (algunos son solo de carga), revisa que el adaptador
+      esté bien puesto y toca «Buscar de nuevo».</p>
+    </details>
+    <button class="btn-link discreet" id="bOtgAdvanced" type="button">Ajustes avanzados — elegir marca y velocidad a mano</button>`;
+  $('bUsbScan').onclick = () => { otgAutoScan().catch(() => {}); };
+  $('bOtgAdvanced').onclick = () => { WIZ.advanced = true; wizGo(2); };
+  otgAutoScan().catch(() => {});
+}
+
+async function otgAutoScan() {
+  const list = $('usbList'), status = $('otgAutoStatus'), btn = $('bUsbScan');
+  if (!list) return;
+  if (btn) btn.disabled = true;
+  list.innerHTML = '<div class="empty">Buscando…</div>';
+  try {
+    const devices = await apiJson('/api/usb/devices');
+    if (!list.isConnected) return;
+    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
+    if (!arr.length) {
+      if (status && status.isConnected) status.textContent = '';
+      list.innerHTML = '<div class="empty">No veo nada conectado por OTG. Conecta el cable y vuelve a buscar.</div>';
+      return;
+    }
+    if (status && status.isConnected) status.textContent = 'Toca tu báscula para conectarla:';
+    list.innerHTML = '';
+    for (const dev of arr) {
+      const vidpid = `${Number(dev?.vid).toString(16).padStart(4, '0')}:${Number(dev?.pid).toString(16).padStart(4, '0')}`;
+      const b = document.createElement('button');
+      b.className = 'bt-item';
+      b.innerHTML = `<span class="bt-n">${escapeHtml(dev?.name || 'Adaptador USB-serial')}</span>` +
+        `<span class="bt-a mono">${escapeHtml(vidpid)} · ${escapeHtml(dev?.driver ?? '')}</span>`;
+      b.onclick = () => {
+        for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
+        otgAutoConnect(dev).catch(() => {});
+      };
+      list.appendChild(b);
+    }
+  } catch (e) {
+    if (status && status.isConnected) status.textContent = '';
+    if (list.isConnected) list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos USB.')}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function otgAutoConnect(dev) {
+  const status = $('otgAutoStatus');
+  if (dev?.deviceId == null) return;
+  showHexPanel(true);
+  if (status) status.innerHTML = `🎧 Escuchando <b>${escapeHtml(dev.name || 'el adaptador USB')}</b>… ` +
+    'pruebo todas las velocidades y detecto la marca y la señal (hasta ~20 s)';
+  $('testResult').className = 'test-result';
+  let r = null;
+  try {
+    r = await apiJson('/api/scale/detect', {
+      method: 'POST',
+      body: {
+        profile_id: 'auto', transport: 'usb',
+        device_id: dev.deviceId, baudrates: BAUDRATES,
+      },
+    });
+  } catch (e) {
+    showHexPanel(false);
+    if (status) status.textContent = '';
+    wizResult('fail', e?.message ?? 'No pude escuchar la báscula.');
+    otgAutoRetry(dev);
+    return;
+  }
+  showHexPanel(false);
+  if (r?.ok && r?.parser_ok && r?.parser) {
+    const body = {
+      profile_id: 'auto', parser: r.parser, transport: 'usb',
+      device_id: dev.deviceId, invert_bits: !!r.invert_bits,
+      reverse_frame: !!r.reverse_frame,
+    };
+    if (r.baudrate) body.baudrate = r.baudrate;
+    try {
+      await api('/api/scale/connect', { method: 'POST', body });
+    } catch {
+      if (status) status.textContent = '';
+      wizResult('fail', 'La detecté pero no pude dejarla conectada — intenta de nuevo.');
+      otgAutoRetry(dev);
+      return;
+    }
+    APP.scaleConnected = true;
+    APP.simActive = false;
+    // parser, velocidad y polaridad detectados quedan guardados: la próxima
+    // vez la app conecta directo (re-resolviendo el deviceId por vid:pid)
+    saveCfg({
+      method: 'otg', profile_id: 'auto', parser: r.parser,
+      invert_bits: !!r.invert_bits, reverse_frame: !!r.reverse_frame,
+      usb: { vid: dev.vid, pid: dev.pid, name: dev.name ?? '' },
+      ...(r.baudrate ? { baudrate: r.baudrate } : {}),
+      signal: 'auto',
+      name: `Báscula USB (${dev.name || 'OTG'})`,
+    });
+    const fixes = [];
+    if (r.invert_bits) fixes.push('señal invertida corregida sola');
+    if (r.reverse_frame) fixes.push('números al revés corregidos solos');
+    const kgTxt = r.kg != null ? `la báscula responde: ${fmt(r.kg)} kg` : 'la báscula responde';
+    showBasculaHome({ cls: 'ok', text: `✓ Conectada — ${kgTxt}${fixes.length ? ` (${fixes.join(' y ')})` : ''}. ¡Ya puedes ir a Pesaje!` });
+  } else {
+    if (status) status.textContent = '';
+    const msg = (r?.ok && !r?.parser_ok)
+      ? 'Recibo datos pero no los entiendo — puede ser un modelo que aún no conozco. En «Ajustes avanzados» puedes elegir la marca a mano.'
+      : (r?.message ?? 'No reconocí la báscula.');
+    wizResult('fail', msg);
+    otgAutoRetry(dev);
+  }
+}
+
+/* tras un fallo: botón Reintentar (mismo dispositivo); "Ajustes avanzados"
+   ya está en pantalla para forzar marca/velocidad a mano */
+function otgAutoRetry(dev) {
+  const status = $('otgAutoStatus');
+  if (!status || !status.isConnected) return;
+  status.innerHTML = '';
+  const b = document.createElement('button');
+  b.className = 'btn-primary';
+  b.textContent = `↻ Reintentar con ${dev.name || 'el adaptador USB'}`;
+  b.onclick = () => { otgAutoConnect(dev).catch(() => {}); };
+  status.appendChild(b);
+}
+
+/* ---- buscador USB/OTG (app móvil, modo AVANZADO) ---- */
 async function scanUsbDevices() {
   const list = $('usbList'), btn = $('bUsbScan');
   if (!list) return;
@@ -1975,7 +2296,8 @@ $('bGuardarCfg').onclick = () => {
   };
   saveCfg(cfg);
   if (WIZ.method !== 'sim') APP.simActive = false;
-  wizResult('ok', `Guardado: ${cfg.name} ✓ — ya puedes ir al módulo Pesaje.`);
+  // aterriza en la tarjeta de estado con la config recién guardada
+  showBasculaHome({ cls: 'ok', text: `Guardado: ${cfg.name} ✓ — ya puedes ir al módulo Pesaje.` });
 };
 
 /* ============================================================
@@ -2152,12 +2474,8 @@ function drawSpark() {
      - en la consola:    localStorage.setItem('porcipeso_avanzado','1')
    y recargar. Para re-activarla de fábrica: borrar este bloque.
    ============================================================ */
-const ADVANCED_UI = (() => {
-  try {
-    return localStorage.getItem('porcipeso_avanzado') === '1'
-      || new URLSearchParams(location.search).get('avanzado') === '1';
-  } catch { return false; }
-})();
+/* ADVANCED_UI se define arriba (junto a SHIM): el mismo flag destapa
+   la Nube y el método Cable serial del wizard. */
 if (!ADVANCED_UI) {
   const nb = $('nubeBox');
   if (nb) nb.hidden = true;
