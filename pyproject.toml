@@ -14,7 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx", "websockets"]
+# playwright: tests e2e de la UI real (tests/e2e/test_ui_conexion.py);
+# si falta, esa suite se salta sola (importorskip).
+dev = ["pytest", "httpx", "websockets", "playwright"]
 build = ["pillow", "pyinstaller"]
 # Servidor nube (porcipeso.cloud): JWT + hashing Argon2id.
 # argon2-cffi elegido sobre passlib[bcrypt]: passlib está sin

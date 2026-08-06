@@ -275,10 +275,36 @@
       </div>
     </section>
 
-    <!-- ================= MÓDULO BÁSCULA: WIZARD DE CONEXIÓN ================= -->
+    <!-- ================= MÓDULO BÁSCULA: ESTADO + WIZARD DE CONEXIÓN ================= -->
     <section class="mod" id="modBascula">
-      <div class="modhead"><h2>Conectar la báscula</h2></div>
-      <div class="wizard" id="wizard">
+      <div class="modhead"><h2 id="basculaTitle">Báscula</h2></div>
+
+      <!-- INICIO: tarjeta de estado (con config guardada) o botón grande (sin config).
+           El wizard vive detrás: "Conectar báscula" / "Cambiar de báscula" lo abren. -->
+      <div class="connhome" id="connHome">
+        <div class="conn-empty" id="connEmpty" hidden>
+          <p class="tag">Todavía no has conectado una báscula. Toma un minuto — yo te guío paso a paso.</p>
+          <button class="btn-primary hero-btn" id="bConnStart">🔗 Conectar báscula</button>
+        </div>
+        <div class="conncard" id="connCard" hidden>
+          <div class="cc-head">
+            <span class="cc-ic" id="ccIcon" aria-hidden="true">📶</span>
+            <div class="cc-id">
+              <div class="cc-name" id="ccName">Báscula</div>
+              <div class="cc-method" id="ccMethod"></div>
+            </div>
+            <span class="chip" id="ccChip">Sin conectar</span>
+          </div>
+          <div class="cc-actions">
+            <button class="btn-primary cc-btn" id="bccConnect" hidden>🔗 Conectar</button>
+            <button class="btn-danger cc-btn" id="bccDisconnect" hidden>🔌 Desconectar</button>
+            <button class="cc-btn" id="bccChange">Cambiar de báscula</button>
+          </div>
+          <div class="test-result" id="ccResult"></div>
+        </div>
+      </div>
+
+      <div class="wizard" id="wizard" hidden>
 
         <ol class="wizsteps" aria-label="Pasos">
           <li class="ws active" id="wsDot1"><span class="n">1</span> Conexión</li>
@@ -288,8 +314,11 @@
 
         <!-- PASO 1: UNA sola pregunta. La visibilidad por plataforma la
              maneja app.js: OTG solo en la app Android; Cable serial solo
-             en escritorio (COM/tty y conversor de red viven ahí). -->
+             en escritorio Y detrás del flag avanzado (?avanzado=1 /
+             localStorage porcipeso_avanzado). Si queda UNA sola opción
+             visible, app.js se salta esta pregunta y entra directo. -->
         <div class="wizpane active" id="wizPane1">
+          <div class="mini-top"><button class="btn-link" id="bWizHome" hidden>◂ Volver</button></div>
           <h3 class="wizq">¿Cómo la vas a conectar?</h3>
           <div class="methodgrid">
             <button class="methodcard" data-method="bluetooth">

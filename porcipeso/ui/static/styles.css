@@ -562,3 +562,20 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
   font-size:15px;font-weight:600;cursor:pointer}
 .revtoggle input{width:22px;height:22px;flex:none;accent-color:var(--accent);cursor:pointer}
 .revtoggle small{display:block;font-weight:400;color:var(--muted)}
+
+/* ============ ⚙ Báscula: tarjeta de estado de conexión ============ */
+.connhome{display:flex;flex-direction:column;gap:14px}
+.conn-empty{display:flex;flex-direction:column;align-items:center;gap:16px;
+  padding:26px 18px;text-align:center}
+.conn-empty .tag{max-width:46ch}
+.conncard{background:var(--card);border:1px solid var(--border);border-radius:16px;
+  padding:18px;display:flex;flex-direction:column;gap:14px;max-width:560px}
+.cc-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.cc-ic{font-size:34px;line-height:1;flex:none}
+.cc-id{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto}
+.cc-name{font-size:18px;font-weight:700;line-height:1.25;overflow-wrap:anywhere}
+.cc-method{font-size:13.5px;color:var(--muted)}
+#ccChip{flex:none}
+.cc-actions{display:flex;gap:10px;flex-wrap:wrap}
+.cc-btn{flex:1 1 auto;min-height:56px;font-size:16px}
+.conncard .test-result{margin-top:0}
