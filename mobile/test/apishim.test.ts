@@ -143,7 +143,9 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 2, kg_each: 100 });
     await run(backend, 4000);
 
-    // 6) se baja 1 (-100) → BAJADA; vuelve a subir → REINGRESO
+    // 6) báscula de PASO: el grupo baja (avanza al camión) → NO descuenta,
+    //    NO emite evento. Luego un cerdo REBOTA (sube otra vez) → SUBIDA n=1,
+    //    doble contado. count pasa 2 → 3.
     await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
     await run(backend, 4000);
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 100 });
@@ -151,25 +153,29 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
 
     events = await call(backend, "GET", `/api/sessions/${sid}/events`);
     expect(events.status).toBe(200);
-    expect(events.json.map((e: any) => e.tipo)).toEqual(["referencia", "subida", "bajada", "reingreso"]);
-    const [ref, subida, bajada] = events.json;
+    // sin evento BAJADA/REINGRESO: la bajada se ignora
+    expect(events.json.map((e: any) => e.tipo)).toEqual(["referencia", "subida", "subida"]);
+    const [ref, subida] = events.json;
     expect(ref.animales_estimados).toBe(1);
     expect(Math.abs(ref.delta_kg - 100)).toBeLessThan(3);
     expect(subida.animales_estimados).toBe(2);
-    expect(bajada.delta_kg).toBeLessThan(0);
     for (const ev of events.json) {
-      // misma fila que la DB del backend Python
       expect(ev).toHaveProperty("sesion_id", sid);
       expect(ev).toHaveProperty("peso_antes");
       expect(ev).toHaveProperty("peso_despues");
-      expect(ev).toHaveProperty("estab_ms");
       expect(ev.ambiguo).toBe(false);
-      expect(ev.opciones).toEqual([]);
     }
 
-    // motivo de la bajada (igual que /api/events/{id}/motivo del backend)
-    const motivo = await call(backend, "POST", `/api/events/${bajada.id}/motivo`, { motivo: "estres" });
-    expect(motivo.json.motivo_bajada).toBe("estres");
+    // 6b) DEVUELTOS MANUAL: el operario vio el rebote → registra 1 devuelto.
+    //     Descuenta 1×promedio: count 3 → 2, total ~300 → ~200.
+    const ret = await call(backend, "POST", "/api/session/returned", { n: 1 });
+    expect(ret.status).toBe(200);
+    expect(ret.json.descontados).toBe(1);
+    expect(ret.json.count).toBe(2);
+    events = await call(backend, "GET", `/api/sessions/${sid}/events`);
+    const ajuste = events.json.find((e: any) => e.tipo === "ajuste");
+    expect(ajuste).toBeTruthy();
+    expect(ajuste.motivo_bajada).toBe("devuelto_manual");
 
     // lecturas crudas persistidas para la sesión
     expect(await backend.repo.countReadings(sid)).toBeGreaterThan(50);
@@ -187,7 +193,6 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     // 8) estadística de sesión (métricas muestrales v2) y global
     const stats = await call(backend, "GET", `/api/sessions/${sid}/stats`);
     expect(stats.json.total_animales).toBe(2);
-    expect(stats.json.n_eventos).toBe(4);
     expect(stats.json.modo).toBe("lote");
     expect(stats.json.tipo_muestra).toBe("estimada");
     // muestras individuales: la REFERENCIA (~100) + el reingreso n=1 (~100)

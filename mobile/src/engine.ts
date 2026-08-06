@@ -309,62 +309,77 @@ export class WeighingEngine {
     if (Math.abs(delta) < this.config.min_delta_kg) {
       return; // vibración / deriva: no es escalón (baseline NO avanza)
     }
+    if (delta < 0) {
+      // BAJADA = el grupo ya pesado avanzó al camión (flujo NORMAL). La
+      // báscula de paso no distingue "avanzó" de "se devolvió", así que NO
+      // descuenta nunca automáticamente; los devueltos los registra el
+      // operario con registerReturned(). Solo resetea la base.
+      this.baseline = level;
+      return;
+    }
     this.step(level, delta, tsMs, estabMs);
   }
 
   private step(level: number, delta: number, tsMs: number, estabMs: number): void {
+    // delta > 0 garantizado por stableLote (las bajadas no llegan aquí)
     const avg = this.avgKg as number;
     const nRaw = delta / avg;
-    const nSigned = pyRound(nRaw);
-    if (nSigned === 0) {
+    const n = pyRound(nRaw);
+    if (n === 0) {
       // escalón parcial (ej. cerdo a medio subir): se ignora SIN
       // avanzar la base, para que el escalón completo se mida entero
       return;
     }
-    const n = Math.abs(nSigned);
-    const residuo = Math.abs(nRaw - nSigned);
+    const residuo = Math.abs(nRaw - n);
     const pesoAntes = this.baseline as number;
     this.baseline = level; // el peso en plataforma cambió de verdad
 
     if (residuo > this.config.tolerance) {
       const candidatos = new Set<number>();
-      for (const c of [Math.floor(Math.abs(nRaw)), Math.ceil(Math.abs(nRaw))]) {
+      for (const c of [Math.floor(nRaw), Math.ceil(nRaw)]) {
         if (c > 0) candidatos.add(c);
       }
       const opciones = Array.from(candidatos).sort((a, b) => a - b);
-      const tipo: EventTypeT = delta > 0 ? "subida" : "bajada";
-      const ev = this.newEvent(tsMs, pesoAntes, level, delta, n, tipo, estabMs, true, opciones);
+      const ev = this.newEvent(tsMs, pesoAntes, level, delta, n, "subida", estabMs, true, opciones);
       this.pending.set(ev.id as number, ev);
       this.onEvent(ev);
       return;
     }
 
-    const tipo: EventTypeT = delta > 0 ? "subida" : "bajada";
-    const ev = this.newEvent(tsMs, pesoAntes, level, delta, n, tipo, estabMs);
+    const ev = this.newEvent(tsMs, pesoAntes, level, delta, n, "subida", estabMs);
     this.apply(ev, n);
     this.onEvent(ev);
   }
 
-  /** Aplica n animales (con el signo del delta) al estado de sesión. */
+  /** Aplica n cerdos SUBIDOS al estado de sesión (solo positivo). */
   private apply(ev: WeighEvent, n: number): void {
-    if (ev.delta_kg > 0) {
-      if (this.unmatchedBajadas.length > 0) {
-        // SPEC §4.1: subida tras bajada sin emparejar = reingreso
-        ev.tipo = "reingreso";
-        this.links.set(ev.id as number, this.unmatchedBajadas.shift() as number);
-      } else {
-        ev.tipo = "subida";
-      }
-      this.count += n;
-    } else {
-      ev.tipo = "bajada";
-      this.unmatchedBajadas.push(ev.id as number);
-      this.count -= n;
-    }
+    ev.tipo = "subida";
+    this.count += n;
     this.totalKg += ev.delta_kg;
     if (this.count > 0) {
       this.avgKg = this.totalKg / this.count;
     }
+  }
+
+  /** Descuento MANUAL de cerdos devueltos (rebote por miedo). Descuenta
+   *  n × promedio del conteo y del total; nunca deja el conteo negativo.
+   *  Es la única vía de descuento (ya no hay bajada automática). */
+  registerReturned(n: number): WeighEvent | null {
+    if (this.sessionId === null || n < 1) return null;
+    n = Math.min(n, this.count);
+    if (n === 0) return null;
+    const avg = this.avgKg ?? 0;
+    const delta = -avg * n;
+    const pesoAntes = this.totalKg;
+    this.count -= n;
+    this.totalKg = Math.max(0, this.totalKg + delta);
+    // el promedio por cerdo no cambia (se resta n×avg): se mantiene estable
+    const ts = this.lastTsMs ?? 0;
+    const ev = this.newEvent(ts, pesoAntes, this.totalKg, delta, n, "ajuste", 0);
+    ev.animales_confirmados = n;
+    ev.motivo_bajada = "devuelto_manual";
+    this.onEvent(ev);
+    return ev;
   }
 
   // ---------------------------------------------------- modo "unidades"

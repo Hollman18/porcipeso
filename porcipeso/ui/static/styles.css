@@ -590,3 +590,18 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
 .cc-actions{display:flex;gap:10px;flex-wrap:wrap}
 .cc-btn{flex:1 1 auto;min-height:56px;font-size:16px}
 .conncard .test-result{margin-top:0}
+
+/* devueltos manual + campo manual de la pregunta (v2.4.2) */
+.returned-box{margin:10px 0;padding:12px 14px;border:1px dashed var(--border);
+  border-radius:12px;background:var(--card)}
+.returned-box .rb-lbl{display:block;font-size:14px;color:var(--muted);margin-bottom:8px}
+.returned-box .rb-row{display:flex;gap:8px}
+.returned-box input{flex:0 0 110px;min-width:0;font-size:16px;padding:12px;
+  border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--ink)}
+.returned-box #bReturned{flex:1;font-size:15px;font-weight:700;padding:12px;
+  border:none;border-radius:10px;background:var(--amber,#B97E1E);color:#fff;cursor:pointer}
+.q-manual{display:inline-flex;gap:6px;align-items:center;margin-left:6px}
+.q-manual input{width:84px;font-size:16px;padding:10px;border:1px solid var(--border);
+  border-radius:10px;background:var(--bg);color:var(--ink)}
+.q-manual button{font-size:15px;font-weight:700;padding:10px 14px;border:none;
+  border-radius:10px;background:var(--accent,#178A50);color:#fff;cursor:pointer}

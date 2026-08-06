@@ -64,11 +64,12 @@ describe("paridad engine.ts vs engine.py (fixtures del engine real)", () => {
     );
     expect(modos).toContain("lote");
     expect(modos).toContain("unidades");
-    // los escenarios v2 deben ejercitar la REFERENCIA de calibración
+    // los escenarios v2 deben ejercitar la REFERENCIA de calibración y subidas
+    // (las bajadas ya NO emiten evento: báscula de paso, se ignoran)
     const tipos = new Set(
       cases.flatMap((c) => c.expected.events.map((e) => e["tipo"] as string)),
     );
-    for (const t of ["referencia", "subida", "bajada", "reingreso"]) {
+    for (const t of ["referencia", "subida"]) {
       expect(tipos).toContain(t);
     }
   });

@@ -59,6 +59,23 @@ class FakeEngine(Engine):
         self.confirmed.append((event_id, n))
         return None
 
+    def register_returned(self, n: int) -> Optional[WeighEvent]:
+        if self.session_id is None or n < 1 or self._snapshot.count < 1:
+            return None
+        n = min(n, self._snapshot.count)
+        avg = self._snapshot.avg_kg or 0.0
+        new_count = self._snapshot.count - n
+        new_total = max(0.0, self._snapshot.total_kg - avg * n)
+        self.set_snapshot(count=new_count, total_kg=new_total)
+        ev = WeighEvent(
+            id=None, session_id=self.session_id, ts_ms=1,
+            peso_antes=0.0, peso_despues=0.0, delta_kg=-avg * n,
+            animales_estimados=n, tipo=EventType.AJUSTE,
+            animales_confirmados=n, motivo_bajada="devuelto_manual",
+        )
+        self.on_event(ev)
+        return ev
+
     def snapshot(self) -> EngineSnapshot:
         return self._snapshot
 

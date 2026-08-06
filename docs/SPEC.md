@@ -72,16 +72,16 @@ por cada escalón estable detectado:
 - El **promedio móvil auto-corregido** es la clave de la precisión: cada escalón confirmado recalibra el divisor, así el error no se acumula aunque los cerdos varíen de peso.
 - Los eventos ambiguos (ej. delta=250 kg con promedio=100 → ¿2 o 3 cerdos?) nunca se resuelven en silencio: quedan en cola de confirmación.
 
-### 4.1 Bajadas y reingresos (cerdo que se devuelve)
+### 4.1 Bajadas y devueltos (báscula de PASO — revisado 2026-08 con hardware real)
 
-El algoritmo es **bidireccional**: el conteo se deriva del peso neto en plataforma, no de "entradas". Es imposible el doble conteo por diseño.
+**Realidad de campo:** los cerdos suben a la plataforma, se pesan (uno o varios) y luego **bajan para avanzar al camión** — ese es el flujo NORMAL. Pero por miedo un cerdo puede subir (se pesa +1), devolverse, y al pasar el lote volver a subir (+1 otra vez): un mismo cerdo cuenta 2 o hasta 3 veces. La celda de carga **no puede distinguir** "bajó al camión" de "se devolvió" — así que el motor **ya no adivina** (el descuento automático bidireccional restaba cerdos ya despachados).
 
-- **Delta negativo estable** = evento `bajada`: descuenta `round(|delta| / promedio_movil)` del conteo y registra el peso aproximado del que bajó.
-- **Reingreso**: cuando vuelve a subir es un escalón positivo normal (+1). Neto del ciclo bajada+reingreso = 0 — el cerdo cuenta exactamente una vez.
-- **Correlación**: el sistema sugiere el match entre la bajada (−101.2 kg) y el escalón previo más cercano en peso (98.5 kg de las 10:05) para trazabilidad del reingreso.
-- **Bajada definitiva** (lesión/estrés/rechazo): el conteo ya quedó correcto; el operador etiqueta el evento con `motivo_bajada` (catálogo: estrés, lesión, rechazo, muerte) → aparece en el reporte del lote.
-- **Cruce simultáneo** (uno baja mientras otros suben): el residuo del delta neto no cuadra con el promedio → flag `ambiguo` + cola de confirmación. Recomendación operativa: manga de un solo sentido durante el cargue.
-- Nuevos valores de `tipo` en `eventos_pesaje`: `subida | bajada | reingreso | ajuste`; campo nuevo `motivo_bajada` (nullable) y `evento_relacionado_id` (para vincular bajada↔reingreso).
+Regla nueva:
+- **Toda bajada se IGNORA**: no emite evento ni descuenta; solo resetea la base para el siguiente grupo que suba. (Los tipos `bajada`/`reingreso` quedan en el enum por compatibilidad de datos, pero el motor ya no los emite automáticamente.)
+- **Las subidas cuentan** con `round(delta / promedio_movil)`; si el residuo supera la tolerancia → `ambiguo` con opciones + campo manual para escribir el número exacto.
+- **Devueltos MANUAL** (`register_returned(n)` → `POST /api/session/returned {n}`): el operario —que sí ve el rebote— escribe cuántos cerdos se devolvieron; se descuenta `n × promedio` del conteo y del total (corrige el doble conteo) y se emite un evento `ajuste` auditado (`motivo_bajada = "devuelto_manual"`, `animales_confirmados = n`). Nunca deja el conteo negativo. Es la ÚNICA vía de descuento.
+- El promedio por cerdo NO cambia al descontar devueltos (se resta `n×avg`): se mantiene estable.
+- UI: control "↩ ¿Se devolvió algún cerdo?" siempre visible durante el pesaje + campo manual "otro número" en la pregunta de subida ambigua.
 
 ## 5. Datos a registrar (todo al detalle)
 

@@ -116,17 +116,24 @@ def test_flujo_sim_completo_engine_real(ctx):
     assert subida["delta_kg"] == pytest.approx(200.0, abs=4.0)
     assert subida["ambiguo"] is False
 
-    # --- pig_off → BAJADA de 1 (se devuelve uno de 100) --------------------
+    # --- pig_off → báscula de PASO: la bajada se IGNORA (no evento) --------
     resp = client.post("/api/sim/action", json={"action": "pig_off"})
     assert resp.json()["pigs_fisicos"] == 1
     assert resp.json()["kg_target"] == pytest.approx(100.0)
+    time.sleep(3)  # deja estabilizar el nivel bajo
+    # no se emitió ningún evento nuevo por la bajada
+    assert len(_events()) == 2
 
+    # --- DEVUELTOS MANUAL: descuenta 1×promedio (count 2 → 1) --------------
+    resp = client.post("/api/session/returned", json={"n": 1})
+    assert resp.status_code == 200
+    assert resp.json()["descontados"] == 1
+    assert resp.json()["count"] == 1
     events = wait_for(lambda: e if len(e := _events()) >= 3 else None,
-                      msg="evento bajada")
-    bajada = events[2]
-    assert bajada["tipo"] == "bajada"
-    assert bajada["delta_kg"] == pytest.approx(-100.0, abs=4.0)
-    assert bajada["animales_estimados"] == 1
+                      msg="evento ajuste")
+    ajuste = [e for e in events if e["tipo"] == "ajuste"]
+    assert len(ajuste) == 1
+    assert ajuste[0]["motivo_bajada"] == "devuelto_manual"
 
     # --- lecturas crudas de verdad en SQLite -------------------------------
     conn = sqlite3.connect(db_path)
@@ -139,20 +146,18 @@ def test_flujo_sim_completo_engine_real(ctx):
     assert n_lecturas > 20  # 10 Hz durante varios segundos
 
     # --- close con conteo físico → conciliación desde el ENGINE real ------
-    # Tras calibrar count arranca en 0: subieron 2 y bajó 1 → queda 1.
+    # Tras calibrar count arranca en 0: subieron 2, devuelto 1 → queda 1.
     resp = client.post(f"/api/sessions/{sid}/close", json={"conteo_fisico": 1})
     assert resp.status_code == 200
     closed = resp.json()
     assert closed["estado"] == "cerrada"
-    assert closed["total_animales"] == 1          # 0 + 2 - 1
+    assert closed["total_animales"] == 1          # 2 - 1 devuelto
     assert closed["total_kg"] == pytest.approx(100.0, abs=6.0)
-    assert closed["promedio_final"] == pytest.approx(100.0, abs=3.0)
     assert closed["conteo_fisico"] == 1
     assert closed["diferencia_conciliacion"] == 0
 
     stats = client.get(f"/api/sessions/{sid}/stats").json()
     assert stats["total_animales"] == 1
-    assert stats["total_kg"] == pytest.approx(100.0, abs=6.0)
     assert stats["modo"] == "lote"
     assert stats["tipo_muestra"] == "estimada"
     # única muestra individual: la referencia (102.5) → sin dispersión

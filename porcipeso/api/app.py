@@ -138,6 +138,13 @@ class MotivoBody(BaseModel):
     motivo: str
 
 
+class ReturnedBody(BaseModel):
+    """Devueltos MANUAL: cerdos que se subieron, se devolvieron por miedo y se
+    re-pesarán. Descuenta n×promedio del conteo y total (corrige el doble
+    conteo). Es la única vía de descuento — la báscula de paso no adivina."""
+    n: int
+
+
 class LimpiarBody(BaseModel):
     """🧹 Liberar espacio: 'lecturas' (siempre seguro) o 'pesajes' cerrados
     anteriores a una fecha (irreversible; dry_run cuenta sin borrar)."""
@@ -622,6 +629,21 @@ def create_app(
         assert updated is not None
         hub.broadcast({"type": "event", **updated})
         return updated
+
+    @app.post("/api/session/returned")
+    def session_returned(body: ReturnedBody) -> dict[str, Any]:
+        """Registra n cerdos devueltos (rebote) en la sesión activa. El evento
+        AJUSTE lo persiste y difunde el wiring on_engine_event."""
+        if body.n < 1:
+            raise HTTPException(400, "n debe ser ≥ 1")
+        if st.engine is None or st.current_session_id is None:
+            raise HTTPException(409, "no hay un pesaje activo")
+        ev = st.engine.register_returned(body.n)
+        if ev is None:
+            raise HTTPException(409, "no hay cerdos que descontar")
+        snap = _snapshot_dict(st.engine.snapshot())
+        return {"ok": True, "descontados": ev.animales_confirmados,
+                "count": snap["count"], "total_kg": snap["total_kg"]}
 
     @app.get("/api/sessions/{session_id}/stats")
     def session_stats(session_id: int) -> dict[str, Any]:

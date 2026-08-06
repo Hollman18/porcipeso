@@ -306,57 +306,83 @@ class WeighingEngine(Engine):
         delta = level - self._baseline
         if abs(delta) < self.config.min_delta_kg:
             return  # vibración / deriva: no es escalón (baseline NO avanza)
+        if delta < 0:
+            # BAJADA = el grupo ya pesado avanzó al camión (flujo NORMAL).
+            # La báscula de paso NO puede distinguir "avanzó al camión" de
+            # "se devolvió por miedo", así que JAMÁS descuenta automáticamente
+            # (antes lo hacía y restaba cerdos ya despachados). Los cerdos que
+            # se devuelven y se re-pesan los registra el operario a mano con
+            # register_returned(). Aquí solo se resetea la base para el
+            # siguiente grupo que suba.
+            self._baseline = level
+            return
         self._step(level, delta, ts_ms, estab_ms)
 
     def _step(self, level: float, delta: float, ts_ms: int,
               estab_ms: int) -> None:
+        # delta > 0 garantizado por _stable_lote (las bajadas no llegan aquí)
         assert self._avg_kg is not None
         n_raw = delta / self._avg_kg
-        n_signed = round(n_raw)
-        if n_signed == 0:
+        n = round(n_raw)
+        if n == 0:
             # escalón parcial (ej. cerdo a medio subir): se ignora SIN
             # avanzar la base, para que el escalón completo se mida entero
             return
-        n = abs(n_signed)
-        residuo = abs(n_raw - n_signed)
+        residuo = abs(n_raw - n)
         peso_antes = self._baseline
         self._baseline = level  # el peso en plataforma cambió de verdad
 
         if residuo > self.config.tolerance:
             opciones = sorted({
-                c for c in (math.floor(abs(n_raw)), math.ceil(abs(n_raw)))
-                if c > 0
+                c for c in (math.floor(n_raw), math.ceil(n_raw)) if c > 0
             })
-            tipo = EventType.SUBIDA if delta > 0 else EventType.BAJADA
-            ev = self._new_event(ts_ms, peso_antes, level, delta, n, tipo,
-                                 estab_ms, ambiguo=True, opciones=opciones)
+            ev = self._new_event(ts_ms, peso_antes, level, delta, n,
+                                 EventType.SUBIDA, estab_ms,
+                                 ambiguo=True, opciones=opciones)
             self._pending[ev.id] = ev  # type: ignore[index]
             self._on_event(ev)
             return
 
-        tipo = EventType.SUBIDA if delta > 0 else EventType.BAJADA
-        ev = self._new_event(ts_ms, peso_antes, level, delta, n, tipo,
-                             estab_ms)
+        ev = self._new_event(ts_ms, peso_antes, level, delta, n,
+                             EventType.SUBIDA, estab_ms)
         self._apply(ev, n)
         self._on_event(ev)
 
     def _apply(self, ev: WeighEvent, n: int) -> None:
-        """Aplica n animales (con el signo del delta) al estado de sesión."""
-        if ev.delta_kg > 0:
-            if self._unmatched_bajadas:
-                # SPEC §4.1: subida tras bajada sin emparejar = reingreso
-                ev.tipo = EventType.REINGRESO
-                self._links[ev.id] = self._unmatched_bajadas.pop(0)  # type: ignore[index]
-            else:
-                ev.tipo = EventType.SUBIDA
-            self._count += n
-        else:
-            ev.tipo = EventType.BAJADA
-            self._unmatched_bajadas.append(ev.id)  # type: ignore[arg-type]
-            self._count -= n
+        """Aplica n cerdos SUBIDOS al estado de sesión (solo positivo)."""
+        ev.tipo = EventType.SUBIDA
+        self._count += n
         self._total_kg += ev.delta_kg
         if self._count > 0:
             self._avg_kg = self._total_kg / self._count
+
+    def register_returned(self, n: int) -> Optional[WeighEvent]:
+        """Descuento MANUAL de cerdos que se devolvieron (rebote por miedo).
+
+        El operario indica cuántos cerdos se subieron, se devolvieron y se
+        van a re-pesar; se descuenta n × promedio del conteo y del total para
+        corregir el doble conteo. Emite un evento AJUSTE auditado. Nunca deja
+        el conteo negativo. Es la ÚNICA vía de descuento (ya no hay bajada
+        automática): solo el humano sabe cuántos rebotaron.
+        """
+        if self._session_id is None or n < 1:
+            return None
+        n = min(n, self._count)
+        if n == 0:
+            return None
+        avg = self._avg_kg or 0.0
+        delta = -avg * n
+        peso_antes = self._total_kg
+        self._count -= n
+        self._total_kg = max(0.0, self._total_kg + delta)
+        # el promedio por cerdo no cambia (se resta n×avg): se mantiene estable
+        ts = self._last_ts_ms or 0
+        ev = self._new_event(ts, peso_antes, self._total_kg, delta, n,
+                             EventType.AJUSTE, 0)
+        ev.animales_confirmados = n
+        ev.motivo_bajada = "devuelto_manual"
+        self._on_event(ev)
+        return ev
 
     # ---------------------------------------------------- modo "unidades"
 

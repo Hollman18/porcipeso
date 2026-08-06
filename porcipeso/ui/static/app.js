@@ -608,6 +608,29 @@ function askNext() {
     };
     box.appendChild(b);
   }
+  // Campo MANUAL: si ninguna opción aplica, el operario escribe el número
+  const wrap = document.createElement('span');
+  wrap.className = 'q-manual';
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.min = '1'; inp.inputMode = 'numeric';
+  inp.placeholder = 'otro';
+  const ok = document.createElement('button');
+  ok.textContent = 'Confirmar';
+  ok.onclick = async () => {
+    const o = parseInt(inp.value, 10);
+    if (!Number.isInteger(o) || o < 1) { inp.focus(); return; }
+    ok.disabled = true;
+    try {
+      await api(`/api/events/${q.eventId}/confirm`, { method: 'POST', body: { n: o } });
+      addMove('up', '✓', `Me dijiste que subieron ${o} (+${fmt(q.delta)} kg)`);
+      activeQuestion = null;
+      say(`✓ Anotado: subieron ${o}`, 'calm', 4000);
+      if (q.delta > 0) for (let i = 0; i < o; i++) APP.weights.push(q.delta / o);
+      askNext();
+    } catch { ok.disabled = false; }
+  };
+  wrap.appendChild(inp); wrap.appendChild(ok);
+  box.appendChild(wrap);
   box.hidden = false;
 }
 
@@ -835,6 +858,24 @@ for (const b of document.querySelectorAll('#dlgWhy [data-motivo]')) {
     whyTarget = null;
   };
 }
+
+/* ---------------- devueltos manual ---------------- */
+$('bReturned').onclick = async () => {
+  const inp = $('inpReturned');
+  const n = parseInt(inp.value, 10);
+  if (!Number.isInteger(n) || n < 1) { inp.focus(); return; }
+  $('bReturned').disabled = true;
+  try {
+    const r = await api('/api/session/returned', { method: 'POST', body: { n } });
+    inp.value = '';
+    // quita n del promedio local para que la estadística de cierre cuadre
+    for (let i = 0; i < n && APP.weights.length; i++) APP.weights.pop();
+    addMove('down', '↩', `${n} devuelto${n > 1 ? 's' : ''} — descontados para no contar doble`);
+    say(`↩ Descontados ${n} devuelto${n > 1 ? 's' : ''}`, 'calm', 4000);
+  } catch (e) {
+    say('No pude descontar — ¿hay un pesaje activo con cerdos?', 'alert', 4000);
+  } finally { $('bReturned').disabled = false; }
+};
 
 /* ---------------- terminar ---------------- */
 $('bTerminar').onclick = async () => {

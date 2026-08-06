@@ -176,6 +176,16 @@
           </div>
         </div>
 
+        <!-- devueltos manual: un cerdo que se subió, se devolvió por miedo y
+             se re-pesa cuenta doble; el operario descuenta cuántos rebotaron -->
+        <div class="returned-box">
+          <span class="rb-lbl">↩ ¿Se devolvió algún cerdo? Descuéntalo para que no cuente doble:</span>
+          <div class="rb-row">
+            <input type="number" id="inpReturned" min="1" inputmode="numeric" placeholder="¿cuántos?">
+            <button id="bReturned">Descontar devueltos</button>
+          </div>
+        </div>
+
         <details class="moves">
           <summary>Ver movimientos</summary>
           <div class="moves-list" id="movesList"></div>

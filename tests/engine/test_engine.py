@@ -217,28 +217,56 @@ def test_suben_dos_promedio_autocorregido():
     assert snap.ref_kg == pytest.approx(102.5)      # la referencia no cambia
 
 
-def test_bajada_reingreso_neto_una_vez():
-    """SPEC §4.1: bajada -101 descuenta; reingreso +101 suma. Neto = 1 vez."""
+def test_bajada_no_descuenta_es_avance_al_camion():
+    """Báscula de paso (2026-08): una BAJADA = el grupo pesado avanzó al
+    camión (flujo normal). NO descuenta nada automáticamente y NO emite
+    evento; solo resetea la base para el siguiente grupo que suba."""
     eng, events, _ = make_engine()
     eng.open_session(1)
     ts = now_ms()
     ts = calibrar(eng, ts, 102.5)
     ts = feed_level(eng, ts, 102.5)   # sube 1 → count 1
     ts = feed_level(eng, ts, 309.5)   # +207 → count 3
-    ts = feed_level(eng, ts, 208.5)   # -101 → bajada
+    n_eventos_antes = len(events)
+    ts = feed_level(eng, ts, 0.0)     # baja todo (avanzó al camión)
     snap = eng.snapshot()
-    assert snap.count == 2
-    assert snap.total_kg == pytest.approx(208.5)
-    assert events[-1].tipo == EventType.BAJADA
-    assert events[-1].animales_estimados == 1
-    assert events[-1].delta_kg == pytest.approx(-101.0)
-
-    ts = feed_level(eng, ts, 309.5)   # +101 → reingreso
-    snap = eng.snapshot()
-    assert snap.count == 3
+    assert snap.count == 3            # NO descuenta
     assert snap.total_kg == pytest.approx(309.5)
-    assert events[-1].tipo == EventType.REINGRESO
-    assert events[-1].animales_estimados == 1
+    assert len(events) == n_eventos_antes   # la bajada no emite evento
+
+    # el siguiente grupo suma sobre la base reseteada (vacío)
+    ts = feed_level(eng, ts, 205.0)   # +205 ≈ 2 cerdos → count 5
+    snap = eng.snapshot()
+    assert snap.count == 5
+    assert events[-1].tipo == EventType.SUBIDA
+
+
+def test_devueltos_manual_corrige_doble_conteo():
+    """Rebote: un cerdo sube, se devuelve por miedo y al pasar el lote vuelve
+    a subir → contó 2 siendo 1. El operario registra 1 devuelto y queda 1."""
+    eng, events, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = calibrar(eng, ts, 100.0)
+    ts = feed_level(eng, ts, 100.0)   # sube 1 (se pesó)
+    ts = feed_level(eng, ts, 0.0)     # se devolvió por miedo (bajada ignorada)
+    ts = feed_level(eng, ts, 100.0)   # vuelve a subir → contó 2 (doble)
+    assert eng.snapshot().count == 2
+
+    ev = eng.register_returned(1)     # el operario ve el rebote y registra 1
+    assert ev is not None
+    assert ev.tipo == EventType.AJUSTE
+    assert ev.animales_confirmados == 1
+    assert ev.motivo_bajada == "devuelto_manual"
+    snap = eng.snapshot()
+    assert snap.count == 1                       # corregido
+    assert snap.total_kg == pytest.approx(100.0) # descontó 1×promedio
+    assert snap.avg_kg == pytest.approx(100.0)   # promedio estable
+
+    # no deja el conteo negativo
+    assert eng.register_returned(99) is not None
+    assert eng.snapshot().count == 0
+    assert eng.register_returned(1) is None      # ya en 0 → no hace nada
 
 
 def test_ambiguo_opciones_y_confirm():
@@ -341,19 +369,21 @@ def test_invariante_total_igual_suma_de_deltas():
     ts = now_ms()
 
     def check():
+        # v2 báscula de paso: las bajadas ya no emiten evento; el total suma
+        # solo las SUBIDAS aplicadas (la REFERENCIA no cuenta).
         aplicados = [e for e in events
-                     if not e.ambiguo and e.tipo != EventType.REFERENCIA]
+                     if not e.ambiguo and e.tipo == EventType.SUBIDA]
         assert abs(eng.snapshot().total_kg
                    - sum(e.delta_kg for e in aplicados)) < 0.01
 
-    # calibración + lote: sube 1, suben 2, baja 1, reingresa, suben 2
+    # calibración + lote: sube 1, suben 2, baja(ignorada), sube 1, suben 2
     for kg in (0.0, 102.5, 0.0, 102.5, 309.5, 208.5, 309.5, 514.5):
         ts = feed_level(eng, ts, kg)
         check()
 
     snap = eng.snapshot()
-    assert snap.count == 5          # 1 + 2 - 1 + 1 + 2
-    assert snap.total_kg == pytest.approx(514.5)
+    assert snap.count == 6          # 1 + 2 + 1 + 2 (la bajada no descuenta)
+    assert snap.total_kg == pytest.approx(615.5)
 
 
 # ---------------------------------------------------------------- SIN_SENAL

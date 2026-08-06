@@ -69,6 +69,32 @@ def _feed_standard_events(engine: FakeEngine) -> list:
     return events
 
 
+def test_devueltos_manual_endpoint(ctx):
+    """POST /api/session/returned descuenta n×promedio del conteo/total y
+    persiste un evento AJUSTE; 409 sin sesión o sin cerdos que descontar."""
+    client, holder = ctx
+    # sin sesión activa → 409
+    assert client.post("/api/session/returned", json={"n": 1}).status_code == 409
+    session = _open_session(client)
+    sid = session["id"]
+    engine = holder["engine"]
+    # simula 3 cerdos a 100 kg de promedio
+    engine.set_snapshot(count=3, total_kg=300.0, avg_kg=100.0)
+    # n<1 → 400
+    assert client.post("/api/session/returned", json={"n": 0}).status_code == 400
+    # registra 1 devuelto
+    r = client.post("/api/session/returned", json={"n": 1})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["descontados"] == 1
+    assert body["count"] == 2
+    assert body["total_kg"] == pytest.approx(200.0)
+    # quedó un evento AJUSTE persistido con el motivo
+    evs = client.get(f"/api/sessions/{sid}/events").json()
+    aj = [e for e in evs if e["tipo"] == "ajuste"]
+    assert len(aj) == 1 and aj[0]["motivo_bajada"] == "devuelto_manual"
+
+
 # --------------------------------------------------------------- ciclo completo
 
 def test_ciclo_completo(ctx):

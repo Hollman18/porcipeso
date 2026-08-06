@@ -506,6 +506,9 @@ export class LocalBackend {
     if ((m = /^\/api\/sessions\/(\d+)\/report\.pdf$/.exec(path)) && method === "GET") {
       return this.reportPrintView(Number(m[1]));
     }
+    if (method === "POST" && path === "/api/session/returned") {
+      return this.sessionReturned(body);
+    }
     if ((m = /^\/api\/events\/(\d+)\/confirm$/.exec(path)) && method === "POST") {
       return this.confirmEvent(Number(m[1]), body);
     }
@@ -992,6 +995,24 @@ export class LocalBackend {
       /* el sync jamás rompe el cierre */
     }
     return ok(closed);
+  }
+
+  private async sessionReturned(body: Record<string, unknown>): Promise<JsonResponse> {
+    const n = Number(body["n"]);
+    if (!Number.isInteger(n) || n < 1) return err(400, "n debe ser ≥ 1");
+    if (this.engine === null || this.currentSessionId === null) {
+      return err(409, "no hay un pesaje activo");
+    }
+    const ev = this.engine.registerReturned(n);
+    if (ev === null) return err(409, "no hay cerdos que descontar");
+    await this.flush(); // el evento AJUSTE se persiste vía onEvent
+    const snap = this.snapshotDict(this.engine.snapshot());
+    return ok({
+      ok: true,
+      descontados: ev.animales_confirmados,
+      count: snap["count"],
+      total_kg: snap["total_kg"],
+    });
   }
 
   private async confirmEvent(eventId: number, body: Record<string, unknown>): Promise<JsonResponse> {

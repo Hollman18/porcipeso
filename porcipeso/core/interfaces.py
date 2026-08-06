@@ -64,6 +64,11 @@ class Engine(ABC):
     @abstractmethod
     def confirm(self, event_id: int, n: int) -> Optional[WeighEvent]: ...
 
+    def register_returned(self, n: int) -> Optional[WeighEvent]:
+        """Descuento manual de cerdos devueltos (rebote). Default no-op para
+        motores que no lo soporten; WeighingEngine lo implementa."""
+        return None
+
     @abstractmethod
     def snapshot(self) -> EngineSnapshot: ...
 
