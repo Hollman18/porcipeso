@@ -38,6 +38,19 @@ export interface UsbDeviceInfo {
 export interface PorciSerialPlugin {
   /** Bluetooth emparejados (BLUETOOTH_CONNECT runtime en Android 12+). */
   listPaired(): Promise<{ devices: PairedDevice[] }>;
+  /**
+   * Discovery clásico PROPIO de cercanos no emparejados (bug de campo
+   * Xiaomi/MIUI: el scan() de @e-is no los surtía). startDiscovery inicia
+   * el ciclo (~12 s); discoveryPoll devuelve el acumulado sin duplicados
+   * + finished; cancelDiscovery lo corta (Buscar de nuevo = cancel+start).
+   * Errores: "location_off" (Android ≤11 con Ubicación apagada),
+   * "permission_denied", "bluetooth_off".
+   */
+  startDiscovery(): Promise<{ started: boolean }>;
+  discoveryPoll(): Promise<{ devices: PairedDevice[]; finished: boolean }>;
+  cancelDiscovery(): Promise<void>;
+  /** Aviso accionable: abre los ajustes de Ubicación del sistema. */
+  openLocationSettings(): Promise<void>;
   /** Canal SPP crudo: bytes sin decodificar (base64). */
   btConnect(o: { address: string }): Promise<void>;
   btRead(): Promise<{ data: string }>; // base64
@@ -78,10 +91,17 @@ export function base64ToBytes(b64: string): Uint8Array {
 }
 
 /** Errores del plugin → mensaje en humano (permisos, BT apagado…). */
+export const LOCATION_OFF_MSG =
+  "Para buscar dispositivos cercanos, Android exige la Ubicación encendida — " +
+  "actívala un momento y vuelve a buscar.";
+
 export function humanizeSerialError(e: unknown): string {
   const raw = String(e instanceof Error ? e.message : e);
   if (/not implemented|unimplemented|not available on web/i.test(raw)) {
     return NOT_ANDROID_MSG;
+  }
+  if (/location_off/i.test(raw)) {
+    return LOCATION_OFF_MSG;
   }
   if (/permission|permiso|denied/i.test(raw)) {
     return (
@@ -186,47 +206,72 @@ export class UsbTransport implements ByteTransport {
 
 // ------------------------------------------------------- listados (shim)
 
-/** Emparejados + cercanos → forma del endpoint GET /api/bt/devices. */
-export async function listBtDevices(): Promise<
-  Array<{ name: string; address: string; paired: boolean }>
-> {
-  const out = new Map<string, { name: string; address: string; paired: boolean }>();
-  let anySource = false;
+export interface BtDeviceInfo {
+  name: string;
+  address: string;
+  paired: boolean;
+}
 
-  // 1) EMPAREJADOS (plugin local; los indicadores ya emparejados aparecen
-  //    aunque estén fuera de alcance o sin anunciar).
-  if (nativeSerialAvailable()) {
-    const res = await PorciSerial.listPaired(); // puede lanzar: permiso denegado
-    anySource = true;
-    for (const d of res.devices ?? []) {
-      out.set(d.address, { name: d.name ?? "", address: d.address, paired: true });
-    }
+/**
+ * EMPAREJADOS (getBondedDevices, instantáneo) → GET /api/bt/devices.
+ * Los CERCANOS ya no salen de aquí: van llegando EN VIVO por el discovery
+ * propio del plugin (startDiscovery/discoveryPoll — ver mergeBtDevices).
+ */
+export async function listBtDevices(): Promise<BtDeviceInfo[]> {
+  const res = await requireNative().listPaired(); // puede lanzar: permiso denegado
+  return (res.devices ?? [])
+    .map((d) => ({ name: d.name ?? "", address: d.address, paired: true }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Arranca el ciclo de discovery nativo (cancel implícito del anterior). */
+export async function startBtDiscovery(): Promise<void> {
+  await requireNative().startDiscovery();
+}
+
+export async function pollBtDiscovery(): Promise<{
+  devices: PairedDevice[];
+  finished: boolean;
+}> {
+  const res = await requireNative().discoveryPoll();
+  return { devices: res.devices ?? [], finished: Boolean(res.finished) };
+}
+
+export async function cancelBtDiscovery(): Promise<void> {
+  await requireNative().cancelDiscovery();
+}
+
+export async function openLocationSettings(): Promise<void> {
+  await requireNative().openLocationSettings();
+}
+
+/**
+ * Merge EN VIVO emparejados + cercanos, sin duplicados por MAC, con los
+ * sin nombre como "Dispositivo BT (MAC)". Emparejados primero, luego los
+ * cercanos en orden de hallazgo. Puro → testeable en vitest.
+ */
+export function mergeBtDevices(
+  paired: Array<{ name?: string; address: string }>,
+  found: Array<{ name?: string; address: string }>,
+): BtDeviceInfo[] {
+  const out = new Map<string, BtDeviceInfo>();
+  for (const d of paired) {
+    if (!d?.address) continue;
+    out.set(d.address, {
+      name: d.name || `Dispositivo BT (${d.address})`,
+      address: d.address,
+      paired: true,
+    });
   }
-
-  // 2) CERCANOS no emparejados: discovery del plugin @e-is (~5 s).
-  //    La API de @e-is NO tiene list()/discoverUnpaired() del cordova viejo:
-  //    su scan() ES el discovery clásico (ACTION_FOUND durante 5 s).
-  try {
-    const mod = await import("@e-is/capacitor-bluetooth-serial");
-    const bt = mod.BluetoothSerial;
-    const enabled = await bt.isEnabled();
-    if (!enabled.enabled) await bt.enable();
-    const res = await bt.scan();
-    anySource = true;
-    for (const d of res.devices ?? []) {
-      if (!out.has(d.address)) {
-        out.set(d.address, { name: d.name ?? "", address: d.address, paired: false });
-      }
-    }
-  } catch (e) {
-    // Sin emparejados Y sin discovery → propagar (la UI muestra el motivo).
-    if (!anySource) throw e;
+  for (const d of found) {
+    if (!d?.address || out.has(d.address)) continue; // dedupe por MAC
+    out.set(d.address, {
+      name: d.name || `Dispositivo BT (${d.address})`,
+      address: d.address,
+      paired: false,
+    });
   }
-
-  // Emparejados primero, luego por nombre.
-  return Array.from(out.values()).sort(
-    (a, b) => Number(b.paired) - Number(a.paired) || a.name.localeCompare(b.name),
-  );
+  return Array.from(out.values());
 }
 
 /** Clase Java del driver → nombre de chip que la gente reconoce. */

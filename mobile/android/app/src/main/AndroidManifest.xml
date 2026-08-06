@@ -58,8 +58,12 @@
          Android 12+ (API 31): BLUETOOTH_SCAN + BLUETOOTH_CONNECT.
          Android <= 11: permisos legacy BLUETOOTH/BLUETOOTH_ADMIN +
          ubicación (requisito del discovery clásico pre-12). -->
+    <!-- neverForLocation: el discovery NO deriva ubicación → en Android 12+
+         los resultados de scan no exigen los servicios de Ubicación
+         encendidos (en ≤11 sí: ver PorciSerialPlugin.isLocationEnabled). -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission
         android:name="android.permission.BLUETOOTH_CONNECT"

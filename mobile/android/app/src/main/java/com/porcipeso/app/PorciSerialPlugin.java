@@ -14,7 +14,9 @@ import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
+import android.location.LocationManager;
 import android.os.Build;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 
@@ -37,6 +39,7 @@ import com.hoho.android.usbserial.util.SerialInputOutputManager;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -66,12 +69,17 @@ import java.util.concurrent.Executors;
                 Manifest.permission.BLUETOOTH_CONNECT,
                 Manifest.permission.BLUETOOTH_SCAN
             }
+        ),
+        @Permission(
+            alias = PorciSerialPlugin.LOCATION_ALIAS,
+            strings = { Manifest.permission.ACCESS_FINE_LOCATION }
         )
     }
 )
 public class PorciSerialPlugin extends Plugin {
 
     static final String BT_ALIAS = "bluetooth";
+    static final String LOCATION_ALIAS = "location";
     private static final String TAG = "PorciSerial";
     private static final UUID SPP_UUID =
         UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
@@ -86,6 +94,12 @@ public class PorciSerialPlugin extends Plugin {
     private Thread btReaderThread;
     private final ByteArrayOutputStream btBuffer = new ByteArrayOutputStream();
     private volatile boolean btRunning = false;
+
+    // ------------------------------------------------- estado discovery BT
+    private final Object discLock = new Object();
+    private final LinkedHashMap<String, JSObject> discFound = new LinkedHashMap<>();
+    private boolean discFinished = true;
+    private BroadcastReceiver discReceiver;
 
     // ----------------------------------------------------------- estado USB
     private final Object usbLock = new Object();
@@ -263,6 +277,176 @@ public class PorciSerialPlugin extends Plugin {
                 btReaderThread = null;
             }
             btBuffer.reset();
+        }
+    }
+
+    // ================================================= discovery de CERCANOS
+    // Discovery clásico PROPIO (no dependemos del scan() de @e-is, que en
+    // campo — Xiaomi/MIUI — no surtía los no-emparejados): startDiscovery()
+    // + ACTION_FOUND van llenando un buffer que el shim sondea con
+    // discoveryPoll(); la UI agrega cercanos EN VIVO durante el ciclo
+    // (~12 s) hasta ACTION_DISCOVERY_FINISHED.
+    //
+    // Permisos reales del discovery:
+    //  - Android 12+ (S): BLUETOOTH_SCAN runtime (declarado con
+    //    neverForLocation en el manifest → NO exige Ubicación encendida).
+    //  - Android ≤11: ACCESS_FINE_LOCATION runtime Y ADEMÁS los servicios
+    //    de Ubicación del sistema ENCENDIDOS — si están apagados, Android
+    //    devuelve el discovery VACÍO sin error (el bug de campo clásico):
+    //    se detecta con isLocationEnabled() y se rechaza con "location_off"
+    //    para que la UI muestre el aviso accionable.
+
+    /** ¿Los servicios de ubicación del sistema están encendidos? */
+    private boolean isLocationEnabled() {
+        try {
+            LocationManager lm =
+                (LocationManager) getContext().getSystemService(Context.LOCATION_SERVICE);
+            if (lm == null) return false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return lm.isLocationEnabled();
+            }
+            return lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+        } catch (Exception e) {
+            return true; // ante la duda no bloquear la búsqueda
+        }
+    }
+
+    private boolean needsDiscoveryPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return getPermissionState(BT_ALIAS) != PermissionState.GRANTED;
+        }
+        return getPermissionState(LOCATION_ALIAS) != PermissionState.GRANTED;
+    }
+
+    @PluginMethod
+    public void startDiscovery(PluginCall call) {
+        if (needsDiscoveryPermission()) {
+            String alias = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                ? BT_ALIAS : LOCATION_ALIAS;
+            requestPermissionForAlias(alias, call, "discoveryPermissionCallback");
+            return;
+        }
+        doStartDiscovery(call);
+    }
+
+    @PermissionCallback
+    private void discoveryPermissionCallback(PluginCall call) {
+        if (needsDiscoveryPermission()) {
+            call.reject("permission_denied: búsqueda Bluetooth (dispositivos cercanos)");
+            return;
+        }
+        doStartDiscovery(call);
+    }
+
+    @SuppressLint("MissingPermission")
+    private void doStartDiscovery(PluginCall call) {
+        BluetoothAdapter adapter = getAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            call.reject("bluetooth_off");
+            return;
+        }
+        // Android ≤11: sin Ubicación encendida el discovery llega vacío.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !isLocationEnabled()) {
+            call.reject("location_off");
+            return;
+        }
+        synchronized (discLock) {
+            if (adapter.isDiscovering()) adapter.cancelDiscovery();
+            discFound.clear();
+            discFinished = false;
+        }
+        if (discReceiver == null) {
+            discReceiver = new BroadcastReceiver() {
+                @Override
+                @SuppressLint("MissingPermission")
+                public void onReceive(Context ctx, Intent intent) {
+                    String action = intent.getAction();
+                    if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+                        BluetoothDevice device =
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                        if (device == null || device.getAddress() == null) return;
+                        String name = null;
+                        try {
+                            name = device.getName();
+                        } catch (SecurityException ignored) {
+                        }
+                        if (name == null) {
+                            name = intent.getStringExtra(BluetoothDevice.EXTRA_NAME);
+                        }
+                        JSObject o = new JSObject();
+                        o.put("name", name != null ? name : "");
+                        o.put("address", device.getAddress());
+                        synchronized (discLock) {
+                            discFound.put(device.getAddress(), o); // dedupe por MAC
+                        }
+                    } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
+                        synchronized (discLock) {
+                            discFinished = true;
+                        }
+                    }
+                }
+            };
+            IntentFilter filter = new IntentFilter();
+            filter.addAction(BluetoothDevice.ACTION_FOUND);
+            filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+            // broadcasts del SISTEMA: exentos del requisito NOT_EXPORTED de
+            // targetSdk 34; EXPORTED evita el lint de flag sin especificar
+            ContextCompat.registerReceiver(
+                getContext(), discReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
+        }
+        boolean started = adapter.startDiscovery();
+        if (!started) {
+            synchronized (discLock) {
+                discFinished = true;
+            }
+            call.reject("No pude iniciar la búsqueda Bluetooth (¿permisos del sistema?)");
+            return;
+        }
+        JSObject ret = new JSObject();
+        ret.put("started", true);
+        call.resolve(ret);
+    }
+
+    /** Cercanos hallados hasta ahora (acumulado, sin duplicados) + ¿terminó? */
+    @PluginMethod
+    public void discoveryPoll(PluginCall call) {
+        JSArray devices = new JSArray();
+        boolean finished;
+        synchronized (discLock) {
+            for (JSObject o : discFound.values()) devices.put(o);
+            finished = discFinished;
+        }
+        JSObject ret = new JSObject();
+        ret.put("devices", devices);
+        ret.put("finished", finished);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    @SuppressLint("MissingPermission")
+    public void cancelDiscovery(PluginCall call) {
+        BluetoothAdapter adapter = getAdapter();
+        try {
+            if (adapter != null && adapter.isDiscovering()) adapter.cancelDiscovery();
+        } catch (SecurityException ignored) {
+        }
+        synchronized (discLock) {
+            discFinished = true;
+        }
+        call.resolve();
+    }
+
+    /** Aviso accionable: abre los ajustes de Ubicación del sistema. */
+    @PluginMethod
+    public void openLocationSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("No pude abrir los ajustes de ubicación: " + e.getMessage());
         }
     }
 
@@ -510,6 +694,18 @@ public class PorciSerialPlugin extends Plugin {
     protected void handleOnDestroy() {
         closeBtLocked();
         closeUsbLocked();
+        if (discReceiver != null) {
+            try {
+                getContext().unregisterReceiver(discReceiver);
+            } catch (Exception ignored) {
+            }
+            discReceiver = null;
+        }
+        try {
+            BluetoothAdapter adapter = getAdapter();
+            if (adapter != null && adapter.isDiscovering()) adapter.cancelDiscovery();
+        } catch (Exception ignored) {
+        }
         if (usbPermissionReceiver != null) {
             try {
                 getContext().unregisterReceiver(usbPermissionReceiver);

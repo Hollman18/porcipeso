@@ -155,6 +155,13 @@ export interface BackendDeps {
   /** Capa serial nativa (inyectable en tests): listados BT/USB y transportes. */
   serial?: {
     listBt?: () => Promise<Array<{ name: string; address: string; paired: boolean }>>;
+    /** Discovery en vivo de cercanos (inyectable en tests). */
+    startDiscovery?: () => Promise<void>;
+    pollDiscovery?: () => Promise<{
+      devices: Array<{ name: string; address: string }>;
+      finished: boolean;
+    }>;
+    openLocationSettings?: () => Promise<void>;
     listUsb?: () => Promise<UsbDeviceInfo[]>;
     makeTransport?: (
       kind: "bluetooth" | "usb",
@@ -208,6 +215,8 @@ export class LocalBackend {
   driverProfile: ScaleProfile | null = null;
   driverError: string | null = null;
   lastReading: Reading | null = null;
+  /** Emparejados cacheados para el merge del discovery en vivo. */
+  private btPairedCache: Array<{ name: string; address: string; paired: boolean }> = [];
   private lastReadingBroadcast = 0;
   private eventIdMap = new Map<number, number>(); // id de DB -> id interno engine
   /** Cadena que serializa escrituras DB + broadcasts (orden de app.py). */
@@ -401,6 +410,9 @@ export class LocalBackend {
     if (method === "GET" && path === "/api/scale/status") return this.scaleStatus();
     if (method === "POST" && path === "/api/scale/detect") return this.scaleDetect(body);
     if (method === "GET" && path === "/api/bt/devices") return this.btDevices();
+    if (method === "POST" && path === "/api/bt/discovery/start") return this.btDiscoveryStart();
+    if (method === "GET" && path === "/api/bt/discovery") return this.btDiscoveryPoll();
+    if (method === "POST" && path === "/api/bt/location/open") return this.btLocationOpen();
     if (method === "GET" && path === "/api/usb/devices") return this.usbDevices();
 
     // Auto-actualización: mismo contrato que porcipeso/api/updatecheck.py
@@ -493,17 +505,67 @@ export class LocalBackend {
     return ok(out);
   }
 
-  /** {name, address, paired}: emparejados (plugin local) + cercanos (discovery @e-is). */
+  /** {name, address, paired:true}: EMPAREJADOS (instantáneo, plugin local).
+   *  Los cercanos llegan EN VIVO por /api/bt/discovery (discovery propio). */
   private async btDevices(): Promise<JsonResponse> {
     try {
       const list = this.serialDeps?.listBt ?? (await import("./serial")).listBtDevices;
-      return ok(await list());
+      const paired = await list();
+      this.btPairedCache = paired; // para el merge del discovery en vivo
+      return ok(paired);
     } catch (e) {
       const { humanizeSerialError } = await import("./serial");
       const msg = humanizeSerialError(e);
       // permiso denegado → 403 con el mensaje en humano; el resto → 503
       if (/permiso .*denegado/i.test(msg)) return err(403, msg);
       return err(503, `Bluetooth no disponible: ${msg}`);
+    }
+  }
+
+  /** Inicia el ciclo de discovery nativo (~12 s). 409 + aviso accionable si
+   *  la Ubicación del sistema está apagada (Android ≤11 / MIUI). */
+  private async btDiscoveryStart(): Promise<JsonResponse> {
+    try {
+      const start =
+        this.serialDeps?.startDiscovery ?? (await import("./serial")).startBtDiscovery;
+      await start();
+      return ok({ started: true });
+    } catch (e) {
+      const serial = await import("./serial");
+      const msg = serial.humanizeSerialError(e);
+      if (msg === serial.LOCATION_OFF_MSG) return err(409, msg);
+      if (/permiso .*denegado/i.test(msg)) return err(403, msg);
+      return err(503, `Bluetooth no disponible: ${msg}`);
+    }
+  }
+
+  /** Acumulado EN VIVO: emparejados (cache) + cercanos hallados, sin
+   *  duplicados por MAC y con nombre por defecto "Dispositivo BT (MAC)". */
+  private async btDiscoveryPoll(): Promise<JsonResponse> {
+    try {
+      const serial = await import("./serial");
+      const poll = this.serialDeps?.pollDiscovery ?? serial.pollBtDiscovery;
+      const { devices, finished } = await poll();
+      return ok({
+        devices: serial.mergeBtDevices(this.btPairedCache, devices),
+        finished,
+      });
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      return err(503, `Bluetooth no disponible: ${humanizeSerialError(e)}`);
+    }
+  }
+
+  private async btLocationOpen(): Promise<JsonResponse> {
+    try {
+      const open =
+        this.serialDeps?.openLocationSettings ??
+        (await import("./serial")).openLocationSettings;
+      await open();
+      return ok({ ok: true });
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      return err(503, humanizeSerialError(e));
     }
   }
 

@@ -1456,43 +1456,130 @@ function signalInvert() {
   return cfg?.invert_bits != null ? !!cfg.invert_bits : null;
 }
 
-/* ---- buscador Bluetooth (app móvil): emparejados + cercanos ---- */
+/* ---- buscador Bluetooth (modo AVANZADO): mismo escaneo en vivo, pero
+   tocar un dispositivo solo llena la dirección (la marca la elige el user) */
 async function scanBtDevices() {
-  const list = $('btList'), btn = $('bBtScan');
+  await liveBtScan((dev) => {
+    const inp = $('wizPort');
+    if (inp) inp.value = dev.address;
+    if (!dev.paired) {
+      wizResult('', 'Ese módulo aún no está emparejado: empareja primero en Ajustes → Bluetooth (PIN 1234).');
+    }
+  });
+}
+
+/* ---- búsqueda Bluetooth EN VIVO (emparejados al instante + cercanos
+   llegando durante el ciclo de discovery nativo, ~12 s) ----
+   La usan el flujo automático (tocar = conectar) y el avanzado
+   (tocar = llenar la dirección). "Buscar de nuevo" reinicia el ciclo. */
+let btScanSeq = 0;
+const waitMs = (ms) => new Promise(r => setTimeout(r, ms));
+
+function renderBtDeviceRows(list, devices, onPick) {
+  list.innerHTML = devices.length ? '<div class="bt-title">Toca el tuyo para elegirlo:</div>' : '';
+  for (const dev of devices) {
+    const b = document.createElement('button');
+    b.className = 'bt-item';
+    b.innerHTML = `<span class="bt-n">${escapeHtml(dev?.name || `Dispositivo BT (${dev?.address ?? ''})`)}</span>` +
+      `<span class="bt-a mono">${escapeHtml(dev?.address ?? '')}</span>` +
+      `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
+    b.onclick = () => {
+      for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
+      onPick({ name: dev?.name || '', address: dev?.address ?? '', paired: !!dev?.paired });
+    };
+    list.appendChild(b);
+  }
+}
+
+/* aviso accionable MIUI/Android: Ubicación del sistema apagada */
+function btLocationWarning(list) {
+  const warn = document.createElement('div');
+  warn.className = 'empty';
+  warn.innerHTML = '📍 Para buscar dispositivos cercanos, Android exige la <b>Ubicación encendida</b> — actívala un momento y vuelve a buscar. ';
+  const b = document.createElement('button');
+  b.className = 'btn-primary';
+  b.textContent = 'Activar ubicación';
+  b.onclick = () => { apiJson('/api/bt/location/open', { method: 'POST', body: {} }).catch(() => {}); };
+  warn.appendChild(document.createElement('br'));
+  warn.appendChild(b);
+  list.appendChild(warn);
+}
+
+async function liveBtScan(onPick) {
+  const list = $('btList'), status = $('btAutoStatus'), btn = $('bBtScan');
   if (!list) return;
+  const seq = ++btScanSeq;
+  const dead = () => seq !== btScanSeq || !list.isConnected;
   if (btn) btn.disabled = true;
-  list.innerHTML = '<div class="empty">Buscando… deja el módulo encendido (tarda unos segundos)</div>';
+  if (status && status.isConnected) status.textContent = '🔍 Buscando básculas Bluetooth… (deja el módulo encendido)';
+  list.innerHTML = '<div class="empty">Buscando…</div>';
+
+  // 1) EMPAREJADOS al instante
+  let shown = [];
   try {
-    const devices = await apiJson('/api/bt/devices');
-    if (!list.isConnected) return;
-    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
-    if (!arr.length) {
-      list.innerHTML = '<div class="empty">No encontré dispositivos. Empareja primero el módulo en Ajustes → Bluetooth (PIN 1234) y vuelve a buscar.</div>';
-      return;
-    }
-    list.innerHTML = '<div class="bt-title">Toca el tuyo para elegirlo:</div>';
-    for (const dev of arr) {
-      const name = dev?.name || 'Dispositivo sin nombre';
-      const addr = dev?.address ?? '';
-      const b = document.createElement('button');
-      b.className = 'bt-item';
-      b.innerHTML = `<span class="bt-n">${escapeHtml(name)}</span>` +
-        `<span class="bt-a mono">${escapeHtml(addr)}</span>` +
-        `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
-      b.onclick = () => {
-        const inp = $('wizPort');
-        if (inp) inp.value = addr;
-        for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
-        if (!dev?.paired) {
-          wizResult('', 'Ese módulo aún no está emparejado: empareja primero en Ajustes → Bluetooth (PIN 1234).');
-        }
-      };
-      list.appendChild(b);
-    }
+    const paired = await apiJson('/api/bt/devices');
+    if (dead()) return;
+    shown = Array.isArray(paired) ? paired : [];
+    renderBtDeviceRows(list, shown, onPick);
   } catch (e) {
-    if (list.isConnected) list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos Bluetooth.')}</div>`;
-  } finally {
+    if (!dead()) {
+      list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos Bluetooth.')}</div>`;
+      if (status && status.isConnected) status.textContent = '';
+    }
     if (btn) btn.disabled = false;
+    return;
+  }
+  if (status && status.isConnected) status.textContent = shown.length ? 'Toca tu báscula para conectarla:' : '';
+
+  // 2) CERCANOS en vivo: discovery nativo (~12 s) con spinner
+  const spin = document.createElement('div');
+  spin.className = 'empty bt-spin';
+  spin.textContent = '⌛ Buscando cercanos…';
+  list.appendChild(spin);
+  try {
+    await apiJson('/api/bt/discovery/start', { method: 'POST', body: {} });
+  } catch (e) {
+    if (dead()) return;
+    spin.remove();
+    if (/Ubicación encendida/i.test(e?.message ?? '')) {
+      btLocationWarning(list); // emparejados se quedan; aviso accionable
+    } else if (!shown.length) {
+      list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar cercanos.')}</div>`;
+    }
+    finishBtScan(list, shown, btn);
+    return;
+  }
+
+  let merged = shown;
+  for (let i = 0; i < 30; i++) { // ~21 s de tope por si FINISHED no llega
+    await waitMs(700);
+    if (dead()) return;
+    let d = null;
+    try { d = await apiJson('/api/bt/discovery'); } catch { break; }
+    if (dead()) return;
+    const devices = Array.isArray(d?.devices) ? d.devices : merged;
+    if (devices.length !== merged.length) {
+      merged = devices;
+      renderBtDeviceRows(list, merged, onPick); // agrega cercanos EN VIVO
+      list.appendChild(spin);
+    }
+    if (d?.finished) break;
+  }
+  if (dead()) return;
+  spin.remove();
+  finishBtScan(list, merged, btn);
+}
+
+function finishBtScan(list, devices, btn) {
+  if (btn) btn.disabled = false;
+  const cercanos = devices.filter(d => !d.paired).length;
+  if (!devices.length) {
+    list.innerHTML = '<div class="empty">No encontré dispositivos. Plan B: empareja el módulo en Ajustes → Bluetooth (PIN 1234) y toca «Buscar de nuevo».</div>';
+  } else if (!cercanos) {
+    const note = document.createElement('div');
+    note.className = 'empty';
+    note.textContent = 'No aparecieron cercanos nuevos. Si el tuyo no está: empareja primero el módulo en Ajustes → Bluetooth (PIN 1234) y vuelve a buscar.';
+    list.appendChild(note);
   }
 }
 
@@ -1500,44 +1587,13 @@ async function scanBtDevices() {
    buscar → tocar el dispositivo → detectar parser+polaridad (perfil
    "auto") → conectar → guardar. El usuario jamás elige marca. */
 async function btAutoScan() {
-  const list = $('btList'), status = $('btAutoStatus'), btn = $('bBtScan');
-  if (!list) return;
-  if (btn) btn.disabled = true;
-  if (status) status.textContent = '🔍 Buscando básculas Bluetooth… (deja el módulo encendido)';
-  list.innerHTML = '';
-  try {
-    const devices = await apiJson('/api/bt/devices');
-    if (!list.isConnected) return;
-    const arr = Array.isArray(devices) ? devices : (devices?.devices ?? []);
-    if (!arr.length) {
-      if (status) status.textContent = 'No encontré dispositivos.';
-      list.innerHTML = '<div class="empty">Empareja primero el módulo en Ajustes → Bluetooth (PIN 1234) y toca «Buscar de nuevo».</div>';
-      return;
-    }
-    if (status) status.textContent = 'Toca tu báscula para conectarla:';
-    for (const dev of arr) {
-      const b = document.createElement('button');
-      b.className = 'bt-item';
-      b.innerHTML = `<span class="bt-n">${escapeHtml(dev?.name || 'Dispositivo sin nombre')}</span>` +
-        `<span class="bt-a mono">${escapeHtml(dev?.address ?? '')}</span>` +
-        `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
-      b.onclick = () => {
-        for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
-        btAutoConnect({ name: dev?.name || '', address: dev?.address ?? '' }).catch(() => {});
-      };
-      list.appendChild(b);
-    }
-  } catch (e) {
-    if (status && status.isConnected) status.textContent = '';
-    if (list.isConnected) list.innerHTML = `<div class="empty">${escapeHtml(e?.message ?? 'No pude buscar dispositivos Bluetooth.')}</div>`;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
+  await liveBtScan((dev) => { btAutoConnect(dev).catch(() => {}); });
 }
 
 async function btAutoConnect(dev) {
   const status = $('btAutoStatus');
   if (!dev.address) return;
+  btScanSeq++; // congela el escaneo en vivo (el connect nativo cancela el discovery)
   showHexPanel(true);
   if (status) status.innerHTML = `🎧 Escuchando <b>${escapeHtml(dev.name || dev.address)}</b>… ` +
     'detecto la marca y la señal (unos segundos)';
