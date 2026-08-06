@@ -218,7 +218,9 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(exp.res.headers.get("Content-Type")).toContain("text/csv");
     expect(exp.res.headers.get("Content-Disposition")).toContain(`sesion_${sid}.csv`);
     expect(exp.json).toContain("Lote test");
-    expect(exp.json).toContain("referencia");
+    // CSV tabular: encabezado de RESUMEN + tipo de movimiento en español
+    expect(exp.json).toContain("Sesión");
+    expect(exp.json).toContain("Cerdo de prueba"); // "referencia" → humano
 
     // 10) mensajes WS con el contrato de app.py (v2: fase incluida)
     await run(backend, 10);
@@ -772,9 +774,13 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
 describe("installShim — parcheo de fetch/WebSocket/window.open", () => {
   it("desvía /api/* y /ws al backend local; lo demás sigue nativo", async () => {
     const shared: string[] = [];
+    const reports: Array<{ filename: string; html: string }> = [];
     const backend = await makeBackend({
       shareCsv: async (filename) => {
         shared.push(filename);
+      },
+      shareReport: async (filename, html) => {
+        reports.push({ filename, html });
       },
     });
     const nativeFetchCalls: string[] = [];
@@ -825,6 +831,15 @@ describe("installShim — parcheo de fetch/WebSocket/window.open", () => {
     await new Promise((r) => setTimeout(r, 0));
     await backend.flush();
     expect(shared).toEqual([`sesion_${sid}.csv`]);
+
+    // window.open del informe (report.pdf) → archivo compartido (nativo),
+    // NO window.print(): en el APK habría sido un no-op silencioso.
+    fakeWindow.open(`/api/sessions/${sid}/report.pdf`);
+    await new Promise((r) => setTimeout(r, 0));
+    await backend.flush();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].filename).toBe(`informe_sesion_${sid}.html`);
+    expect(reports[0].html).toContain("PorciPeso");
     await backend.repo.close();
   });
 });

@@ -32,8 +32,9 @@ export const BRAND = {
   BORDER: "#D8DED2",
 } as const;
 
-//: tipos de evento → texto humano (espejo de reports.TIPO_HUMANO)
-const TIPO_HUMANO: Record<string, string> = {
+//: tipos de evento → texto humano (espejo de reports.TIPO_HUMANO).
+// Exportado para que el CSV tabular use la MISMA traducción (sin drift).
+export const TIPO_HUMANO: Record<string, string> = {
   referencia: "Cerdo de prueba",
   subida: "Subida",
   bajada: "Bajada",

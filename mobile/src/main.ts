@@ -8,7 +8,7 @@
  *    (la báscula simulada funciona completa).
  */
 import { Capacitor } from "@capacitor/core";
-import { Hub, installShim, LocalBackend } from "./apishim";
+import { bytesToBase64, csvToUtf8Bytes, Hub, installShim, LocalBackend } from "./apishim";
 import {
   createCapacitorDriver,
   createSqlJsDriver,
@@ -24,13 +24,31 @@ import { getDeviceId, maybeSendTelemetry } from "./telemetry";
 const PROFILES = profilesJson as unknown as ScaleProfile[];
 
 async function nativeShareCsv(filename: string, csv: string): Promise<void> {
-  const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+  const { Filesystem, Directory } = await import("@capacitor/filesystem");
   const { Share } = await import("@capacitor/share");
+  // Escribimos los BYTES UTF-8 reales (BOM una sola vez) como base64 y SIN
+  // `encoding`: Capacitor los decodifica y escribe tal cual. Pasar el
+  // string con Encoding.UTF8 + BOM incrustado re-codificaba en el puente
+  // y Excel mostraba "SesiÃ³n"; con bytes crudos abre "Sesión" bien.
   const res = await Filesystem.writeFile({
     path: filename,
-    data: "﻿" + csv, // BOM: Excel abre UTF-8 con tildes bien
+    data: bytesToBase64(csvToUtf8Bytes(csv)),
     directory: Directory.Cache,
-    encoding: Encoding.UTF8,
+  });
+  await Share.share({ title: filename, files: [res.uri] });
+}
+
+async function nativeShareReport(filename: string, html: string): Promise<void> {
+  const { Filesystem, Directory } = await import("@capacitor/filesystem");
+  const { Share } = await import("@capacitor/share");
+  // Mismo mecanismo del CSV para el informe: archivo real + Share. Bytes
+  // UTF-8 crudos (base64, sin `encoding`) → sin mojibake; el <meta charset>
+  // del HTML hace el resto. El usuario abre en Chrome/visor y usa
+  // "Imprimir → Guardar como PDF", o lo comparte.
+  const res = await Filesystem.writeFile({
+    path: filename,
+    data: bytesToBase64(new TextEncoder().encode(html)),
+    directory: Directory.Cache,
   });
   await Share.share({ title: filename, files: [res.uri] });
 }
@@ -71,6 +89,7 @@ async function initBackend(hub: Hub): Promise<LocalBackend> {
     profiles: PROFILES,
     hub,
     shareCsv: native ? nativeShareCsv : undefined,
+    shareReport: native ? nativeShareReport : undefined,
     cloud: {
       route: (method, path, body) => sync.route(method, path, body),
       onSessionClosed: () => sync.pushSoon(),

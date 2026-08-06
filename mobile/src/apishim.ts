@@ -20,6 +20,7 @@ import {
   WeighEvent,
 } from "./models";
 import { isParserSupported } from "./parsers";
+import { TIPO_HUMANO } from "./reportview";
 import { SimLiveScale, SimLiveOptions } from "./simlive";
 import { downloadAndInstallApk, fetchUpdateStatus } from "./update";
 import type { ByteTransport, UsbDeviceInfo } from "./serial";
@@ -168,8 +169,15 @@ export interface BackendDeps {
       opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
     ) => Promise<ByteTransport>;
   };
-  /** Exportador nativo (Filesystem+Share); si falta, descarga web. */
+  /** Exportador CSV nativo (Filesystem+Share); si falta, descarga web. */
   shareCsv?: (filename: string, csv: string) => Promise<void>;
+  /**
+   * Guardar/compartir el informe nativo (Filesystem+Share). En el APK
+   * window.print() del WebView es un no-op (no hay PDF), así que el
+   * informe se entrega como ARCHIVO real (misma vía que el CSV). Si
+   * falta, la web usa el print-view + window.print() de siempre.
+   */
+  shareReport?: (filename: string, html: string) => Promise<void>;
   /** Sync a la nube (opcional): resuelve /api/cloud/* y recibe el aviso
    *  de cierre de sesión de pesaje para empujar sin esperar el timer. */
   cloud?: {
@@ -206,6 +214,7 @@ export class LocalBackend {
   private createBtDriver: BackendDeps["createBtDriver"];
   private serialDeps: BackendDeps["serial"];
   private shareCsvFn: BackendDeps["shareCsv"];
+  private shareReportFn: BackendDeps["shareReport"];
   private cloud: BackendDeps["cloud"];
 
   engine: WeighingEngine | null = null;
@@ -230,6 +239,7 @@ export class LocalBackend {
     this.createBtDriver = deps.createBtDriver;
     this.serialDeps = deps.serial;
     this.shareCsvFn = deps.shareCsv;
+    this.shareReportFn = deps.shareReport;
     this.cloud = deps.cloud;
   }
 
@@ -1069,13 +1079,26 @@ export class LocalBackend {
   }
 
   /**
-   * Informe para window.open(): abre el print-view y lanza
-   * window.print() — en Android el diálogo del sistema genera el PDF
-   * nativo (equivalente móvil del PDF reportlab del escritorio).
+   * Informe para window.open() ("Descargar PDF").
+   *
+   * CAUSA RAÍZ del PDF que no bajaba en el APK: window.print() del
+   * WebView de Android NO está cableado al PrintManager del sistema, así
+   * que la llamada es un no-op silencioso (ni diálogo, ni archivo). El
+   * CSV sí funcionaba porque usa Filesystem+Share (archivo real).
+   *
+   * ARREGLO: en nativo replicamos EXACTAMENTE la vía del CSV — escribimos
+   * el informe como archivo real y lo abrimos/compartimos (shareReport);
+   * el usuario lo abre en Chrome/visor y usa "Imprimir → Guardar como
+   * PDF", o lo comparte. En web (navegador) sigue igual que hoy:
+   * print-view en iframe + window.print().
    */
   async reportAndPrint(sessionId: number): Promise<boolean> {
     const html = await this.buildReportHtml(sessionId);
     if (html === null) return false;
+    if (this.shareReportFn) {
+      await this.shareReportFn(`informe_sesion_${sessionId}.html`, html);
+      return true;
+    }
     if (typeof document === "undefined") return false;
     const { openPrintView } = await import("./reportview");
     openPrintView(html);
@@ -1092,7 +1115,9 @@ export class LocalBackend {
       return true;
     }
     if (typeof document !== "undefined") {
-      const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+      // bytes UTF-8 reales + BOM una sola vez (NO "﻿"+string): evita el
+      // mojibake "SesiÃ³n" al abrir en Excel.
+      const blob = new Blob([csvToUtf8Bytes(csv) as BlobPart], { type: "text/csv;charset=utf-8" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = filename;
@@ -1133,33 +1158,65 @@ async function defaultBtFactory(): Promise<NonNullable<BackendDeps["createBtDriv
 
 // ------------------------------------------------------------------- CSV
 
-/** Columnas idénticas a EVENT_COLUMNS de app.py. */
+/** Columnas idénticas a EVENT_COLUMNS de app.py (encabezado de MOVIMIENTOS). */
 export const EVENT_COLUMNS = [
   "id", "ts_ms", "tipo", "peso_antes", "peso_despues", "delta_kg",
   "animales_estimados", "animales_confirmados", "estab_ms", "ambiguo",
   "opciones", "motivo_bajada", "evento_relacionado_id", "confirmado_por",
 ] as const;
 
-const RESUMEN_ROWS: Array<[string, string]> = [
-  ["Granja", "granja"], ["Lote", "lote"], ["Corral origen", "corral_origen"],
-  ["Destino", "destino"], ["Placa", "placa"], ["Conductor", "conductor"],
-  ["Operador", "operador"], ["Báscula", "bascula_id"],
-  ["Peso ref. inicial (kg)", "peso_ref_inicial"],
-  ["Hora entrada", "hora_entrada"], ["Hora salida", "hora_salida"],
-  ["Total kg", "total_kg"], ["Total animales", "total_animales"],
-  ["Promedio final (kg)", "promedio_final"],
-  ["Conteo físico", "conteo_fisico"],
-  ["Diferencia conciliación", "diferencia_conciliacion"],
-  ["Estado", "estado"],
+type Cell = { header: string; get: (s: Record<string, unknown>, st: Record<string, unknown>) => unknown };
+
+/**
+ * Bloque RESUMEN del CSV: formato TABULAR (base de datos) — los nombres
+ * de campo son ENCABEZADOS DE COLUMNA y los valores van en UNA fila
+ * debajo, para poder apilar/analizar varias sesiones por filas. El orden
+ * de columnas es fijo y estable.
+ */
+const RESUMEN_COLUMNS: Cell[] = [
+  { header: "Sesión", get: (s) => s["id"] },
+  { header: "UUID", get: (s) => s["uuid"] },
+  { header: "Granja", get: (s) => s["granja"] },
+  { header: "Lote", get: (s) => s["lote"] },
+  { header: "Corral origen", get: (s) => s["corral_origen"] },
+  { header: "Destino", get: (s) => s["destino"] },
+  { header: "Placa", get: (s) => s["placa"] },
+  { header: "Conductor", get: (s) => s["conductor"] },
+  { header: "Operador", get: (s) => s["operador"] },
+  { header: "Báscula", get: (s) => s["bascula_id"] },
+  { header: "Peso ref inicial kg", get: (s) => s["peso_ref_inicial"] },
+  { header: "Hora entrada", get: (s) => fechaCsv(s["hora_entrada"]) },
+  { header: "Hora salida", get: (s) => fechaCsv(s["hora_salida"]) },
+  { header: "Total kg", get: (s) => s["total_kg"] },
+  { header: "Total animales", get: (s) => s["total_animales"] },
+  { header: "Promedio final kg", get: (s) => s["promedio_final"] },
+  { header: "Conteo físico", get: (s) => s["conteo_fisico"] },
+  { header: "Diferencia conciliación", get: (s) => s["diferencia_conciliacion"] },
+  { header: "Estado", get: (s) => s["estado"] },
+  { header: "Modo", get: (s) => s["modo"] },
+  { header: "DEMO", get: (s) => (s["es_demo"] ? "Sí" : "No") },
+  { header: "Desviación estándar kg", get: (_s, st) => st["desviacion_std"] },
+  { header: "CV %", get: (_s, st) => st["cv_pct"] },
+  { header: "Uniformidad ±10%", get: (_s, st) => st["uniformidad_pct"] },
+  { header: "Delta mínimo kg", get: (_s, st) => st["min_delta"] },
+  { header: "Delta máximo kg", get: (_s, st) => st["max_delta"] },
 ];
 
-const STATS_ROWS: Array<[string, string]> = [
-  ["Desviación estándar (kg)", "desviacion_std"],
-  ["CV %", "cv_pct"],
-  ["Uniformidad ±10% (%)", "uniformidad_pct"],
-  ["Delta mínimo (kg)", "min_delta"],
-  ["Delta máximo (kg)", "max_delta"],
-];
+/** Aviso obligatorio en la PRIMERA fila de un CSV de sesión DEMO. */
+export const CSV_DEMO_WARNING = "PESAJE DE PRÁCTICA (DEMO) — no es un dato real";
+
+/**
+ * ISO / epoch-ms → "YYYY-MM-DD HH:MM" (legible y ordenable, hora local).
+ * "" si vacío; el texto crudo si no es una fecha parseable.
+ */
+export function fechaCsv(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "";
+  const raw = String(v);
+  const d = typeof v === "number" || /^\d+$/.test(raw) ? new Date(Number(v)) : new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 function csvCell(v: unknown): string {
   if (v === null || v === undefined) return "";
@@ -1171,33 +1228,70 @@ function csvRow(cells: unknown[]): string {
   return cells.map(csvCell).join(",");
 }
 
+/** Valor legible de una celda de MOVIMIENTOS (sin columnas basura). */
+function movCell(col: string, ev: Record<string, unknown>): unknown {
+  const v = ev[col];
+  switch (col) {
+    case "ts_ms":
+      return fechaCsv(v);
+    case "tipo":
+      return TIPO_HUMANO[String(v)] ?? v;
+    case "ambiguo":
+      return v ? "Sí" : "No";
+    case "opciones":
+      return Array.isArray(v) && v.length ? JSON.stringify(v) : "";
+    default:
+      return v;
+  }
+}
+
+/**
+ * CSV TABULAR de una sesión (formato base de datos):
+ *   [aviso DEMO]      ← solo si es_demo
+ *   <encabezados RESUMEN>   (una fila con TODOS los campos)
+ *   <valores RESUMEN>       (una sola fila debajo)
+ *   (fila en blanco)
+ *   <encabezados MOVIMIENTOS>
+ *   <una fila por movimiento>   (tipo en español, fechas legibles)
+ *
+ * NO lleva BOM: los bytes UTF-8 + BOM (una sola vez) los agrega
+ * csvToUtf8Bytes al momento de guardar/compartir el archivo.
+ */
 export function buildCsv(
   session: Record<string, unknown>,
   events: Array<Record<string, unknown>>,
   stats: Record<string, unknown>,
 ): string {
   const lines: string[] = [];
-  lines.push(csvRow(["Sesión", session["id"]]));
-  lines.push(csvRow(["UUID", session["uuid"]]));
-  for (const [label, key] of RESUMEN_ROWS) lines.push(csvRow([label, session[key]]));
+  if (session["es_demo"]) lines.push(csvRow([CSV_DEMO_WARNING]));
+  // Bloque 1 — RESUMEN (tabular: encabezados + una fila de valores)
+  lines.push(csvRow(RESUMEN_COLUMNS.map((c) => c.header)));
+  lines.push(csvRow(RESUMEN_COLUMNS.map((c) => c.get(session, stats))));
+  // separador
   lines.push("");
-  lines.push(csvRow(["— Estadística —", ""]));
-  for (const [label, key] of STATS_ROWS) lines.push(csvRow([label, stats[key]]));
-  lines.push("");
+  // Bloque 2 — MOVIMIENTOS
   lines.push(csvRow([...EVENT_COLUMNS]));
   for (const ev of events) {
-    const row = EVENT_COLUMNS.map((col) => {
-      let value = ev[col];
-      if (col === "opciones") {
-        value = value && (value as unknown[]).length ? JSON.stringify(value) : null;
-      } else if (col === "ambiguo") {
-        value = value ? 1 : 0;
-      }
-      return value;
-    });
-    lines.push(csvRow(row));
+    lines.push(csvRow(EVENT_COLUMNS.map((col) => movCell(col, ev))));
   }
   return lines.join("\r\n") + "\r\n";
+}
+
+/**
+ * CSV → bytes UTF-8 reales con BOM (﻿) UNA sola vez. Escribir estos
+ * bytes tal cual (Blob en web, base64 sin `encoding` en nativo) evita la
+ * doble codificación del puente Capacitor que producía "SesiÃ³n": el BOM
+ * hace que Excel lea UTF-8 y muestre "Sesión"/"Báscula"/"±10%" bien.
+ */
+export function csvToUtf8Bytes(csv: string): Uint8Array {
+  return new TextEncoder().encode("﻿" + csv);
+}
+
+/** Uint8Array → base64 (para Filesystem.writeFile nativo, sin `encoding`). */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
 }
 
 // ------------------------------------------------------------ instalación

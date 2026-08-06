@@ -329,3 +329,69 @@ def test_usar_simulada_no_pisa_config_real(page, server_url):
     cfg = page.evaluate("JSON.parse(localStorage.getItem('porcipeso_cfg'))")
     assert cfg["profile_id"] == "matrix"  # la real sigue intacta
     assert cfg["method"] == "bluetooth"
+
+
+# ---------------------- 6) "Volver a báscula real" sale de la práctica
+
+def test_volver_a_bascula_real_desde_home_sin_config(page, server_url):
+    """Sin báscula real: entrar a la simulada desde el home ofrece
+    '↩ Volver a báscula real'; al tocarlo, la sim se desconecta, la config
+    demo se borra (queda 'Sin báscula') y reaparece 'Usar báscula simulada'."""
+    page.goto(server_url + "/#pesaje")
+
+    # fuera de práctica: se ofrece ENTRAR, no SALIR
+    EXPECT(page.locator("#bUseSim")).to_be_visible()
+    EXPECT(page.locator("#bBackReal")).to_be_hidden()
+
+    # entrar a la simulada
+    page.locator("#bUseSim").click()
+    EXPECT(page.locator("#scaleChip")).to_have_text("Báscula simulada",
+                                                    timeout=10_000)
+    # ahora los enlaces se INVIERTEN: salir visible, entrar oculto
+    EXPECT(page.locator("#bBackReal")).to_be_visible()
+    EXPECT(page.locator("#bUseSim")).to_be_hidden()
+    # la config demo quedó guardada (no había báscula real)
+    cfg = page.evaluate("JSON.parse(localStorage.getItem('porcipeso_cfg'))")
+    assert cfg["profile_id"] == "sim"
+
+    # volver a báscula real → estado limpio
+    page.locator("#bBackReal").click()
+    EXPECT(page.locator("#scaleChip")).to_have_text("Sin báscula",
+                                                    timeout=10_000)
+    EXPECT(page.locator("#scaleChip")).to_have_class("chip err")
+    # los enlaces vuelven al estado inicial
+    EXPECT(page.locator("#bUseSim")).to_be_visible()
+    EXPECT(page.locator("#bBackReal")).to_be_hidden()
+    # sim desconectada en el backend
+    st = page.evaluate("fetch('/api/scale/status').then(r => r.json())")
+    assert st["connected"] is False
+    # config demo borrada (no quedamos pegados en práctica)
+    cfg = page.evaluate("localStorage.getItem('porcipeso_cfg')")
+    assert cfg is None
+
+
+def test_volver_a_bascula_real_restaura_config_real(page, server_url):
+    """Con una báscula REAL guardada: practicar y luego 'Volver a báscula
+    real' NO borra la config real — el home vuelve a esa báscula guardada."""
+    _seed_cfg(page, {"method": "bluetooth", "profile_id": "matrix",
+                     "name": "Trumax Matrix", "parser": "matrix"})
+    page.goto(server_url + "/#pesaje")
+
+    page.locator("#bUseSim").click()
+    EXPECT(page.locator("#scaleChip")).to_have_text("Báscula simulada",
+                                                    timeout=10_000)
+    EXPECT(page.locator("#bBackReal")).to_be_visible()
+
+    # salir de la práctica → vuelve a la báscula REAL guardada, no a "Sin báscula"
+    page.locator("#bBackReal").click()
+    EXPECT(page.locator("#scaleChip")).to_have_text("Trumax Matrix",
+                                                    timeout=10_000)
+    EXPECT(page.locator("#bUseSim")).to_be_visible()
+    EXPECT(page.locator("#bBackReal")).to_be_hidden()
+    # la config real sigue intacta
+    cfg = page.evaluate("JSON.parse(localStorage.getItem('porcipeso_cfg'))")
+    assert cfg["profile_id"] == "matrix"
+    assert cfg["method"] == "bluetooth"
+    # y la sim quedó desconectada en el backend
+    st = page.evaluate("fetch('/api/scale/status').then(r => r.json())")
+    assert st["connected"] is False

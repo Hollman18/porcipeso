@@ -156,6 +156,16 @@ function loadCfg() {
 function saveCfg(cfg) {
   try { localStorage.setItem('porcipeso_cfg', JSON.stringify(cfg)); } catch { /* sin storage */ }
 }
+function clearCfg() {
+  try { localStorage.removeItem('porcipeso_cfg'); } catch { /* sin storage */ }
+}
+/* ¿la config guardada es la de la báscula simulada? (la deja "Usar báscula
+   simulada" SOLO cuando no había una báscula real — ver startSim). Cubre
+   profile_id "sim" y "simulador". */
+function isSimCfg(cfg) {
+  if (!cfg) return false;
+  return cfg.method === 'sim' || /^sim/i.test(String(cfg.profile_id ?? ''));
+}
 
 /* ============================================================
    BÁSCULA: estado + simulador (vía backend, TODO queda en la BD)
@@ -253,17 +263,22 @@ for (const b of document.querySelectorAll('#simPanel [data-sim]')) {
    MÓDULO PESAJE — inicio
    ============================================================ */
 async function refreshPesajeHome() {
-  const chip = $('scaleChip'), btn = $('bStart'), note = $('startNote'), simBtn = $('bUseSim');
+  const chip = $('scaleChip'), btn = $('bStart'), note = $('startNote');
+  const simBtn = $('bUseSim'), backBtn = $('bBackReal');
   const st = await scaleStatus();
   refreshSimUi();
-  // la política DEMO acompaña siempre al enlace de la simulada
-  const syncSimNote = () => { $('simNote').hidden = simBtn.hidden; };
+  // los dos enlaces son EXCLUYENTES: en práctica se ofrece SALIR ("↩ Volver
+  // a báscula real"); fuera de práctica se ofrece ENTRAR ("🎛 Usar báscula
+  // simulada"). Nunca se ven los dos a la vez.
+  backBtn.hidden = !APP.simActive;
+  simBtn.hidden = APP.simActive;
+  // la política DEMO acompaña a cualquiera de los dos enlaces
+  const syncSimNote = () => { $('simNote').hidden = simBtn.hidden && backBtn.hidden; };
   if (APP.scaleConnected) {
     chip.className = 'chip ' + (APP.simActive ? 'sim' : 'ok');
     chip.textContent = APP.simActive ? 'Báscula simulada' : (st?.profile_name ?? st?.name ?? 'Báscula conectada');
     btn.textContent = 'Empezar a pesar';
     note.hidden = true;
-    simBtn.hidden = APP.simActive; // ya está activa
     syncSimNote();
     return;
   }
@@ -274,14 +289,12 @@ async function refreshPesajeHome() {
     btn.textContent = 'Empezar a pesar';
     note.textContent = 'Me conecto a la báscula cuando empieces.';
     note.hidden = false;
-    simBtn.hidden = false;
   } else {
     chip.className = 'chip err';
     chip.textContent = st === null ? 'Programa apagado' : 'Sin báscula';
     btn.textContent = 'Empezar a pesar';
     note.textContent = 'No hay báscula configurada. Puedes practicar con la báscula simulada.';
     note.hidden = false;
-    simBtn.hidden = false;
   }
   syncSimNote();
 }
@@ -296,6 +309,25 @@ $('bUseSim').onclick = async () => {
   try { await startSim(); await refreshPesajeHome(); }
   catch { /* banner activo */ }
   finally { $('bUseSim').disabled = false; }
+};
+/* Salir de la práctica: desconecta la simulada y vuelve a báscula real.
+   Reusa el mismo /api/scale/disconnect + limpieza de cfg que la tarjeta de
+   ⚙ Báscula (no duplica lógica). Si "Usar báscula simulada" había dejado la
+   config demo (no había báscula real), la borra → "Sin báscula". Si había
+   una báscula REAL guardada, startSim NUNCA la pisó → se conserva y el home
+   vuelve a ella. */
+$('bBackReal').onclick = async () => {
+  const b = $('bBackReal');
+  b.disabled = true;
+  try { await apiJson('/api/scale/disconnect', { method: 'POST', body: {} }); }
+  catch { /* seguimos: limpiamos el estado local de todos modos */ }
+  APP.scaleConnected = false;
+  APP.simActive = false;
+  APP.lastReadingAt = 0;
+  if (isSimCfg(loadCfg())) clearCfg();   // no quedar pegados en práctica
+  refreshSimUi();
+  try { await refreshPesajeHome(); }
+  finally { b.disabled = false; }
 };
 
 /* ---------------- overlay ¿cómo funciona? ---------------- */
