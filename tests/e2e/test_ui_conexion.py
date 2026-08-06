@@ -16,6 +16,7 @@ importorskip del resto de tests e2e).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 import threading
@@ -62,6 +63,18 @@ def browser():
         b = p.chromium.launch(headless=True)
         yield b
         b.close()
+
+
+@pytest.fixture(autouse=True)
+def _scale_reset(server_url):
+    """El servidor es de alcance módulo: desconecta la báscula ANTES de cada
+    test para que el estado de la simulada no se filtre entre pruebas."""
+    import urllib.request
+    with contextlib.suppress(Exception):
+        urllib.request.urlopen(
+            urllib.request.Request(server_url + "/api/scale/disconnect",
+                                   method="POST"), timeout=5)
+    yield
 
 
 @pytest.fixture()
@@ -292,8 +305,10 @@ def test_usar_simulada_guarda_config_y_tarjeta(page, server_url):
     assert cfg["profile_id"] == "sim"
     assert cfg["name"] == "Báscula simulada"
 
-    # ⚙ Báscula: tarjeta visible con chip vivo, no el botón grande
-    page.locator('.tabbtn[data-mod="bascula"]').click()
+    # ⚙ Báscula: tarjeta visible con chip vivo, no el botón grande.
+    # (`:visible` clica el botón del módulo que corresponda al viewport:
+    # la barra lateral en escritorio o la barra inferior en móvil.)
+    page.locator('[data-mod="bascula"]:visible').click()
     EXPECT(page.locator("#connCard")).to_be_visible()
     EXPECT(page.locator("#connEmpty")).to_be_hidden()
     EXPECT(page.locator("#ccName")).to_have_text("Báscula simulada")
