@@ -11,7 +11,7 @@ import sqlite3
 import statistics
 import threading
 import uuid as uuid_mod
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,6 +36,10 @@ def init_db(path: str | Path) -> None:
     Migración v2: DBs creadas antes del motor v2 no tienen la columna
     ``sesiones.modo`` (el CREATE usa IF NOT EXISTS y no la agrega); se
     detecta con PRAGMA table_info y se agrega con ALTER TABLE.
+
+    Migración v3 (misma técnica): ``sesiones.es_demo`` — marca de sesión
+    de PRÁCTICA con la báscula simulada (chip DEMO, excluida de stats,
+    autodestruida tras 1 h de cerrada).
     """
     path = Path(path)
     if path.parent != Path(""):
@@ -47,6 +51,10 @@ def init_db(path: str | Path) -> None:
         if "modo" not in cols:
             conn.execute(
                 "ALTER TABLE sesiones ADD COLUMN modo TEXT NOT NULL DEFAULT 'lote'"
+            )
+        if "es_demo" not in cols:
+            conn.execute(
+                "ALTER TABLE sesiones ADD COLUMN es_demo INTEGER NOT NULL DEFAULT 0"
             )
         conn.commit()
     finally:
@@ -104,6 +112,9 @@ class Repo:
     def create_session(self, data: dict[str, Any]) -> int:
         cols = {k: data.get(k) for k in SESSION_FIELDS}
         cols["modo"] = data.get("modo") or "lote"
+        # Práctica con la báscula simulada: la fija el backend (app.py)
+        # según el perfil conectado, nunca el formulario de la UI.
+        cols["es_demo"] = 1 if data.get("es_demo") else 0
         cols["uuid"] = data.get("uuid") or str(uuid_mod.uuid4())
         cols["hora_entrada"] = data.get("hora_entrada") or _now_iso()
         cols["estado"] = "abierta"
@@ -403,18 +414,54 @@ class Repo:
             }
             if dry_run or not ids:
                 return result
-            self._conn.execute(
-                f"DELETE FROM lecturas_crudas WHERE sesion_id IN ({marks})", ids)
-            self._conn.execute(
-                f"UPDATE eventos_pesaje SET evento_relacionado_id = NULL "
-                f"WHERE sesion_id IN ({marks})", ids)
-            self._conn.execute(
-                f"DELETE FROM eventos_pesaje WHERE sesion_id IN ({marks})", ids)
-            self._conn.execute(
-                f"DELETE FROM sesiones WHERE id IN ({marks})", ids)
-            self._conn.commit()
+            self._purge_sessions_locked(ids)
         self.vacuum()
         return result
+
+    def _purge_sessions_locked(self, ids: list[int]) -> None:
+        """Borra sesiones con sus eventos y lecturas (lock YA tomado)."""
+        marks = ",".join("?" * len(ids)) or "NULL"
+        self._conn.execute(
+            f"DELETE FROM lecturas_crudas WHERE sesion_id IN ({marks})", ids)
+        self._conn.execute(
+            f"UPDATE eventos_pesaje SET evento_relacionado_id = NULL "
+            f"WHERE sesion_id IN ({marks})", ids)
+        self._conn.execute(
+            f"DELETE FROM eventos_pesaje WHERE sesion_id IN ({marks})", ids)
+        self._conn.execute(
+            f"DELETE FROM sesiones WHERE id IN ({marks})", ids)
+        self._conn.commit()
+
+    #: Vida máxima de una sesión DEMO después de cerrada (política UI:
+    #: "los pesajes de práctica se borran solos después de una hora").
+    DEMO_TTL_MINUTES = 60
+
+    def cleanup_demo_sessions(
+        self, max_age_minutes: int = DEMO_TTL_MINUTES
+    ) -> int:
+        """AUTODESTRUCCIÓN de las sesiones DEMO (báscula simulada).
+
+        Borra las sesiones con ``es_demo=1`` NO abiertas cuyo cierre
+        (``hora_salida``; ``hora_entrada`` si una anulada no la tiene)
+        ocurrió hace más de ``max_age_minutes``, con sus eventos y
+        lecturas (misma maquinaria que "🧹 Liberar espacio"). Jamás toca
+        sesiones reales (``es_demo=0``) ni abiertas. Retorna cuántas
+        sesiones borró.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        cutoff_iso = cutoff.isoformat(timespec="seconds")
+        with self._lock:
+            ids = [r[0] for r in self._conn.execute(
+                """SELECT id FROM sesiones
+                   WHERE es_demo = 1 AND estado != 'abierta'
+                     AND COALESCE(hora_salida, hora_entrada) < ?""",
+                (cutoff_iso,),
+            )]
+            if not ids:
+                return 0
+            self._purge_sessions_locked(ids)
+        self.vacuum()
+        return len(ids)
 
     def vacuum(self) -> None:
         """Compacta el archivo para devolver el espacio al sistema."""
@@ -434,8 +481,13 @@ class Repo:
         Cuenta TODAS las sesiones del rango; los kg/animales solo suman
         donde hay totales (es decir, sesiones cerradas — las abiertas
         aún no tienen snapshot final y SUM ignora sus NULL).
+
+        Las sesiones DEMO (báscula simulada, ``es_demo=1``) quedan
+        EXCLUIDAS del agregado: se ven en la tabla con su chip, pero no
+        contaminan los totales oficiales.
         """
         where, params = self._session_filters(desde, hasta)
+        where = f"{where} AND es_demo = 0" if where else " WHERE es_demo = 0"
         with self._lock:
             g = self._conn.execute(
                 f"""SELECT COUNT(*)                        AS sesiones,

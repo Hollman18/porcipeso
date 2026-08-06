@@ -333,6 +333,31 @@ export class LocalBackend {
     }
   };
 
+  private demoReaperTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Autodestrucción de sesiones DEMO: barre ya (al abrir la app) y
+   * luego cada hora. La regla (60 min tras el cierre, jamás reales ni
+   * abiertas) vive en repo.cleanupDemoSessions (espejo de repo.py).
+   */
+  startDemoReaper(intervalMs = 3_600_000): void {
+    const sweep = (): void => {
+      this.enqueue(async () => {
+        await this.repo.cleanupDemoSessions();
+      });
+    };
+    sweep();
+    if (this.demoReaperTimer !== null) clearInterval(this.demoReaperTimer);
+    this.demoReaperTimer = setInterval(sweep, intervalMs);
+  }
+
+  stopDemoReaper(): void {
+    if (this.demoReaperTimer !== null) {
+      clearInterval(this.demoReaperTimer);
+      this.demoReaperTimer = null;
+    }
+  }
+
   async stopDriver(): Promise<void> {
     if (this.sim !== null) {
       this.sim.stop();
@@ -887,6 +912,11 @@ export class LocalBackend {
       return err(400, `modo desconocido: '${modo}' (esperado: ('lote', 'unidades'))`);
     }
     data["modo"] = modo;
+    // DEMO: toda sesión creada con la báscula SIMULADA conectada se
+    // marca es_demo=1 (chip DEMO, fuera de stats, autodestruible).
+    // Lo decide el backend por el perfil activo — la UI no lo manda.
+    data["es_demo"] =
+      this.sim !== null || this.driverProfile?.id === SIM_PROFILE.id ? 1 : 0;
     const engine = this.ensureEngine();
     const sessionId = await this.repo.createSession(data);
     engine.openSession(sessionId, modo);

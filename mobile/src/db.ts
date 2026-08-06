@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS sesiones (
   diferencia_conciliacion  INTEGER,
   estado                   TEXT NOT NULL DEFAULT 'abierta'
                            CHECK (estado IN ('abierta', 'cerrada', 'anulada')),
-  modo                     TEXT NOT NULL DEFAULT 'lote'
+  modo                     TEXT NOT NULL DEFAULT 'lote',
+  es_demo                  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS eventos_pesaje (
@@ -274,6 +275,12 @@ export class Repo {
     if (!cols.some((c) => c["name"] === "modo")) {
       await drv.run("ALTER TABLE sesiones ADD COLUMN modo TEXT NOT NULL DEFAULT 'lote'");
     }
+    // Migración v3 (espejo de repo.init_db): sesiones.es_demo — marca de
+    // práctica con la báscula simulada (chip DEMO, fuera de stats,
+    // autodestruida tras 1 h de cerrada).
+    if (!cols.some((c) => c["name"] === "es_demo")) {
+      await drv.run("ALTER TABLE sesiones ADD COLUMN es_demo INTEGER NOT NULL DEFAULT 0");
+    }
     return new Repo(drv, opts);
   }
 
@@ -287,6 +294,9 @@ export class Repo {
     const cols: Record<string, unknown> = {};
     for (const k of SESSION_FIELDS) cols[k] = data[k] ?? null;
     cols["modo"] = (data["modo"] as string) || "lote";
+    // Práctica con la báscula simulada: lo fija el backend (apishim)
+    // según el perfil conectado, nunca el formulario de la UI.
+    cols["es_demo"] = data["es_demo"] ? 1 : 0;
     const uuid = (data["uuid"] as string) || uuid4();
     cols["uuid"] = uuid;
     cols["hora_entrada"] = (data["hora_entrada"] as string) || nowIso();
@@ -544,6 +554,13 @@ export class Repo {
     );
     const result = { pesajes: ids.length, eventos, lecturas, dry_run: dryRun };
     if (dryRun || !ids.length) return result;
+    await this.purgeSessions(ids);
+    return result;
+  }
+
+  /** Borra sesiones con sus eventos, lecturas y pendientes de sync. */
+  private async purgeSessions(ids: number[]): Promise<void> {
+    const marks = ids.map(() => "?").join(",") || "NULL";
     await this.drv.run(
       `DELETE FROM lecturas_crudas WHERE sesion_id IN (${marks})`, ids);
     await this.drv.run(
@@ -558,7 +575,31 @@ export class Repo {
     await this.drv.run(`DELETE FROM eventos_pesaje WHERE sesion_id IN (${marks})`, ids);
     await this.drv.run(`DELETE FROM sesiones WHERE id IN (${marks})`, ids);
     await this.vacuum();
-    return result;
+  }
+
+  /** Vida máxima de una sesión DEMO después de cerrada (espejo repo.py). */
+  static readonly DEMO_TTL_MINUTES = 60;
+
+  /**
+   * AUTODESTRUCCIÓN de las sesiones DEMO (báscula simulada) — espejo
+   * exacto de repo.cleanup_demo_sessions: borra las es_demo=1 NO
+   * abiertas cuyo cierre (hora_salida; hora_entrada si falta) ocurrió
+   * hace más de `maxAgeMinutes`, con la misma maquinaria de "Liberar
+   * espacio". Jamás toca sesiones reales (es_demo=0) ni abiertas.
+   */
+  async cleanupDemoSessions(maxAgeMinutes: number = Repo.DEMO_TTL_MINUTES): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000);
+    const cutoffIso = cutoff.toISOString().slice(0, 19) + "+00:00";
+    const rows = await this.drv.query(
+      `SELECT id FROM sesiones
+        WHERE es_demo = 1 AND estado != 'abierta'
+          AND COALESCE(hora_salida, hora_entrada) < ?`,
+      [cutoffIso],
+    );
+    const ids = rows.map((r) => Number(r["id"]));
+    if (!ids.length) return 0;
+    await this.purgeSessions(ids);
+    return ids.length;
   }
 
   private async vacuum(): Promise<void> {
@@ -588,7 +629,11 @@ export class Repo {
   // ---------------------------------------------------------------- stats
 
   async statsGlobal(desde?: string | null, hasta?: string | null): Promise<Record<string, unknown>> {
-    const { where, params } = this.sessionFilters(desde, hasta);
+    // Las sesiones DEMO (es_demo=1) quedan EXCLUIDAS del agregado (se
+    // ven en la tabla con su chip, pero no contaminan los totales).
+    const filters = this.sessionFilters(desde, hasta);
+    const where = filters.where ? `${filters.where} AND es_demo = 0` : " WHERE es_demo = 0";
+    const params = filters.params;
     const [g] = await this.drv.query(
       `SELECT COUNT(*)                        AS sesiones,
               COALESCE(SUM(total_animales), 0) AS total_animales,

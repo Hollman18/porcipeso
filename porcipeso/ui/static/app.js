@@ -237,12 +237,15 @@ async function refreshPesajeHome() {
   const chip = $('scaleChip'), btn = $('bStart'), note = $('startNote'), simBtn = $('bUseSim');
   const st = await scaleStatus();
   refreshSimUi();
+  // la política DEMO acompaña siempre al enlace de la simulada
+  const syncSimNote = () => { $('simNote').hidden = simBtn.hidden; };
   if (APP.scaleConnected) {
     chip.className = 'chip ' + (APP.simActive ? 'sim' : 'ok');
     chip.textContent = APP.simActive ? 'Báscula simulada' : (st?.profile_name ?? st?.name ?? 'Báscula conectada');
     btn.textContent = 'Empezar a pesar';
     note.hidden = true;
     simBtn.hidden = APP.simActive; // ya está activa
+    syncSimNote();
     return;
   }
   const cfg = loadCfg();
@@ -257,10 +260,11 @@ async function refreshPesajeHome() {
     chip.className = 'chip err';
     chip.textContent = st === null ? 'Programa apagado' : 'Sin báscula';
     btn.textContent = 'Empezar a pesar';
-    note.textContent = 'No hay báscula configurada. Puedes usar la báscula simulada para probar todo el sistema — queda guardado de verdad.';
+    note.textContent = 'No hay báscula configurada. Puedes practicar con la báscula simulada.';
     note.hidden = false;
     simBtn.hidden = false;
   }
+  syncSimNote();
 }
 
 $('bStart').onclick = () => {
@@ -345,9 +349,30 @@ function stampNow() {
 function updateSaveWhen() { $('saveWhen').textContent = stampNow(); }
 setInterval(() => { if ($('pvSetup').classList.contains('active')) updateSaveWhen(); }, 15000);
 
+/* Campos extra según el modo: en UNIDADES (muestreo/control de
+   crecimiento) no hay despacho — destino/placa/conductor no aplican y
+   solo queda Corral (de cuál corral sale la muestra). En LOTE (despacho
+   con camión) se muestran todos. */
+const EXTRA_FIELDS_BY_MODE = {
+  lote: ['corral', 'destino', 'placa', 'conductor'],
+  unidades: ['corral'],
+};
+function extraFieldsFor(mode) {
+  return EXTRA_FIELDS_BY_MODE[mode] ?? EXTRA_FIELDS_BY_MODE.lote;
+}
+function applyModeFields() {
+  const visibles = extraFieldsFor(APP.mode);
+  for (const lb of document.querySelectorAll('#formSetup [data-extra]')) {
+    const show = visibles.includes(lb.dataset.extra);
+    lb.style.display = show ? '' : 'none';
+    if (!show) { const inp = lb.querySelector('input'); if (inp) inp.value = ''; }
+  }
+}
+
 function gotoSetup() {
   $('inpNombre').value = '';               // limpio: la fecha va aparte, fija
   updateSaveWhen();
+  applyModeFields();
   const chip = $('chipMode');
   chip.hidden = false;
   chip.className = 'chip ok';
@@ -373,7 +398,7 @@ $('formSetup').addEventListener('submit', async (e) => {
   const fd = new FormData(e.target);
   const nombre = (fd.get('nombre') ?? '').toString().trim() || defaultName();
   const extras = {};
-  for (const k of ['corral', 'destino', 'placa', 'conductor']) {
+  for (const k of extraFieldsFor(APP.mode)) {   // unidades: solo corral
     extras[k] = (fd.get(k) ?? '').toString().trim();
   }
   $('bComenzar').disabled = true;
@@ -404,7 +429,11 @@ $('formSetup').addEventListener('submit', async (e) => {
       method: 'POST',
       body: { lote: nombre, modo: APP.mode, ...extras, operador: '' },
     });
-    APP.session = { id: r?.id ?? r?.session_id ?? null, nombre };
+    APP.session = {
+      id: r?.id ?? r?.session_id ?? null,
+      nombre,
+      esDemo: !!(r?.es_demo), // báscula simulada: el backend lo decide
+    };
     startWeighing(nombre);
   } catch {
     $('setupError').textContent = 'No pude guardar el pesaje. Inténtalo de nuevo en un momento.';
@@ -742,6 +771,9 @@ function showResults(r) {
   APP.lastResult = { total, count, avg };
 
   $('doneSub').textContent = `${APP.session?.nombre ?? 'Pesaje'} · ${hora()}`;
+  const esDemo = !!(r?.es_demo ?? APP.session?.esDemo);
+  $('doneDemo').hidden = !esDemo;
+  $('doneDemoNote').hidden = !esDemo;
   $('rCards').innerHTML = `
     <div class="rcard"><div class="rv">${Number(count) || 0}</div><div class="rk">cerdos</div></div>
     <div class="rcard"><div class="rv">${fmt(total, 0)}</div><div class="rk">kg en total</div></div>
@@ -880,7 +912,7 @@ async function loadSessionsTable() {
     const estado = s?.estado ?? 'abierta';
     tr.innerHTML = `
       <td class="mono">${escapeHtml(fechaCorta(s?.hora_entrada ?? s?.created_at))}</td>
-      <td><b>${escapeHtml(s?.lote ?? `Pesaje ${s?.id ?? ''}`)}</b></td>
+      <td><b>${escapeHtml(s?.lote ?? `Pesaje ${s?.id ?? ''}`)}</b>${s?.es_demo ? '<span class="chip demo">DEMO</span>' : ''}</td>
       <td class="mono">${escapeHtml(s?.total_animales ?? '—')}</td>
       <td class="mono">${s?.total_kg != null ? fmt(Number(s.total_kg), 0) : '—'}</td>
       <td class="mono">${s?.promedio_final != null ? fmt(Number(s.promedio_final), 0) : '—'}</td>
@@ -947,6 +979,9 @@ async function openDatosDetail(id) {
   } catch { events = []; }
 
   $('dNombre').textContent = s?.lote ?? `Pesaje ${id}`;
+  const esDemo = !!s?.es_demo;
+  $('dDemo').hidden = !esDemo;
+  $('dDemoNote').hidden = !esDemo;
   const cuando = [fechaLarga(s?.hora_entrada), s?.hora_entrada ? `${hora(s.hora_entrada)}${s?.hora_salida ? ' – ' + hora(s.hora_salida) : ''}` : '']
     .filter(Boolean).join(' · ');
   $('dCuando').textContent = cuando || 'Sin fecha registrada';

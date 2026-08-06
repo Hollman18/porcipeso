@@ -206,11 +206,27 @@ def create_app(
     hub = Hub()
     sync_worker = SyncWorker(repo)
 
+    async def demo_reaper() -> None:
+        """Autodestrucción de sesiones DEMO: al abrir y cada hora.
+
+        Borra las sesiones de práctica (es_demo=1) con más de
+        Repo.DEMO_TTL_MINUTES de cerradas — jamás las reales ni las
+        abiertas (la regla vive en repo.cleanup_demo_sessions).
+        """
+        while True:
+            try:
+                await asyncio.to_thread(repo.cleanup_demo_sessions)
+            except Exception:
+                pass  # la limpieza jamás tumba la app
+            await asyncio.sleep(3600)
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         hub.loop = asyncio.get_running_loop()
         sync_worker.start()
+        reaper = asyncio.create_task(demo_reaper())
         yield
+        reaper.cancel()
         stop_driver()
         sync_worker.stop()
         repo.close()
@@ -459,6 +475,14 @@ def create_app(
                 400, f"modo desconocido: {modo!r} (esperado: ('lote', 'unidades'))"
             )
         data["modo"] = modo
+        # DEMO: toda sesión creada con la báscula SIMULADA conectada se
+        # marca es_demo=1 (chip DEMO, fuera de stats, autodestruible).
+        # Lo decide el backend por el perfil activo — la UI no lo manda.
+        profile = st.driver_profile
+        data["es_demo"] = 1 if (
+            st.sim is not None
+            or (profile is not None and profile.id in ("simulador", "sim"))
+        ) else 0
         engine = ensure_engine()
         session_id = repo.create_session(data)
         try:

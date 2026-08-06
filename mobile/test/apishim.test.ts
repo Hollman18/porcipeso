@@ -198,13 +198,17 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(typeof stats.json.varianza).toBe("number");
     expect(typeof stats.json.desviacion_std).toBe("number");
 
+    // la sesión nació con la SIMULADA conectada → es DEMO: se ve en la
+    // lista (con su flag) pero queda EXCLUIDA del agregado global
+    expect(closed.json.es_demo).toBe(1);
     const globalStats = await call(backend, "GET", "/api/stats/global");
-    expect(globalStats.json.sesiones).toBe(1);
-    expect(globalStats.json.total_animales).toBe(2);
-    expect(globalStats.json.por_lote[0].lote).toBe("Lote test");
+    expect(globalStats.json.sesiones).toBe(0);
+    expect(globalStats.json.total_animales).toBe(0);
+    expect(globalStats.json.por_lote).toHaveLength(0);
 
     const list = await call(backend, "GET", "/api/sessions?q=Lote");
     expect(list.json).toHaveLength(1);
+    expect(list.json[0].es_demo).toBe(1);
     const miss = await call(backend, "GET", "/api/sessions?q=NoExiste");
     expect(miss.json).toHaveLength(0);
 

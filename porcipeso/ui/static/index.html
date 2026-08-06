@@ -64,10 +64,12 @@
           <span class="chip" id="scaleChip">Sin báscula</span>
           <button class="btn-primary hero-btn" id="bStart">Empezar a pesar</button>
           <p class="hero-note" id="startNote" hidden></p>
-          <button class="sim-btn" id="bUseSim" hidden>🎛 Usar báscula simulada</button>
           <div class="hero-links">
             <button class="btn-link" id="bHowto">¿Cómo funciona?</button>
+            <button class="sim-btn" id="bUseSim" hidden>🎛 Usar báscula simulada</button>
           </div>
+          <p class="sim-note" id="simNote" hidden>Los pesajes de práctica se marcan
+            <span class="chip demo">DEMO</span> y se borran solos después de una hora.</p>
         </div>
       </div>
 
@@ -107,13 +109,16 @@
             <input class="name" name="nombre" id="inpNombre" placeholder="Ej: Lote 47 — corral C-2" autocomplete="off">
           </label>
           <p class="save-when">Se guardará: <b id="saveWhen"></b></p>
+          <!-- Los campos de despacho (destino/placa/conductor) solo aplican
+               al modo LOTE; en modo UNIDADES (muestreo) queda solo Corral
+               (gotoSetup() los muestra/oculta según APP.mode). -->
           <details class="more">
             <summary>Más datos (opcional)</summary>
             <div class="fields">
-              <label>Corral <input name="corral" autocomplete="off"></label>
-              <label>Destino <input name="destino" autocomplete="off"></label>
-              <label>Placa del camión <input name="placa" autocomplete="off"></label>
-              <label>Conductor <input name="conductor" autocomplete="off"></label>
+              <label data-extra="corral">Corral <input name="corral" autocomplete="off"></label>
+              <label data-extra="destino">Destino <input name="destino" autocomplete="off"></label>
+              <label data-extra="placa">Placa del camión <input name="placa" autocomplete="off"></label>
+              <label data-extra="conductor">Conductor <input name="conductor" autocomplete="off"></label>
             </div>
           </details>
           <p class="form-error" id="setupError"></p>
@@ -181,8 +186,10 @@
       <!-- resultados -->
       <div class="subview" id="pvDone">
         <div class="done-head">
-          <h2>Pesaje terminado ✓</h2>
+          <h2>Pesaje terminado ✓ <span class="chip demo" id="doneDemo" hidden>DEMO</span></h2>
           <div class="sub" id="doneSub"></div>
+          <p class="demo-note" id="doneDemoNote" hidden>Pesaje de práctica con la báscula
+            simulada: no cuenta en tus datos y se borra solo después de una hora.</p>
           <div class="done-eleia eleia-line">PorciPeso · una solución <b>ELEIA</b></div>
         </div>
         <div class="rcards" id="rCards"></div>
@@ -263,7 +270,10 @@
         </div>
         <div class="done-head">
           <h2 id="dNombre">Pesaje</h2>
+          <span class="chip demo" id="dDemo" hidden>DEMO</span>
           <div class="sub" id="dCuando"></div>
+          <p class="demo-note" id="dDemoNote" hidden>Pesaje de práctica con la báscula
+            simulada: no cuenta en tus datos y se borra solo después de una hora.</p>
         </div>
         <div class="rcards" id="dCards"></div>
         <div class="verdict" id="dVerdict" hidden></div>

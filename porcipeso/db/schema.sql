@@ -29,7 +29,11 @@ CREATE TABLE IF NOT EXISTS sesiones (
   -- Modo de pesaje del motor v2: 'lote' (acumulado con cerdo de prueba)
   -- o 'unidades' (uno a uno). En DBs viejas la columna se agrega en
   -- init_db() vía PRAGMA table_info + ALTER TABLE (ver repo.init_db).
-  modo                     TEXT NOT NULL DEFAULT 'lote'
+  modo                     TEXT NOT NULL DEFAULT 'lote',
+  -- Sesión de PRÁCTICA con la báscula simulada (chip DEMO en la UI):
+  -- excluida de stats_global y borrada sola tras 1 h de cerrada
+  -- (cleanup_demo_sessions). En DBs viejas se agrega en init_db().
+  es_demo                  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS eventos_pesaje (
