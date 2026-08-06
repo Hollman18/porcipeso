@@ -126,8 +126,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
   border-radius:20px;margin-top:10px;box-shadow:0 8px 28px rgba(23,138,80,.25)}
 .hero-note{color:var(--muted);font-size:15px;max-width:46ch;margin:0}
 .hero-links{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center}
-.sim-btn{width:100%;max-width:520px;min-height:64px;border:2px dashed var(--amber);
-  color:var(--amber);background:transparent}
+/* báscula simulada: enlace secundario DISCRETO (pedido del cliente:
+   que nadie la confunda con el camino oficial de pesaje) */
+.sim-btn{width:auto;max-width:none;min-height:auto;border:none;background:none;
+  color:var(--muted);font-size:14px;font-weight:600;padding:6px;
+  text-decoration:underline;text-underline-offset:3px}
+.sim-note{color:var(--muted);font-size:12.5px;max-width:52ch;margin:0}
 
 /* ------------- barra mínima por vista ------------- */
 .mini-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -137,6 +141,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
   letter-spacing:.08em;text-transform:uppercase;border:1px solid var(--border);
   background:var(--surface);color:var(--muted);white-space:nowrap}
 .chip.sim{background:var(--amber-soft);color:var(--amber);border-color:var(--amber)}
+/* pesaje de PRÁCTICA (báscula simulada): chip ámbar en resultados,
+   tabla de Datos y detalle — se ve, pero no se confunde con lo oficial */
+.chip.demo{background:var(--amber-soft);color:var(--amber);border-color:var(--amber)}
+td .chip.demo,.sim-note .chip.demo{font-size:10px;padding:2px 8px;margin-left:6px}
+.demo-note{color:var(--amber);font-size:13px;margin:6px 0 0}
 .chip.ok{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
 .chip.err{color:var(--red);border-color:var(--red);background:transparent}
 

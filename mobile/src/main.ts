@@ -66,7 +66,7 @@ async function initBackend(hub: Hub): Promise<LocalBackend> {
   // inicia sesión (POST /api/cloud/login|session vía el shim).
   const sync = new CloudSync({ repo, deviceId: () => getDeviceId() });
   sync.start(); // timer 5 min + push al recuperar red (window "online")
-  return new LocalBackend({
+  const backend = new LocalBackend({
     repo,
     profiles: PROFILES,
     hub,
@@ -76,6 +76,9 @@ async function initBackend(hub: Hub): Promise<LocalBackend> {
       onSessionClosed: () => sync.pushSoon(),
     },
   });
+  // Autodestrucción DEMO: al abrir la app y cada hora (60 min tras cierre).
+  backend.startDemoReaper();
+  return backend;
 }
 
 const hub = new Hub();
