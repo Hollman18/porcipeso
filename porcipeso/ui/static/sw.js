@@ -1,7 +1,7 @@
 'use strict';
 /* PorciPeso — service worker.
    Cache-first para el shell estático; red directa para /api y /ws. */
-const CACHE = 'porcipeso-shell-v6'; // v6: LED crudo (raw) + fit-to-width
+const CACHE = 'porcipeso-shell-v7'; // v7: merge LED crudo + demo + tarjeta de conexión
 const SHELL = [
   './',
   './index.html',
