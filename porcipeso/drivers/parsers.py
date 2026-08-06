@@ -51,9 +51,13 @@ class _BufferedParser(FrameParser):
     def _extract(self) -> list[Reading]:  # pragma: no cover - abstracto
         raise NotImplementedError
 
-    def _reading(self, kg: float, stable: bool | None = None) -> Reading:
+    def _reading(self, kg: float, stable: bool | None = None,
+                 raw: str | None = None) -> Reading:
+        # raw = token del peso tal como lo MUESTRA el indicador (reverse_frame
+        # ya corregido). Los parsers binarios que no puedan reconstruirlo
+        # pasan None y la UI degrada a formato plano sin locale.
         return Reading(ts_ms=_now_ms(), kg=kg,
-                       scale_id=self.profile.id, stable_flag=stable)
+                       scale_id=self.profile.id, stable_flag=stable, raw=raw)
 
 
 def reverse_frame_active(profile: ScaleProfile, base: bool = False) -> bool:
@@ -141,7 +145,7 @@ class MatrixParser(_BufferedParser):
                 del self._buf[:1]  # basura tras '=': resincronizar
                 continue
             del self._buf[:self.FRAME_LEN]
-            out.append(self._reading(kg))
+            out.append(self._reading(kg, raw=text))
         return out
 
 
@@ -178,7 +182,7 @@ class TuxonAsciiParser(_LineParser):
             kg = float(m.group(1))
         except ValueError:
             return None
-        return self._reading(kg)
+        return self._reading(kg, raw=m.group(1))
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +245,10 @@ class ModbusRtuParser(_BufferedParser):
         raw = int.from_bytes(raw_bytes, "big",
                              signed=bool(extra.get("signed", True)))
         divisor = float(extra.get("scale_divisor", 1)) or 1.0
-        return self._reading(raw / divisor)
+        kg = raw / divisor
+        # binario: no hay token textual — se reconstruye lo que el display
+        # muestra (str() de Python = repr más corto, sin artefactos ni locale)
+        return self._reading(kg, raw=str(kg))
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +264,7 @@ class SicsParser(_LineParser):
         if not m:
             return None
         kg = _to_kg(float(m.group(2)), m.group(3))
-        return self._reading(kg, stable=m.group(1) == "S")
+        return self._reading(kg, stable=m.group(1) == "S", raw=m.group(2))
 
 
 # ---------------------------------------------------------------------------
@@ -287,13 +294,31 @@ class ToledoContParser(_BufferedParser):
                 del self._buf[:1]
                 continue
             swa, swb = frame[1], frame[2]
-            kg = int(frame[4:10]) * self._FACTORS[swa & 0x07]
-            if swb & 0x02:
+            digits = frame[4:10].decode("ascii")
+            kg = int(digits) * self._FACTORS[swa & 0x07]
+            negative = bool(swb & 0x02)
+            if negative:
                 kg = -kg
             stable = not (swb & 0x08)
             del self._buf[:self.FRAME_LEN]
-            out.append(self._reading(kg, stable))
+            out.append(self._reading(
+                kg, stable, raw=self._display_str(digits, swa & 0x07, negative)))
         return out
+
+    @staticmethod
+    def _display_str(digits: str, dp_bits: int, negative: bool) -> str:
+        """Reconstruye el texto que muestra el display del indicador a partir
+        de los dígitos y la posición del punto decimal (sin pasar por float,
+        para que no haya artefactos de coma flotante)."""
+        if dp_bits >= 3:                      # 3→1 decimal, 4→2, … 7→5
+            dec = dp_bits - 2
+            text = digits[:-dec] + "." + digits[-dec:]
+        else:                                 # 0→×100, 1→×10, 2→×1
+            text = digits + "0" * (2 - dp_bits)
+        int_part, dot, frac = text.partition(".")
+        int_part = int_part.lstrip("0") or "0"
+        text = int_part + dot + frac
+        return ("-" + text) if negative else text
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +338,7 @@ class Cardinal738Parser(_LineParser):
             kg = _to_kg(float(m.group(1)), m.group(2))
         except ValueError:
             return None
-        return self._reading(kg)
+        return self._reading(kg, raw=m.group(1))
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +355,7 @@ class SmaParser(_LineParser):
             return None
         status = m.group(1)
         kg = _to_kg(float(m.group(2)), m.group(3))
-        return self._reading(kg, stable=status in ("Z", "S"))
+        return self._reading(kg, stable=status in ("Z", "S"), raw=m.group(2))
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +375,7 @@ class AndStreamParser(_LineParser):
         except ValueError:
             return None
         stable = {"ST": True, "US": False}.get(m.group(1))
-        return self._reading(kg, stable)
+        return self._reading(kg, stable, raw=m.group(2))
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +394,8 @@ class DiniArgeoParser(_LineParser):
         except ValueError:
             return None
         unit = parts[3] if len(parts) > 3 else None
-        return self._reading(_to_kg(value, unit), stable=parts[0] == "ST")
+        return self._reading(_to_kg(value, unit), stable=parts[0] == "ST",
+                             raw=parts[2])
 
 
 # ---------------------------------------------------------------------------
@@ -397,11 +423,12 @@ class RinstrumR320Parser(_BufferedParser):
             m = self._RE.search(body)
             if not m:
                 continue
-            kg = float((m.group(1) or "") + m.group(2))
+            token = (m.group(1) or "") + m.group(2)
+            kg = float(token)
             status = body[-1] if body and body[-1].isalpha() else ""
             stable = (False if status == "M"
                       else True if status in ("G", "N") else None)
-            out.append(self._reading(kg, stable))
+            out.append(self._reading(kg, stable, raw=token))
         return out
 
 
@@ -418,6 +445,7 @@ class NciParser(_LineParser):
     def __init__(self, profile: ScaleProfile) -> None:
         super().__init__(profile)
         self._pending_kg: float | None = None
+        self._pending_raw: str | None = None
 
     def _extract(self) -> list[Reading]:
         out: list[Reading] = []
@@ -434,15 +462,19 @@ class NciParser(_LineParser):
             if self._pending_kg is not None and self._is_status(text):
                 bits = ord(text[0]) - 0x30
                 out.append(self._reading(self._pending_kg,
-                                         stable=not (bits & 0x01)))
+                                         stable=not (bits & 0x01),
+                                         raw=self._pending_raw))
                 self._pending_kg = None
+                self._pending_raw = None
                 continue
             m = self._W_RE.search(text)
             if m:
                 if self._pending_kg is not None:
                     # llegó otro peso sin status: emitir el anterior sin bandera
-                    out.append(self._reading(self._pending_kg, stable=None))
+                    out.append(self._reading(self._pending_kg, stable=None,
+                                             raw=self._pending_raw))
                 self._pending_kg = _to_kg(float(m.group(1)), m.group(2))
+                self._pending_raw = m.group(1)
         return out
 
     @staticmethod

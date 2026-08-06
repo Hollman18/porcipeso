@@ -292,7 +292,10 @@ def create_app(
                     fase = snap.get("fase", "lote")
             hub.broadcast(
                 {"type": "reading", "kg": reading.kg,
-                 "ts_ms": reading.ts_ms, "state": state, "fase": fase}
+                 "ts_ms": reading.ts_ms, "state": state, "fase": fase,
+                 # string crudo tal como lo muestra el indicador (LED de la
+                 # UI lo pinta tal cual; null → la UI degrada a formato plano)
+                 "raw": getattr(reading, "raw", None)}
             )
 
     def stop_driver() -> None:

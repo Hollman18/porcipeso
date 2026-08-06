@@ -531,13 +531,56 @@ function askNext() {
   box.hidden = false;
 }
 
+/* ---------------- LED: texto crudo + fit-to-width ---------------- */
+/* El LED muestra EXACTAMENTE lo que transmite el indicador (campo "raw" del
+   WS, ej. "-7143.0"): sin locale, sin separador de miles, sin coma decimal.
+   Fallback (sim / protocolos binarios sin token): número plano con punto. */
+function ledText(m, kg) {
+  const raw = typeof m?.raw === 'string' ? m.raw.trim() : '';
+  if (raw) return raw;
+  return kg.toFixed(Math.abs(kg) >= 100 ? 0 : 1); // plano, sin locale
+}
+
+/* Fit-to-width: mide el ancho renderizado al tamaño natural (CSS) y, si se
+   sale del recuadro, escala el font-size en proporción exacta. Segundo pase
+   por redondeo/kerning. El número JAMÁS se corta ni desborda el ledbox. */
+function fitLed() {
+  const led = $('led');
+  const box = led && led.parentElement;
+  if (!box) return;
+  led.style.fontSize = '';                 // medir al tamaño natural (clamp CSS)
+  const cs = getComputedStyle(box);
+  const avail = box.clientWidth
+    - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  if (avail <= 0) return;                  // panel oculto: nada que ajustar
+  let w = led.scrollWidth;
+  if (w <= avail) return;
+  const base = parseFloat(getComputedStyle(led).fontSize) || 88;
+  led.style.fontSize = Math.max(8, Math.floor(base * avail / w)) + 'px';
+  w = led.scrollWidth;
+  if (w > avail) {
+    const cur = parseFloat(led.style.fontSize);
+    led.style.fontSize = Math.max(8, Math.floor(cur * avail / w)) + 'px';
+  }
+}
+window.addEventListener('resize', fitLed);
+
+function setLed(text) {
+  const led = $('led');
+  led.textContent = text + ' ';
+  const small = document.createElement('small');
+  small.textContent = 'kg';
+  led.appendChild(small);
+  fitLed();
+}
+
 /* ---------------- lecturas (WS) ---------------- */
 const hist = [];
 function onReading(m) {
   const kg = Number(m?.kg ?? 0);
   APP.lastReadingAt = Date.now();
   if (m?.fase) { APP.faseSupported = true; if (APP.session) applyFase(m.fase, m); }
-  $('led').innerHTML = `${fmt(kg, kg >= 100 ? 0 : 1)} <small>kg</small>`;
+  setLed(ledText(m, kg));
   $('led').classList.add('pulse');
   hist.push(kg); if (hist.length > 300) hist.shift();
   drawSpark();
