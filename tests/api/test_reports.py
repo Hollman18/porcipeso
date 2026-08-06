@@ -25,11 +25,13 @@ def _seed(db_path) -> dict[str, int]:
         "hora_entrada": "2026-07-15T08:00:00+00:00",
     })
 
-    def ev(ts_ms, antes, despues, n, tipo, motivo=None):
-        repo.insert_event(WeighEvent(
+    def ev(ts_ms, antes, despues, n, tipo, motivo=None,
+           ambiguo=False, opciones=()):
+        return repo.insert_event(WeighEvent(
             id=None, session_id=sid, ts_ms=ts_ms, peso_antes=antes,
             peso_despues=despues, delta_kg=despues - antes,
             animales_estimados=n, tipo=tipo, motivo_bajada=motivo,
+            ambiguo=ambiguo, opciones=list(opciones),
         ))
 
     ev(1_000, 0.0, 100.0, 1, EventType.REFERENCIA)
@@ -37,9 +39,13 @@ def _seed(db_path) -> dict[str, int]:
     ev(9_000, 105.0, 315.0, 2, EventType.SUBIDA)
     ev(13_000, 315.0, 210.0, 1, EventType.BAJADA, motivo="estres")
     ev(17_000, 210.0, 305.0, 1, EventType.SUBIDA)
+    # peso ambiguo que el operador confirmó (sale como detalle en informes)
+    amb = ev(21_000, 305.0, 515.0, 2, EventType.SUBIDA,
+             ambiguo=True, opciones=[2, 3])
+    repo.update_event_confirm(amb, 2, "Marta")
     repo.close_session(
-        sid, {"total_kg": 305.0, "count": 3, "avg_kg": 305.0 / 3},
-        conteo_fisico=3,
+        sid, {"total_kg": 515.0, "count": 5, "avg_kg": 515.0 / 5},
+        conteo_fisico=5,
     )
     abierta = repo.create_session({
         "lote": "L-abierta", "hora_entrada": "2026-07-16T09:00:00+00:00",
@@ -159,7 +165,7 @@ def test_xlsx_sigue_valido_y_con_marca(ctx):
     resumen = {row[0]: row[1] for row in ws.iter_rows(values_only=True)
                if row and row[0]}
     assert resumen["Lote"] == "Lote 47 — corral C-2"
-    assert resumen["Total animales"] == 3
+    assert resumen["Total animales"] == 5
 
     # pie con versión + ELEIA
     pie = [row[0] for row in ws.iter_rows(values_only=True)
@@ -167,3 +173,70 @@ def test_xlsx_sigue_valido_y_con_marca(ctx):
     assert len(pie) == 1
     assert branding.COMPANY in pie[0]
     assert f"v{branding.get_version()}" in pie[0]
+
+
+def test_xlsx_diseno_resumen(ctx):
+    """Diseño del Resumen: secciones, tarjetas combinadas, movimientos
+    en español y nota 'en cristiano'."""
+    client, ids = ctx
+    resp = client.get(f"/api/sessions/{ids['cerrada']}/export.xlsx")
+    wb = load_workbook(io.BytesIO(resp.content))
+    ws = wb["Resumen"]
+
+    todas = [row for row in ws.iter_rows()]
+    textos = {str(c.value) for row in todas for c in row if c.value is not None}
+
+    # encabezados de sección en mayúsculas
+    for section in ("DATOS DEL LOTE", "TOTALES",
+                    "ESTADÍSTICA DEL LOTE", "MOVIMIENTOS"):
+        assert section in textos
+
+    # tarjetas de totales: celdas combinadas, número grande verde PorciPeso
+    merges = {str(m) for m in ws.merged_cells.ranges}
+    card_cells = [c for row in todas for c in row
+                  if c.value == "CERDOS"]
+    assert card_cells, "falta la tarjeta CERDOS"
+    label = card_cells[0]
+    valor = ws.cell(row=label.row - 1, column=label.column)
+    assert valor.value == 5
+    assert valor.font.bold is True
+    assert valor.font.size >= 16
+    assert str(valor.font.color.rgb).endswith(
+        branding.PORCIPESO_GREEN.lstrip("#"))
+    assert valor.fill.fgColor.rgb.endswith(
+        branding.REPORT_CARD_BG.lstrip("#"))
+    assert any(":" in m for m in merges)  # hay celdas combinadas
+
+    # movimientos con tipos en español + detalle del ambiguo confirmado
+    assert "Cerdo de prueba" in textos
+    assert "Bajada" in textos
+    assert any("confirmado por Marta" in t for t in textos)
+    assert any(t.startswith("En cristiano:") for t in textos)
+
+    # claves en bold + bordes finos en la tabla clave-valor
+    lote_cell = next(c for row in todas for c in row if c.value == "Lote")
+    assert lote_cell.font.bold is True
+    assert lote_cell.border.bottom.style == "thin"
+
+
+def test_xlsx_eventos_estilizados(ctx):
+    """Hoja Eventos: header verde, freeze panes, autofiltro y formatos."""
+    client, ids = ctx
+    resp = client.get(f"/api/sessions/{ids['cerrada']}/export.xlsx")
+    wb = load_workbook(io.BytesIO(resp.content))
+    we = wb["Eventos"]
+
+    assert we.freeze_panes == "A2"
+    assert we.auto_filter.ref is not None
+    assert we.auto_filter.ref.startswith("A1:")
+
+    hdr = we.cell(row=1, column=1)
+    assert hdr.fill.fgColor.rgb.endswith(branding.ELEIA_GREEN.lstrip("#"))
+    assert hdr.font.bold is True
+    assert str(hdr.font.color.rgb).endswith("FFFFFF")
+
+    header = [c.value for c in we[1]]
+    idx_delta = header.index("delta_kg") + 1
+    delta = we.cell(row=2, column=idx_delta)
+    assert delta.number_format == "#,##0.0"
+    assert delta.border.top.style == "thin"

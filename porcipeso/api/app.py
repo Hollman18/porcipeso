@@ -740,62 +740,284 @@ STATS_ROWS = [
 
 def build_xlsx(session: dict[str, Any], events: list[dict[str, Any]],
                stats: dict[str, Any]) -> bytes:
-    """Construye el .xlsx (hoja Resumen + hoja Eventos). Retorna bytes.
+    """Construye el .xlsx con diseño de marca (hoja Resumen + hoja Eventos).
 
-    Lleva el encabezado de marca "PorciPeso · una solución ELEIA"
-    (constantes de porcipeso.branding — nada de strings sueltos).
+    Resumen: banda verde Eleia con el lockup, "Datos del lote" como tabla
+    clave-valor con bordes finos y zebra, tarjetas de totales combinadas,
+    estadística, tabla de movimientos en español y pie de marca.
+    Eventos: datos crudos del motor (mismas columnas de siempre) con
+    encabezado verde, zebra, freeze panes y autofiltro.
+
+    Toda la marca sale de ``porcipeso.branding`` — nada de strings sueltos.
     """
+    from datetime import datetime as _dt
+
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
 
     from porcipeso import branding
+    from porcipeso.api.reports import TIPO_HUMANO
+
+    GREEN = branding.ELEIA_GREEN.lstrip("#")
+    GREEN_DARK = branding.ELEIA_GREEN_DARK.lstrip("#")
+    CHARCOAL = branding.ELEIA_CHARCOAL.lstrip("#")
+    PP_GREEN = branding.PORCIPESO_GREEN.lstrip("#")
+    CARD_BG = branding.REPORT_CARD_BG.lstrip("#")
+    NOTE_BG = branding.REPORT_NOTE_BG.lstrip("#")
+    ZEBRA = branding.REPORT_ZEBRA.lstrip("#")
+    BORDER = branding.REPORT_BORDER.lstrip("#")
+
+    fill_green = PatternFill("solid", fgColor=GREEN)
+    fill_green_dark = PatternFill("solid", fgColor=GREEN_DARK)
+    fill_card = PatternFill("solid", fgColor=CARD_BG)
+    fill_note = PatternFill("solid", fgColor=NOTE_BG)
+    fill_zebra = PatternFill("solid", fgColor=ZEBRA)
+
+    side_thin = Side(style="thin", color=BORDER)
+    border_thin = Border(left=side_thin, right=side_thin,
+                         top=side_thin, bottom=side_thin)
+    side_green = Side(style="thin", color=GREEN)
+    border_card = Border(left=side_green, right=side_green,
+                         top=side_green, bottom=side_green)
+
+    right = Alignment(horizontal="right", vertical="center")
+    center = Alignment(horizontal="center", vertical="center")
+    left_top = Alignment(horizontal="left", vertical="center",
+                         wrap_text=True)
+
+    KG_FMT = "#,##0.0"
+    STAT_FMT = "#,##0.00"
+    LAST_COL = 6  # A..F
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Resumen"
+    for col, width in zip("ABCDEF", (34, 14, 13, 13, 13, 16)):
+        ws.column_dimensions[col].width = width
 
-    # --------- encabezado de marca (verde Eleia + tipografía blanca) ---------
-    eleia_fill = PatternFill("solid", fgColor=branding.ELEIA_GREEN.lstrip("#"))
-    ws.append([f"{branding.PRODUCT_NAME} — Informe de pesaje"])
-    ws.append([f"una solución {branding.COMPANY} · {branding.TAGLINE_COMPANY}"])
-    for row, size in ((1, 14), (2, 10)):
-        for col in (1, 2):
-            cell = ws.cell(row=row, column=col)
-            cell.fill = eleia_fill
-            cell.font = Font(bold=True, color="FFFFFF", size=size)
+    def _merge_row(row: int, value: Any, *, fill=None, font=None,
+                   align=None, height=None, border=None,
+                   first: int = 1, last: int = LAST_COL) -> None:
+        ws.cell(row=row, column=first, value=value)
+        ws.merge_cells(start_row=row, start_column=first,
+                       end_row=row, end_column=last)
+        for c in range(first, last + 1):
+            cell = ws.cell(row=row, column=c)
+            if fill is not None:
+                cell.fill = fill
+            if font is not None:
+                cell.font = font
+            if align is not None:
+                cell.alignment = align
+            if border is not None:
+                cell.border = border
+        if height is not None:
+            ws.row_dimensions[row].height = height
+
+    # --------- banda de marca (verde Eleia + tipografía blanca) ---------
+    _merge_row(1, f"{branding.PRODUCT_NAME} — Informe de pesaje",
+               fill=fill_green,
+               font=Font(bold=True, color="FFFFFF", size=16),
+               align=Alignment(horizontal="left", vertical="center"),
+               height=30)
+    _merge_row(2, f"una solución {branding.COMPANY} · {branding.TAGLINE_COMPANY}",
+               fill=fill_green,
+               font=Font(bold=True, color="FFFFFF", size=10),
+               align=Alignment(horizontal="left", vertical="center"),
+               height=16)
+    _merge_row(3, None, fill=fill_green_dark, height=4)
     logo = branding.get_logo_path()
     if logo is not None:
         try:
             from openpyxl.drawing.image import Image as XlsxImage
 
-            ws.add_image(XlsxImage(str(logo)), "D1")
+            ws.add_image(XlsxImage(str(logo)), "E1")
         except Exception:
             pass  # sin Pillow (u otro fallo) queda el wordmark tipográfico
-    ws.column_dimensions["A"].width = 34
-    ws.append([])
 
-    ws.append(["Sesión", session["id"]])
-    ws.append(["UUID", session.get("uuid")])
+    r = 5  # fila 4 en blanco como respiro
+
+    def _section(title: str) -> None:
+        nonlocal r
+        _merge_row(r, title.upper(),
+                   font=Font(bold=True, size=11, color=CHARCOAL))
+        side = Side(style="medium", color=GREEN)
+        for c in range(1, LAST_COL + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = Border(bottom=side)
+        ws.row_dimensions[r].height = 18
+        r += 1
+
+    def _kv_block(rows: list[tuple[str, Any, Optional[str]]]) -> None:
+        """Pares clave-valor: clave bold gris carbón, zebra sutil,
+        bordes finos; valor combinado B:F con formato numérico."""
+        nonlocal r
+        for i, (label, value, num_fmt) in enumerate(rows):
+            key_cell = ws.cell(row=r, column=1, value=label)
+            key_cell.font = Font(bold=True, size=10, color=CHARCOAL)
+            key_cell.alignment = Alignment(vertical="center")
+            _merge_row(r, value, first=2)
+            val_cell = ws.cell(row=r, column=2)
+            val_cell.font = Font(size=10, color=CHARCOAL)
+            if num_fmt and isinstance(value, (int, float)):
+                val_cell.number_format = num_fmt
+                val_cell.alignment = Alignment(horizontal="left",
+                                               vertical="center")
+            zebra = (i % 2) == 1
+            for c in range(1, LAST_COL + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.border = border_thin
+                if zebra:
+                    cell.fill = fill_zebra
+            r += 1
+
+    # ------------------------------------------------------ datos del lote
+    _section("Datos del lote")
+    kv_rows: list[tuple[str, Any, Optional[str]]] = [
+        ("Sesión", session["id"], None),
+        ("UUID", session.get("uuid"), None),
+    ]
     for label, key in RESUMEN_ROWS:
-        ws.append([label, session.get(key)])
-    ws.append([])
-    ws.append(["— Estadística —", ""])
+        fmt = KG_FMT if key in (
+            "peso_ref_inicial", "total_kg", "promedio_final") else None
+        value = session.get(key)
+        if key in ("hora_entrada", "hora_salida") and value:
+            try:  # ISO → fecha legible dd/mm/aaaa hh:mm
+                value = _dt.fromisoformat(str(value)).strftime("%d/%m/%Y %H:%M")
+            except ValueError:
+                pass
+        kv_rows.append((label, value, fmt))
+    _kv_block(kv_rows)
+    r += 1
+
+    # ------------------- tarjetas de totales (celdas combinadas) -------------------
+    total_kg = session.get("total_kg") or stats.get("total_kg") or 0.0
+    animales = session.get("total_animales")
+    if animales is None:
+        animales = stats.get("total_animales") or 0
+    promedio = session.get("promedio_final") or stats.get("promedio")
+
+    _section("Totales")
+    cards = [
+        (1, 2, int(animales), "CERDOS", "#,##0"),
+        (3, 4, float(total_kg), "PESO TOTAL (KG)", KG_FMT),
+        (5, 6, float(promedio) if promedio is not None else None,
+         "PROMEDIO POR CERDO (KG)", KG_FMT),
+    ]
+    row_v, row_k = r, r + 1
+    ws.row_dimensions[row_v].height = 34
+    ws.row_dimensions[row_k].height = 16
+    for first, last, value, label, fmt in cards:
+        _merge_row(row_v, value if value is not None else "—",
+                   first=first, last=last, fill=fill_card,
+                   font=Font(bold=True, size=20, color=PP_GREEN),
+                   align=center, border=border_card)
+        if value is not None:
+            ws.cell(row=row_v, column=first).number_format = fmt
+        _merge_row(row_k, label, first=first, last=last, fill=fill_card,
+                   font=Font(bold=True, size=8, color=CHARCOAL),
+                   align=center, border=border_card)
+    r += 3
+
+    # ---------------------------------------------------------- estadística
+    _section("Estadística del lote")
+    stat_rows: list[tuple[str, Any, Optional[str]]] = []
     for label, key in STATS_ROWS:
-        ws.append([label, stats.get(key)])
+        value = stats.get(key)
+        fmt = STAT_FMT if isinstance(value, float) else None
+        stat_rows.append((label, value, fmt))
+    _kv_block(stat_rows)
+
+    # nota "en cristiano" como callout suave
+    from porcipeso.api.reports import _nota_humana
+
+    _merge_row(r, f"En cristiano: {_nota_humana(stats)}", fill=fill_note,
+               font=Font(italic=True, size=10, color=CHARCOAL),
+               align=left_top, height=18,
+               border=Border(left=Side(style="thick", color=GREEN)))
+    r += 2
+
+    # ---------------------------------------------------------- movimientos
+    _section("Movimientos")
+    mov_header = ["Hora", "Movimiento", "Peso (kg)", "Animales",
+                  "Motivo / detalle"]
+    for c, title in enumerate(mov_header, start=1):
+        cell = ws.cell(row=r, column=c, value=title)
+        cell.fill = fill_green
+        cell.font = Font(bold=True, size=10, color="FFFFFF")
+        cell.alignment = center if c in (3, 4) else Alignment(
+            vertical="center")
+        cell.border = border_thin
+    ws.cell(row=r, column=5).alignment = Alignment(vertical="center")
+    ws.merge_cells(start_row=r, start_column=5, end_row=r, end_column=6)
+    ws.cell(row=r, column=6).fill = fill_green
+    ws.cell(row=r, column=6).border = border_thin
+    r += 1
+    for i, ev in enumerate(events):
+        n = ev.get("animales_confirmados")
+        if n is None:
+            n = ev.get("animales_estimados")
+        detalle = str(ev.get("motivo_bajada") or "")
+        if ev.get("animales_confirmados") is not None:
+            por = str(ev.get("confirmado_por") or "").strip()
+            extra = f"confirmado por {por}" if por else "confirmado"
+            detalle = f"{detalle} · {extra}" if detalle else extra
+        elif ev.get("ambiguo"):
+            extra = "peso ambiguo (sin confirmar)"
+            detalle = f"{detalle} · {extra}" if detalle else extra
+        try:
+            hora = _dt.fromtimestamp(
+                float(ev.get("ts_ms") or 0) / 1000.0).strftime("%H:%M:%S")
+        except (ValueError, OSError):
+            hora = "—"
+        tipo = TIPO_HUMANO.get(str(ev.get("tipo")), str(ev.get("tipo")))
+        ws.cell(row=r, column=1, value=hora).alignment = Alignment(
+            vertical="center")
+        ws.cell(row=r, column=2, value=tipo)
+        delta = ws.cell(row=r, column=3, value=ev.get("delta_kg"))
+        delta.number_format = KG_FMT
+        delta.alignment = right
+        ncell = ws.cell(row=r, column=4, value=n)
+        ncell.alignment = right
+        ws.cell(row=r, column=5, value=detalle or None)
+        ws.merge_cells(start_row=r, start_column=5, end_row=r, end_column=6)
+        for c in range(1, LAST_COL + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = border_thin
+            if not cell.font.bold:
+                cell.font = Font(size=10, color=CHARCOAL)
+            if (i % 2) == 1:
+                cell.fill = fill_zebra
+        r += 1
+    if not events:
+        _merge_row(r, "Sin movimientos registrados.",
+                   font=Font(italic=True, size=10, color=CHARCOAL))
+        r += 1
+    r += 1
 
     # ----------------------------- pie de marca -----------------------------
+    generado = _dt.now().strftime("%d/%m/%Y %H:%M")
     ws.append([])
-    ws.append([
+    ws.cell(row=r, column=1, value=(
         f"Generado por {branding.PRODUCT_NAME} v{branding.get_version()}"
-        f" · {branding.COMPANY}"
-    ])
-    ws.cell(row=ws.max_row, column=1).font = Font(
-        size=9, color=branding.ELEIA_CHARCOAL.lstrip("#"), italic=True
-    )
+        f" · {branding.COMPANY} · {generado}"
+    )).font = Font(size=9, color=CHARCOAL, italic=True)
 
+    # ------------------- hoja Eventos (datos crudos, estilizados) -------------------
     we = wb.create_sheet("Eventos")
     we.append(EVENT_COLUMNS)
-    for ev in events:
+    for c in range(1, len(EVENT_COLUMNS) + 1):
+        cell = we.cell(row=1, column=c)
+        cell.fill = fill_green
+        cell.font = Font(bold=True, size=10, color="FFFFFF")
+        cell.border = border_thin
+    kg_cols = {EVENT_COLUMNS.index(k) + 1
+               for k in ("peso_antes", "peso_despues", "delta_kg")}
+    num_cols = kg_cols | {EVENT_COLUMNS.index(k) + 1 for k in (
+        "id", "ts_ms", "animales_estimados", "animales_confirmados",
+        "estab_ms", "ambiguo", "evento_relacionado_id")}
+    for i, ev in enumerate(events):
         row = []
         for col in EVENT_COLUMNS:
             value = ev.get(col)
@@ -805,6 +1027,32 @@ def build_xlsx(session: dict[str, Any], events: list[dict[str, Any]],
                 value = 1 if value else 0
             row.append(value)
         we.append(row)
+        row_idx = i + 2
+        for c in range(1, len(EVENT_COLUMNS) + 1):
+            cell = we.cell(row=row_idx, column=c)
+            cell.border = border_thin
+            cell.font = Font(size=10, color=CHARCOAL)
+            if (i % 2) == 1:
+                cell.fill = fill_zebra
+            if c in kg_cols:
+                cell.number_format = KG_FMT
+            if c in num_cols:
+                cell.alignment = right
+    widths = {
+        "id": 7, "ts_ms": 15, "tipo": 12, "peso_antes": 12,
+        "peso_despues": 13, "delta_kg": 11, "animales_estimados": 18,
+        "animales_confirmados": 20, "estab_ms": 10, "ambiguo": 9,
+        "opciones": 12, "motivo_bajada": 20, "evento_relacionado_id": 20,
+        "confirmado_por": 16,
+    }
+    for idx, name in enumerate(EVENT_COLUMNS, start=1):
+        we.column_dimensions[get_column_letter(idx)].width = widths.get(
+            name, 12)
+    # encabezado congelado + autofiltro sobre toda la tabla
+    we.freeze_panes = "A2"
+    we.auto_filter.ref = (
+        f"A1:{get_column_letter(len(EVENT_COLUMNS))}{len(events) + 1}"
+    )
 
     buf = io.BytesIO()
     wb.save(buf)

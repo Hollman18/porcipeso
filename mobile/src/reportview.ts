@@ -22,8 +22,14 @@ export const BRAND = {
   TAGLINE_COMPANY: "Soluciones robustas en Industria 4.0",
   LOCKUP: "PorciPeso · una solución ELEIA",
   ELEIA_GREEN: "#76B82A",
+  ELEIA_GREEN_DARK: "#5C9321",
   ELEIA_CHARCOAL: "#3A3A3A",
   PORCIPESO_GREEN: "#178A50",
+  CARD_BG: "#EFF6E6",
+  CARD_BORDER: "#C9E0A3",
+  NOTE_BG: "#F2F7EA",
+  ZEBRA: "#F4F6F2",
+  BORDER: "#D8DED2",
 } as const;
 
 //: tipos de evento → texto humano (espejo de reports.TIPO_HUMANO)
@@ -45,6 +51,10 @@ function esc(v: unknown): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function cap(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
 function fmt(v: unknown, decimals = 1): string {
@@ -111,12 +121,21 @@ export function buildReportHtml(
   const movRows = events
     .map((ev) => {
       const n = ev["animales_confirmados"] ?? ev["animales_estimados"];
+      let detalle = String(ev["motivo_bajada"] ?? "");
+      if (ev["animales_confirmados"] !== null && ev["animales_confirmados"] !== undefined) {
+        const por = String(ev["confirmado_por"] ?? "").trim();
+        const extra = por ? `confirmado por ${por}` : "confirmado por el operador";
+        detalle = detalle ? `${detalle} · ${extra}` : extra;
+      } else if (ev["ambiguo"]) {
+        const extra = "peso ambiguo (sin confirmar)";
+        detalle = detalle ? `${detalle} · ${extra}` : extra;
+      }
       return `<tr>
         <td>${horaMs(ev["ts_ms"])}</td>
         <td>${esc(TIPO_HUMANO[String(ev["tipo"])] ?? ev["tipo"])}</td>
         <td class="num">${fmt(ev["delta_kg"], 1)} kg</td>
         <td class="num">${fmt(n, 0)}</td>
-        <td>${esc(ev["motivo_bajada"] ?? "")}</td>
+        <td>${esc(detalle)}</td>
       </tr>`;
     })
     .join("");
@@ -129,7 +148,10 @@ export function buildReportHtml(
            ["Conteo físico (contado a mano)", fmt(session["conteo_fisico"], 0)],
            ["Conteo de la báscula", fmt(animales, 0)],
            ["Diferencia", fmt(session["diferencia_conciliacion"], 0)],
-         ])}</table>`;
+         ])}</table>` +
+        (Number(session["diferencia_conciliacion"]) === 0
+          ? `<div class="nota"><b>En cristiano:</b> el conteo cuadró perfecto.</div>`
+          : "");
 
   const generado = new Date().toLocaleString("es");
   const B = BRAND;
@@ -142,51 +164,73 @@ export function buildReportHtml(
 <title>${esc(B.PRODUCT_NAME)} — Informe de pesaje</title>
 <style>
   :root{color-scheme:light}
-  *{box-sizing:border-box}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{margin:0;padding:24px;background:#fff;color:${B.ELEIA_CHARCOAL};
     font:13px/1.5 Helvetica,Arial,sans-serif}
   .sheet{max-width:760px;margin:0 auto}
-  header{display:flex;justify-content:space-between;align-items:flex-end;
-    border-bottom:3px solid ${B.ELEIA_GREEN};padding-bottom:10px}
-  header h1{margin:0;font-size:26px;letter-spacing:.02em}
-  header .sub{font-size:10.5px;color:${B.ELEIA_CHARCOAL}}
-  .lockup{font-size:12px;font-weight:700;color:${B.ELEIA_GREEN};text-align:right}
-  .lockup small{display:block;font-weight:400;font-size:9.5px;color:${B.ELEIA_CHARCOAL}}
-  h2{font-size:14px;margin:20px 0 6px;text-transform:uppercase;letter-spacing:.04em}
+  .band{background:${B.ELEIA_GREEN};border-radius:8px;padding:16px 18px 14px;
+    color:#fff;border-bottom:4px solid ${B.ELEIA_GREEN_DARK}}
+  .band-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .band h1{margin:0;font-size:24px;letter-spacing:.01em;color:#fff}
+  .band h1 small{font-weight:400;font-size:15px}
+  .band .sub{font-size:10.5px;color:#EAF5DA;margin-top:2px}
+  .lockup{text-align:right;font-weight:700;font-size:14px;color:#fff;white-space:nowrap}
+  .lockup small{display:block;font-weight:400;font-size:9px;color:#EAF5DA}
+  .band-chips{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .chip{background:${B.ELEIA_GREEN_DARK};color:#fff;font-weight:700;font-size:11px;
+    border-radius:99px;padding:4px 12px}
+  .band-dates{font-size:10.5px;color:#EAF5DA}
+  h2{font-size:13px;margin:22px 0 7px;text-transform:uppercase;letter-spacing:.05em;
+    border-left:4px solid ${B.ELEIA_GREEN};padding-left:8px}
   table{width:100%;border-collapse:collapse;font-size:12px}
-  table.kv th{width:42%;text-align:left;font-weight:700;padding:4px 8px}
-  table.kv td{padding:4px 8px}
-  table.kv tr:nth-child(even){background:#F4F6F2}
-  .cards{display:flex;border:1.5px solid ${B.ELEIA_GREEN};background:#EFF6E6}
-  .card{flex:1;text-align:center;padding:12px 6px}
-  .card+.card{border-left:1px solid ${B.ELEIA_GREEN}}
-  .card .v{font-size:22px;font-weight:700;color:${B.PORCIPESO_GREEN}}
-  .card .k{font-size:9px;letter-spacing:.12em;margin-top:2px}
-  table.data th{background:${B.ELEIA_GREEN};color:#fff;text-align:left;padding:5px 8px}
-  table.data td{padding:5px 8px;border-bottom:1px solid #E2E7DE}
-  table.data tr:nth-child(even) td{background:#F4F6F2}
+  table.kv th{width:42%;text-align:left;font-weight:700;padding:5px 9px;
+    border:1px solid ${B.BORDER}}
+  table.kv td{padding:5px 9px;border:1px solid ${B.BORDER}}
+  table.kv tr:nth-child(even){background:${B.ZEBRA}}
+  .cards{display:flex;gap:10px}
+  .card{flex:1;text-align:center;padding:14px 6px 10px;background:${B.CARD_BG};
+    border:1px solid ${B.CARD_BORDER};border-radius:10px;position:relative}
+  .card::before{content:"";position:absolute;top:6px;left:50%;width:34px;height:3px;
+    margin-left:-17px;background:${B.ELEIA_GREEN};border-radius:2px}
+  .card .v{font-size:22px;font-weight:700;color:${B.PORCIPESO_GREEN};margin-top:4px}
+  .card .k{font-size:8.5px;font-weight:700;letter-spacing:.12em;margin-top:3px}
+  table.data th{background:${B.ELEIA_GREEN};color:#fff;text-align:left;padding:6px 9px;
+    border:1px solid ${B.ELEIA_GREEN_DARK};border-bottom:2px solid ${B.ELEIA_GREEN_DARK}}
+  table.data th.num{text-align:right}
+  table.data td{padding:6px 9px;border:1px solid ${B.BORDER}}
+  table.data tr:nth-child(even) td{background:${B.ZEBRA}}
   td.num{text-align:right;font-variant-numeric:tabular-nums}
-  .nota{background:#F2F7EA;border-left:3px solid ${B.ELEIA_GREEN};
-    padding:8px 12px;margin-top:8px}
-  footer{margin-top:26px;border-top:1px solid ${B.ELEIA_GREEN};padding-top:8px;
+  .nota{background:${B.NOTE_BG};border-left:4px solid ${B.ELEIA_GREEN};
+    padding:9px 12px;margin-top:8px;border-radius:0 6px 6px 0}
+  footer{margin-top:28px;border-top:2px solid ${B.ELEIA_GREEN};padding-top:8px;
     font-size:9.5px;color:${B.ELEIA_CHARCOAL};display:flex;justify-content:space-between}
+  footer b{color:${B.ELEIA_GREEN_DARK}}
   @media print{
     body{padding:0}
     .sheet{max-width:none}
+    .band{border-radius:6px}
     h2{break-after:avoid}
-    table.data tr{break-inside:avoid}
+    .cards,.nota,table.kv tr,table.data tr{break-inside:avoid}
+    table.data thead{display:table-header-group}
   }
 </style>
 </head>
 <body>
 <div class="sheet">
-  <header>
-    <div>
-      <h1>${esc(B.PRODUCT_NAME)}</h1>
-      <div class="sub">Informe de pesaje · ${esc(B.TAGLINE_PRODUCT)}</div>
+  <header class="band">
+    <div class="band-top">
+      <div>
+        <h1>${esc(B.PRODUCT_NAME)} <small>— Informe de pesaje</small></h1>
+        <div class="sub">una solución ${esc(B.COMPANY)} · ${esc(B.TAGLINE_COMPANY)}</div>
+      </div>
+      <div class="lockup">${esc(B.COMPANY)}</div>
     </div>
-    <div class="lockup">una solución ${esc(B.COMPANY)}
-      <small>${esc(B.TAGLINE_COMPANY)}</small></div>
+    <div class="band-chips">
+      <span class="chip">${esc(session["lote"] ?? "Sin lote")}</span>
+      <span class="band-dates">Entrada ${fecha(session["hora_entrada"])} · Salida ${fecha(
+        session["hora_salida"],
+      )}</span>
+    </div>
   </header>
 
   <h2>Datos del lote</h2>
@@ -202,7 +246,7 @@ export function buildReportHtml(
     ["Modo de pesaje", modo === "unidades"
       ? "Por unidades (un cerdo a la vez)"
       : "Por lote (cerdo de prueba + grupos)"],
-    ["Estado", esc(session["estado"] ?? "—")],
+    ["Estado", esc(cap(String(session["estado"] ?? "—")))],
   ])}</table>
 
   <h2>Totales</h2>
@@ -229,8 +273,8 @@ export function buildReportHtml(
   ${
     movRows
       ? `<table class="data">
-          <thead><tr><th>Hora</th><th>Movimiento</th><th>Peso (Δ)</th>
-            <th>Animales</th><th>Motivo</th></tr></thead>
+          <thead><tr><th>Hora</th><th>Movimiento</th><th class="num">Peso (kg)</th>
+            <th class="num">Animales</th><th>Motivo / detalle</th></tr></thead>
           <tbody>${movRows}</tbody>
         </table>`
       : "<p>Sin movimientos registrados.</p>"
@@ -238,7 +282,7 @@ export function buildReportHtml(
   ${conciliacion}
 
   <footer>
-    <span>${esc(B.LOCKUP)} · Generado por ${esc(B.PRODUCT_NAME)} v${esc(version)} · ${esc(generado)}</span>
+    <span><b>${esc(B.LOCKUP)}</b> · Generado por ${esc(B.PRODUCT_NAME)} v${esc(version)} · ${esc(generado)}</span>
     <span>${esc(B.COMPANY)}</span>
   </footer>
 </div>

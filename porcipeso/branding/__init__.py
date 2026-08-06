@@ -31,6 +31,21 @@ ELEIA_CHARCOAL = "#3A3A3A"
 #: verde PorciPeso — paleta EXISTENTE de la app; no se toca
 PORCIPESO_GREEN = "#178A50"
 
+# Paleta de INFORMES (PDF/Excel/print-view móvil) — derivados del verde
+# Eleia para que las tres superficies queden idénticas.
+#: verde Eleia oscurecido — chips, acentos y líneas de remate
+ELEIA_GREEN_DARK = "#5C9321"
+#: fondo suave verde de las tarjetas de totales
+REPORT_CARD_BG = "#EFF6E6"
+#: borde de las tarjetas de totales
+REPORT_CARD_BORDER = "#C9E0A3"
+#: fondo del callout "en cristiano"
+REPORT_NOTE_BG = "#F2F7EA"
+#: zebra sutil de las tablas de informes
+REPORT_ZEBRA = "#F4F6F2"
+#: borde fino gris-verde de las tablas de informes
+REPORT_BORDER = "#D8DED2"
+
 # ------------------------------------------------------------------- assets
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
