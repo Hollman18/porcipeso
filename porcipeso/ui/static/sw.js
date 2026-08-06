@@ -1,7 +1,7 @@
 'use strict';
 /* PorciPeso — service worker.
    Cache-first para el shell estático; red directa para /api y /ws. */
-const CACHE = 'porcipeso-shell-v5'; // v5: co-branding ELEIA + botón PDF
+const CACHE = 'porcipeso-shell-v6'; // v6: LED crudo (raw) + fit-to-width
 const SHELL = [
   './',
   './index.html',

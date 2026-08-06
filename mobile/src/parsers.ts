@@ -50,8 +50,10 @@ export abstract class FrameParser {
 
   protected abstract extract(): Reading[];
 
-  protected reading(kg: number, stable: boolean | null = null): Reading {
-    return { ts_ms: nowMs(), kg, scale_id: this.profile.id, stable_flag: stable };
+  protected reading(kg: number, stable: boolean | null = null, raw: string | null = null): Reading {
+    // raw = token del peso tal como lo MUESTRA el indicador (reverse_frame ya
+    // corregido); null → la UI degrada a formato plano sin locale.
+    return { ts_ms: nowMs(), kg, scale_id: this.profile.id, stable_flag: stable, raw };
   }
 }
 
@@ -118,7 +120,7 @@ export class MatrixParser extends FrameParser {
         continue;
       }
       this.buf = this.buf.slice(this.FRAME_LEN);
-      out.push(this.reading(kg));
+      out.push(this.reading(kg, null, text));
     }
     return out;
   }
@@ -174,7 +176,7 @@ export class GenericRegexParser extends FrameParser {
       if (!m || m[1] === undefined) continue;
       const kg = pyFloat(m[1]);
       if (kg === null) continue;
-      out.push(this.reading(kg));
+      out.push(this.reading(kg, null, m[1]));
     }
     return out;
   }

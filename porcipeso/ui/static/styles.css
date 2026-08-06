@@ -183,10 +183,12 @@ details.more label{display:flex;flex-direction:column;gap:4px;font-size:13px;col
 .weigh-panel{background:var(--panel);border:1px solid var(--panel-edge);border-radius:18px;
   padding:20px 18px;color:#DDE5DE;display:flex;flex-direction:column;gap:14px}
 .ledbox{background:#0A0E0B;border:1px solid var(--panel-edge);border-radius:14px;
-  padding:18px 12px 12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+  padding:18px 12px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;
+  overflow:hidden /* guardia: aunque falle el fit JS, el número nunca se sale */}
 .led{font-family:"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;font-weight:700;
   font-size:clamp(88px,16vw,160px);line-height:1;letter-spacing:.04em;color:var(--led);
-  text-shadow:0 0 22px rgba(255,74,46,.4)}
+  text-shadow:0 0 22px rgba(255,74,46,.4);
+  white-space:nowrap /* una sola línea: el fit JS (fitLed) escala el font-size */}
 .led small{font-size:.28em;opacity:.85}
 @media (prefers-reduced-motion: no-preference){
   .led.pulse{animation:ledpulse 1.6s ease-in-out infinite}

@@ -32,6 +32,12 @@ class Reading:
     kg: float
     scale_id: str = "default"
     stable_flag: Optional[bool] = None  # solo si el protocolo lo trae (SICS, SMA…)
+    # String CRUDO del peso tal como lo muestra el indicador físico
+    # (ej. "-7143.0"): sin locale, sin separador de miles. Lo llenan los
+    # parsers de texto (con reverse_frame ya CORREGIDO: es lo que el display
+    # muestra, no los bytes al revés). None en fuentes sin token textual
+    # (sim, binarios sin reconstrucción) → la UI degrada a formato plano.
+    raw: Optional[str] = None
 
 
 @dataclass

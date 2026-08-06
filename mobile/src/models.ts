@@ -13,6 +13,13 @@ export interface Reading {
   kg: number;
   scale_id: string;
   stable_flag: boolean | null;
+  /**
+   * String CRUDO del peso tal como lo muestra el indicador físico
+   * (ej. "-7143.0"): sin locale ni separador de miles. Lo llenan los
+   * parsers de texto (reverse_frame ya CORREGIDO: lo que el display
+   * muestra). Ausente/null → la UI degrada a formato plano.
+   */
+  raw?: string | null;
 }
 
 export function mkReading(

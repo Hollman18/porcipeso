@@ -329,6 +329,9 @@ export class LocalBackend {
         ts_ms: reading.ts_ms,
         state,
         fase,
+        // string crudo tal como lo muestra el indicador (el LED lo pinta
+        // tal cual; null → la UI degrada a formato plano sin locale)
+        raw: reading.raw ?? null,
       });
     }
   };
