@@ -297,6 +297,35 @@ describe("CloudSync.runCycle", () => {
     expect((p[0].body["sesiones"] as Row[]).length).toBe(200);
     expect((p[1].body["sesiones"] as Row[]).length).toBe(50);
   });
+
+  it("las sesiones DEMO (es_demo=1) JAMÁS suben a la nube", async () => {
+    // Regresión: la demo se autodestruye local en 1 h; si subiera, el
+    // cloud quedaría con datos de práctica disfrazados de reales.
+    const cloud = fakeCloud();
+    const filas = [
+      sesion(1, "cerrada"),                          // real → sube
+      sesion(2, "cerrada", { es_demo: 1 }),          // demo cerrada → NO
+      sesion(3, "abierta", { es_demo: 1 }),          // demo abierta → NO
+    ];
+    const eventos = new Map([
+      [1, [evento(10, 1)]],
+      [2, [evento(20, 2)]],
+      [3, [evento(30, 3)]],
+    ]);
+    const { sync } = newSync(fakeRepo(filas, eventos), cloud.fetchImpl);
+    sync.setSession(CLOUD, "granja-a", cloud.state.accessOk, "refresh-1", 1800);
+
+    expect((await sync.runCycle())["pushed"]).toBe(1);
+    const p = pushes(cloud.calls);
+    expect(p.length).toBe(1);
+    const ses = p[0].body["sesiones"] as Row[];
+    expect(ses.map((s) => s["uuid"])).toEqual(["uuid-sesion-1"]);
+    const evs = p[0].body["eventos"] as Row[];
+    expect(evs.map((e) => e["sesion_uuid"])).toEqual(["uuid-sesion-1"]);
+    // 2º ciclo (marcador viejo, demo abierta seguía subiendo antes): tampoco
+    expect((await sync.runCycle())["pushed"]).toBe(0);
+    expect(pushes(cloud.calls).length).toBe(1);
+  });
 });
 
 // ------------------------------------------------------ rutas /api/cloud/*

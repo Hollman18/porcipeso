@@ -224,6 +224,10 @@ export class CloudSync {
     const out: Row[] = [];
     for (const s of await this.deps.repo.listSessions()) {
       if (!s["uuid"]) continue; // filas legado sin uuid
+      // DEMO (es_demo=1, báscula simulada): JAMÁS sube a la nube — se
+      // autodestruye local en 1 h y el cloud no debe quedarse con datos
+      // de práctica disfrazados de reales (espejo de syncworker.py).
+      if (s["es_demo"]) continue;
       if (s["estado"] === "abierta" || !lastPushTs) {
         out.push(s);
         continue;

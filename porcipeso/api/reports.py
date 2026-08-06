@@ -485,12 +485,20 @@ def build_session_pdf(session: dict[str, Any], events: list[dict[str, Any]],
         lote = lote[:41] + "…"
     entrada = _fecha(session.get("hora_entrada"))
     salida = _fecha(session.get("hora_salida"))
+    # Sesión de PRÁCTICA (báscula simulada): el informe lo DICE — chip DEMO
+    # en la banda + callout arriba. Jamás debe circular como pesaje real.
+    es_demo = bool(session.get("es_demo"))
     meta = {
         "title": "Informe de pesaje",
-        "chip": lote,
+        "chip": f"DEMO · {lote}" if es_demo else lote,
         "dates": f"Entrada {entrada}   ·   Salida {salida}",
     }
     story: list[Any] = []
+    if es_demo:
+        story.append(_note_callout(
+            "<b>PESAJE DE PRÁCTICA (DEMO):</b> hecho con la báscula "
+            "simulada. No es un pesaje real, no cuenta en las estadísticas "
+            "y se borra solo una hora después de cerrado."))
 
     # ------------------------------------------------------ datos del lote
     story += _section("Datos del lote")

@@ -222,11 +222,16 @@ class SyncWorker:
         - Cerradas/anuladas: si ``hora_salida`` o ``hora_entrada`` ≥
           last_push_ts (ISO UTC ⇒ comparable como texto).
         - Sin marcador (primer push / cambio de nube): todas.
+        - DEMO (``es_demo=1``, báscula simulada): JAMÁS — se autodestruyen
+          localmente en 1 h y el cloud no debe quedarse con datos de
+          práctica disfrazados de reales (el payload ni lleva la marca).
         """
         out: list[dict[str, Any]] = []
         for s in self.repo.list_sessions():
             if not s.get("uuid"):
                 continue  # filas legado sin uuid: no sincronizables
+            if s.get("es_demo"):
+                continue  # práctica con la simulada: nunca sube a la nube
             if s.get("estado") == "abierta" or not last_push_ts:
                 out.append(s)
                 continue

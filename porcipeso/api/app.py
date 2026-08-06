@@ -914,6 +914,20 @@ def build_xlsx(session: dict[str, Any], events: list[dict[str, Any]],
                     cell.fill = fill_zebra
             r += 1
 
+    # -------- aviso DEMO (sesión de práctica con la báscula simulada) --------
+    # El archivo lo DICE: jamás debe circular como pesaje real.
+    if session.get("es_demo"):
+        _merge_row(
+            r,
+            "PESAJE DE PRÁCTICA (DEMO) — báscula simulada: no es un pesaje "
+            "real, no cuenta en las estadísticas y se borra solo tras 1 h.",
+            fill=fill_note,
+            font=Font(bold=True, italic=True, size=10, color=CHARCOAL),
+            align=left_top, height=18,
+            border=Border(left=Side(style="thick", color=GREEN)),
+        )
+        r += 2
+
     # ------------------------------------------------------ datos del lote
     _section("Datos del lote")
     kv_rows: list[tuple[str, Any, Optional[str]]] = [

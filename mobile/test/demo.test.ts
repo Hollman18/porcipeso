@@ -210,3 +210,26 @@ describe("db.ts — autodestrucción de sesiones DEMO", () => {
     }
   });
 });
+
+describe("reportview — el informe de una sesión DEMO lo dice", () => {
+  it("chip DEMO + callout de práctica solo cuando es_demo=1", async () => {
+    const { buildReportHtml } = await import("../src/reportview");
+    const base = {
+      lote: "L-practica",
+      hora_entrada: "2026-01-05T08:00:00+00:00",
+      hora_salida: "2026-01-05T09:00:00+00:00",
+      estado: "cerrada",
+      modo: "lote",
+      total_kg: 100,
+      total_animales: 1,
+      promedio_final: 100,
+    };
+    const demoHtml = buildReportHtml({ ...base, es_demo: 1 }, [], {}, "0.0-test");
+    expect(demoHtml).toContain('class="chip chip-demo">DEMO<');
+    expect(demoHtml).toContain("PESAJE DE PRÁCTICA (DEMO)");
+
+    const realHtml = buildReportHtml({ ...base, es_demo: 0 }, [], {}, "0.0-test");
+    expect(realHtml).not.toContain('class="chip chip-demo">DEMO<');
+    expect(realHtml).not.toContain("PESAJE DE PRÁCTICA");
+  });
+});

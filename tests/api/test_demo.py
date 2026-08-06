@@ -227,3 +227,96 @@ def test_reaper_corre_al_abrir_la_app(tmp_path):
             time.sleep(0.1)
         assert client.get(f"/api/sessions/{vencida}").status_code == 404
         assert client.get(f"/api/sessions/{real}").status_code == 200
+
+
+# ------------------------------------------------- sync a la nube (exclusión)
+
+def test_sync_jamas_sube_sesiones_demo(tmp_path):
+    """Las sesiones DEMO NUNCA entran al push del sync worker: se
+    autodestruyen localmente en 1 h y el cloud no debe quedarse con
+    datos de práctica disfrazados de reales (el payload ni lleva la
+    marca es_demo)."""
+    from porcipeso.api.syncworker import SyncWorker
+
+    repo = Repo(tmp_path / "sync.db")
+    real = repo.create_session({"lote": "R-real"})
+    repo.close_session(real, {"total_kg": 100.0, "count": 1, "avg_kg": 100.0})
+    demo = repo.create_session({"lote": "D-practica", "es_demo": 1})
+    repo.close_session(demo, {"total_kg": 99.0, "count": 1, "avg_kg": 99.0})
+    demo_abierta = repo.create_session({"lote": "D-abierta", "es_demo": 1})
+
+    worker = SyncWorker(repo)
+    try:
+        # primer push (sin marcador): solo la real
+        sin_marcador = {s["id"] for s in worker._pending_sessions(None)}
+        assert sin_marcador == {real}
+        # pushes siguientes (marcador viejo): la demo cerrada Y la demo
+        # abierta (que antes subía SIEMPRE) quedan fuera
+        con_marcador = {
+            s["id"]
+            for s in worker._pending_sessions("2000-01-01T00:00:00+00:00")
+        }
+        assert con_marcador == {real}
+        assert demo not in con_marcador and demo_abierta not in con_marcador
+    finally:
+        worker.stop()
+        repo.close()
+
+
+# ------------------------------------------------- informes con marca DEMO
+
+def _mk_demo_cerrada(repo: Repo) -> int:
+    sid = repo.create_session({"lote": "L-practica", "es_demo": 1})
+    repo.close_session(sid, {"total_kg": 300.0, "count": 3, "avg_kg": 100.0})
+    return sid
+
+
+def test_pdf_de_sesion_demo_lo_dice(ctx):
+    """El PDF de una sesión DEMO lleva chip 'DEMO ·' en la banda y el
+    callout de práctica — jamás circula como pesaje real."""
+    pytest.importorskip("reportlab")
+    client, db = ctx
+    repo = Repo(db)
+    demo = _mk_demo_cerrada(repo)
+    real = repo.create_session({"lote": "L-real"})
+    repo.close_session(real, {"total_kg": 100.0, "count": 1, "avg_kg": 100.0})
+    repo.close()
+
+    r = client.get(f"/api/sessions/{demo}/report.pdf")
+    assert r.status_code == 200
+    # pageCompression=0 ⇒ los streams del PDF son legibles como texto
+    texto = r.content.decode("latin-1")
+    assert "DEMO" in texto
+    assert "PESAJE DE PR" in texto  # "PESAJE DE PRÁCTICA (DEMO)"
+
+    r2 = client.get(f"/api/sessions/{real}/report.pdf")
+    assert r2.status_code == 200
+    assert "PESAJE DE PR" not in r2.content.decode("latin-1")
+
+
+def test_xlsx_de_sesion_demo_lo_dice(ctx):
+    """El .xlsx de una sesión DEMO lleva el aviso de práctica en la hoja
+    Resumen; el de una real no."""
+    pytest.importorskip("openpyxl")
+    import io
+
+    from openpyxl import load_workbook
+
+    client, db = ctx
+    repo = Repo(db)
+    demo = _mk_demo_cerrada(repo)
+    real = repo.create_session({"lote": "L-real-x"})
+    repo.close_session(real, {"total_kg": 100.0, "count": 1, "avg_kg": 100.0})
+    repo.close()
+
+    def _resumen_texto(session_id: int) -> str:
+        r = client.get(f"/api/sessions/{session_id}/export.xlsx")
+        assert r.status_code == 200
+        wb = load_workbook(io.BytesIO(r.content))
+        ws = wb["Resumen"]
+        return "\n".join(
+            str(c.value) for row in ws.iter_rows() for c in row if c.value
+        )
+
+    assert "PESAJE DE PRÁCTICA (DEMO)" in _resumen_texto(demo)
+    assert "PESAJE DE PRÁCTICA (DEMO)" not in _resumen_texto(real)

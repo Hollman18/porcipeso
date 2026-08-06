@@ -155,6 +155,10 @@ export function buildReportHtml(
 
   const generado = new Date().toLocaleString("es");
   const B = BRAND;
+  // Sesión de PRÁCTICA (báscula simulada): el informe lo DICE — chip DEMO
+  // en la banda + callout arriba (espejo de reports.py). Jamás debe
+  // circular como pesaje real.
+  const esDemo = Boolean(session["es_demo"]);
 
   return `<!doctype html>
 <html lang="es">
@@ -179,6 +183,8 @@ export function buildReportHtml(
   .band-chips{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
   .chip{background:${B.ELEIA_GREEN_DARK};color:#fff;font-weight:700;font-size:11px;
     border-radius:99px;padding:4px 12px}
+  .chip-demo{background:#B45309;letter-spacing:.08em}
+  .nota.demo-nota{margin-top:10px;border-left-color:#B45309}
   .band-dates{font-size:10.5px;color:#EAF5DA}
   h2{font-size:13px;margin:22px 0 7px;text-transform:uppercase;letter-spacing:.05em;
     border-left:4px solid ${B.ELEIA_GREEN};padding-left:8px}
@@ -226,12 +232,20 @@ export function buildReportHtml(
       <div class="lockup">${esc(B.COMPANY)}</div>
     </div>
     <div class="band-chips">
+      ${esDemo ? `<span class="chip chip-demo">DEMO</span>` : ""}
       <span class="chip">${esc(session["lote"] ?? "Sin lote")}</span>
       <span class="band-dates">Entrada ${fecha(session["hora_entrada"])} · Salida ${fecha(
         session["hora_salida"],
       )}</span>
     </div>
   </header>
+  ${
+    esDemo
+      ? `<div class="nota demo-nota"><b>PESAJE DE PRÁCTICA (DEMO):</b> hecho con la
+        báscula simulada. No es un pesaje real, no cuenta en las estadísticas y se
+        borra solo una hora después de cerrado.</div>`
+      : ""
+  }
 
   <h2>Datos del lote</h2>
   <table class="kv">${kvRows([

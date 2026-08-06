@@ -1,7 +1,7 @@
 'use strict';
 /* PorciPeso — service worker.
    Cache-first para el shell estático; red directa para /api y /ws. */
-const CACHE = 'porcipeso-shell-v7'; // v7: merge LED crudo + demo + tarjeta de conexión
+const CACHE = 'porcipeso-shell-v8'; // v8: usar simulada guarda config → tarjeta de estado en ⚙ Báscula
 const SHELL = [
   './',
   './index.html',

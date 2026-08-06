@@ -272,3 +272,45 @@ def test_otg_avanzado_conserva_marcas_manuales(page, server_url):
     EXPECT(page.locator("#wizQ3")).to_have_text("¿Qué hay conectado al teléfono?")
     EXPECT(page.locator("#wizBaud")).to_be_visible()      # velocidad manual
     EXPECT(page.locator("#bProbar")).to_be_visible()      # Probar/Guardar clásicos
+
+
+# ---------------------- 5) "Usar báscula simulada" deja tarjeta de estado
+
+def test_usar_simulada_guarda_config_y_tarjeta(page, server_url):
+    """El atajo '🎛 Usar báscula simulada' (módulo Pesaje) guarda la config
+    de la simulada, de modo que ⚙ Báscula muestra la tarjeta de estado con
+    el chip vivo — y NO el "Todavía no has conectado una báscula"."""
+    page.goto(server_url + "/#pesaje")
+    EXPECT(page.locator("#bUseSim")).to_be_visible()
+    page.locator("#bUseSim").click()
+    EXPECT(page.locator("#scaleChip")).to_have_text("Báscula simulada",
+                                                    timeout=10_000)
+
+    # la config quedó guardada (reconexión de un toque en ⚙ Báscula)
+    cfg = page.evaluate("JSON.parse(localStorage.getItem('porcipeso_cfg'))")
+    assert cfg["method"] == "sim"
+    assert cfg["profile_id"] == "sim"
+    assert cfg["name"] == "Báscula simulada"
+
+    # ⚙ Báscula: tarjeta visible con chip vivo, no el botón grande
+    page.locator('.tabbtn[data-mod="bascula"]').click()
+    EXPECT(page.locator("#connCard")).to_be_visible()
+    EXPECT(page.locator("#connEmpty")).to_be_hidden()
+    EXPECT(page.locator("#ccName")).to_have_text("Báscula simulada")
+    EXPECT(page.locator("#ccChip")).to_contain_text("Conectada", timeout=10_000)
+    EXPECT(page.locator("#bccDisconnect")).to_be_visible()
+
+
+def test_usar_simulada_no_pisa_config_real(page, server_url):
+    """Si ya hay una báscula real guardada, practicar con la simulada
+    NO debe pisar esa configuración."""
+    _seed_cfg(page, {"method": "bluetooth", "profile_id": "matrix",
+                     "name": "Trumax Matrix", "parser": "matrix"})
+    page.goto(server_url + "/#pesaje")
+    EXPECT(page.locator("#bUseSim")).to_be_visible()
+    page.locator("#bUseSim").click()
+    EXPECT(page.locator("#scaleChip")).to_have_text("Báscula simulada",
+                                                    timeout=10_000)
+    cfg = page.evaluate("JSON.parse(localStorage.getItem('porcipeso_cfg'))")
+    assert cfg["profile_id"] == "matrix"  # la real sigue intacta
+    assert cfg["method"] == "bluetooth"

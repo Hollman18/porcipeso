@@ -183,6 +183,13 @@ async function startSim() {
     try { await api('/api/scale/connect', { method: 'POST', body: { profile_id: 'sim' } }); APP.scaleConnected = true; }
     catch { /* el sim/start pudo bastar */ }
   }
+  // Sin báscula real configurada: la simulada queda como config guardada,
+  // para que ⚙ Báscula muestre la tarjeta de estado (chip vivo, Desconectar,
+  // reconectar con un toque) en vez de "Todavía no has conectado…".
+  // JAMÁS pisa la config de una báscula real ya guardada.
+  if (!loadCfg()?.profile_id) {
+    saveCfg({ method: 'sim', profile_id: 'sim', name: 'Báscula simulada' });
+  }
   refreshSimUi();
 }
 
