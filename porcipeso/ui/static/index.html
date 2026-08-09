@@ -10,13 +10,24 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="styles.css">
 <script>
-/* CANDADO DE ACCESO (local) — decide ANTES de pintar si hay que mostrar la
-   pantalla de bloqueo, para que la app no se asome un instante. La lógica
-   completa (hash SHA-256 + salt, verificación, ajustes) vive en app.js.
-   Solo se activa si el dueño configuró una contraseña (clave localStorage
-   'porcipeso_lock') y la sesión aún no se ha desbloqueado. */
+/* GATES ANTES DE PINTAR — evita que la app se asome un instante.
+   1) ACTIVACIÓN POR DISPOSITIVO (protección PRINCIPAL): sin una licencia atada a
+      este equipo, se muestra la pantalla de activación y NADA más. La
+      verificación real (HMAC) vive en app.js; aquí solo miramos si hay una
+      licencia guardada para el deviceId actual, para no parpadear.
+   2) CANDADO DE CONTRASEÑA (opcional, DESPUÉS de activar): si el dueño configuró
+      una contraseña ('porcipeso_lock') y la sesión no está desbloqueada. */
 (function () {
   try {
+    var lic = null, dev = null;
+    try { lic = JSON.parse(localStorage.getItem('porcipeso_license') || 'null'); } catch (e) {}
+    try { dev = localStorage.getItem('porcipeso_device'); } catch (e) {}
+    var activated = !!(lic && lic.key && lic.deviceId && dev && lic.deviceId === dev);
+    if (!activated) {
+      // la activación manda: no evalúes aún el candado de contraseña
+      document.documentElement.classList.add('is-unactivated');
+      return;
+    }
     var hasLock = false, unlocked = false;
     try { hasLock = !!localStorage.getItem('porcipeso_lock'); } catch (e) {}
     try { unlocked = sessionStorage.getItem('porcipeso_unlocked') === '1'; } catch (e) {}
@@ -27,10 +38,45 @@
 </head>
 <body>
 
+<!-- ===== ACTIVACIÓN POR DISPOSITIVO: PANTALLA DE ACTIVACIÓN =====
+     Protección PRINCIPAL. Overlay a pantalla completa; solo se ve con
+     html.is-unactivated (lo enciende el script del <head> y app.js). Sin una
+     llave válida atada a este equipo, la app queda bloqueada. Offline. -->
+<div id="activationScreen" class="activationscreen" role="dialog" aria-modal="true" aria-labelledby="actTitle">
+  <div class="lockcard">
+    <div class="lock-brand">
+      <span class="pig">🐷</span>
+      <div><b>PorciPeso</b>
+        <small class="eleia-line">una solución <b>ELEIA</b></small></div>
+    </div>
+    <h1 id="actTitle" class="lock-title">Activa tu PorciPeso</h1>
+    <p class="lock-sub">Envía este código a tu proveedor y escribe aquí la llave que te dé.</p>
+
+    <div class="act-code-block">
+      <span class="act-code-lbl">Tu código de dispositivo</span>
+      <div class="act-code-row">
+        <span class="act-code" id="actCode">PORCI-…</span>
+        <button type="button" class="act-copy" id="actCopy" title="Copiar el código">Copiar</button>
+      </div>
+    </div>
+
+    <form id="actForm" class="lock-form">
+      <input id="actKey" type="text" class="lock-input act-key-input" inputmode="text"
+             autocomplete="off" autocapitalize="characters" autocorrect="off"
+             spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" aria-label="Llave de activación">
+      <p class="lock-error form-error" id="actError" role="alert"></p>
+      <button type="submit" class="btn-primary lock-btn" id="actSubmit">Activar</button>
+    </form>
+    <p class="act-help">La llave solo funciona en este teléfono. Una vez activado,
+      queda para siempre en este equipo (mientras no borres los datos de la app).</p>
+  </div>
+</div>
+
 <!-- ===== CANDADO DE ACCESO: PANTALLA DE BLOQUEO =====
-     Overlay a pantalla completa; solo se ve con html.is-locked (lo enciende
-     el script del <head> y app.js). Es un candado LOCAL de conveniencia:
-     evita el uso no autorizado del dispositivo; NO cifra los datos. -->
+     Capa OPCIONAL adicional, DESPUÉS de la activación. Overlay a pantalla
+     completa; solo se ve con html.is-locked (lo enciende el script del <head> y
+     app.js). Es un candado LOCAL de conveniencia: evita el uso no autorizado
+     del dispositivo; NO cifra los datos. -->
 <div id="lockScreen" class="lockscreen" role="dialog" aria-modal="true" aria-labelledby="lockTitle">
   <div class="lockcard">
     <div class="lock-brand">
@@ -476,11 +522,25 @@
         </div>
       </details>
 
-      <!-- 🔒 SEGURIDAD: candado de acceso opcional (protege el dispositivo).
-           Apagado por defecto: sin contraseña la app abre normal. -->
+      <!-- 🔒 SEGURIDAD: estado de licencia/dispositivo (principal) + candado de
+           contraseña opcional (capa adicional, apagado por defecto). -->
       <details class="collap nube" id="secBox">
         <summary><span class="ct">🔒 Seguridad</span><span class="caret" aria-hidden="true">▸</span></summary>
         <div class="nube-body">
+          <!-- 🔑 estado de la ACTIVACIÓN por dispositivo (protección principal) -->
+          <div class="lic-status" id="licBox">
+            <p class="wizhelp" id="licEstado">Cargando…</p>
+            <div class="lic-code-row">
+              <span class="lic-code-lbl">Código de este dispositivo:</span>
+              <span class="lic-code" id="licDeviceCode">PORCI-…</span>
+              <button type="button" id="bLicCopy" class="lic-copy">Copiar</button>
+            </div>
+            <p class="wizhelp">Si necesitas soporte o reinstalar en otro equipo,
+              dile este código a tu proveedor.</p>
+          </div>
+
+          <hr class="sec-sep">
+          <p class="sec-cap">Candado de contraseña <span class="sec-hint">(opcional)</span></p>
           <p class="wizhelp" id="secEstado">Cargando…</p>
 
           <!-- botón que abre "proteger" (solo cuando NO hay contraseña) -->

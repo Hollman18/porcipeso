@@ -83,6 +83,9 @@ def page(browser):
     pg = ctx.new_page()
     # sin onboarding: el diálogo de bienvenida no tapa los tests
     pg.add_init_script("try{localStorage.setItem('porcipeso_onboard','1')}catch(e){}")
+    # app pre-activada (el gate de activación es lo primero desde v2.6.0)
+    from ._preactivate import PREACTIVATE_JS
+    pg.add_init_script(PREACTIVATE_JS)
     yield pg
     ctx.close()
 

@@ -19,6 +19,7 @@ importorskip del resto de la suite).
 from __future__ import annotations
 
 import http.server
+import json
 import threading
 from functools import partial
 from pathlib import Path
@@ -28,7 +29,21 @@ import pytest
 sync_api = pytest.importorskip(
     "playwright.sync_api", reason="playwright no instalado (pip install playwright)")
 
+from porcipeso.licensing import keygen  # noqa: E402
+
 STATIC_DIR = Path(__file__).resolve().parents[2] / "porcipeso" / "ui" / "static"
+
+# La app está protegida por ACTIVACIÓN POR DISPOSITIVO: sin licencia queda
+# bloqueada. Este test mide la UI real, así que la pre-activamos (deviceId fijo
+# + su llave válida) antes de navegar, igual que los tests e2e.
+_LED_DEVICE_ID = "led-fit-fixed-device"
+_PREACTIVATE_JS = (
+    "try{"
+    f"localStorage.setItem('porcipeso_device', {json.dumps(_LED_DEVICE_ID)});"
+    "localStorage.setItem('porcipeso_license', "
+    f"{json.dumps(json.dumps({'deviceId': _LED_DEVICE_ID, 'key': keygen.activation_key(_LED_DEVICE_ID), 'activated_at': 0}))}"
+    ");}catch(e){}"
+)
 
 # 3, 6 y 9 caracteres — de "0.0" al peor caso "-99999.99"
 EXTREMOS = ["0.0", "1234.0", "-99999.99"]
@@ -60,6 +75,7 @@ def browser():
 @pytest.fixture()
 def page(browser, static_server):
     page = browser.new_page()
+    page.add_init_script(_PREACTIVATE_JS)   # app ya activada (gate principal)
     page.goto(static_server + "/index.html")
     page.wait_for_function("typeof routeMessage === 'function'")
     # mostrar la pantalla de pesaje (subview del modulo Pesaje)

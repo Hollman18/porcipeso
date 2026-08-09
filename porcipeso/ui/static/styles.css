@@ -611,17 +611,22 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
    Overlay opcional (apagado por defecto). Con html.is-locked se oculta
    la app y se muestra la pantalla de bloqueo a pantalla completa.
    ============================================================ */
-.lockscreen{display:none}
+.lockscreen,.activationscreen{display:none}
 html.is-locked .appshell{display:none !important}
 html.is-locked .lockscreen{display:flex}
-.lockscreen{position:fixed;inset:0;z-index:9999;
+/* la ACTIVACIÓN manda: oculta app y candado de contraseña, muestra activación */
+html.is-unactivated .appshell{display:none !important}
+html.is-unactivated .lockscreen{display:none !important}
+html.is-unactivated .activationscreen{display:flex}
+.lockscreen,.activationscreen{position:fixed;inset:0;z-index:9999;
   align-items:center;justify-content:center;padding:24px;
   background:var(--surface);
   /* respeta notch/safe-area en móvil */
   padding-top:calc(24px + env(safe-area-inset-top));
   padding-bottom:calc(24px + env(safe-area-inset-bottom));
   animation:viewin .2s ease}
-@media (prefers-reduced-motion: reduce){.lockscreen{animation:none}}
+.activationscreen{z-index:10000}
+@media (prefers-reduced-motion: reduce){.lockscreen,.activationscreen{animation:none}}
 .lockcard{width:100%;max-width:420px;background:var(--card);
   border:1px solid var(--border);border-radius:20px;
   box-shadow:0 20px 60px rgba(0,0,0,.18);padding:30px 26px;
@@ -642,6 +647,31 @@ html.is-locked .lockscreen{display:flex}
 .lock-error.show{display:block}
 .lock-btn{min-height:60px;font-size:18px}
 
+/* 🔑 pantalla de ACTIVACIÓN — código de dispositivo grande + input de la llave */
+.act-code-block{margin:8px 0 2px;padding:14px 12px;border:1px dashed var(--border);
+  border-radius:14px;background:var(--surface)}
+.act-code-lbl{display:block;font-size:12px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:8px}
+.act-code-row{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap}
+.act-code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  font-size:26px;font-weight:800;letter-spacing:2px;color:var(--eleia-green,#178A50);
+  user-select:all;word-break:break-all}
+.act-copy,.lic-copy{border:1px solid var(--border);background:var(--card);color:var(--ink);
+  border-radius:10px;padding:8px 14px;font-size:14px;font-weight:700;cursor:pointer}
+.act-copy:hover,.lic-copy:hover{background:var(--surface)}
+.act-key-input{text-transform:uppercase;letter-spacing:2px;
+  font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+.act-help{margin:2px 0 0;color:var(--muted);font-size:13px;line-height:1.45}
+
 /* ajustes de seguridad (sección ⚙ Báscula → 🔒 Seguridad) */
 .sec-form{display:flex;flex-direction:column;gap:12px}
 .sec-hint{font-weight:400;color:var(--muted)}
+.sec-sep{border:none;border-top:1px solid var(--border);margin:16px 0 10px}
+.sec-cap{font-weight:800;margin:0 0 6px}
+.lic-status{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:12px 14px;margin-bottom:4px}
+.lic-code-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.lic-code-lbl{color:var(--muted);font-size:13px}
+.lic-code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-weight:800;
+  letter-spacing:1px;user-select:all}
+.lic-copy{padding:5px 10px;font-size:13px}

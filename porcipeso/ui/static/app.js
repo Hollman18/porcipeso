@@ -2562,6 +2562,305 @@ if (!ADVANCED_UI) {
 }
 
 /* ============================================================
+   🔑 ACTIVACIÓN POR DISPOSITIVO — licencia offline atada a este equipo
+   ------------------------------------------------------------
+   Es la protección PRINCIPAL: sin una llave válida la app está bloqueada.
+   Funciona sin servidor. El cliente ve un CÓDIGO DE DISPOSITIVO ("PORCI-XXXX-
+   XXXX"), se lo dicta al proveedor (Hollman) y este le devuelve una LLAVE DE
+   ACTIVACIÓN ("XXXX-XXXX-XXXX-XXXX") que SOLO funciona en este teléfono. La
+   llave = base32(HMAC-SHA256(secreto, código)); la app recomputa el HMAC con su
+   propio deviceId + el secreto embebido y compara. En otro teléfono el deviceId
+   cambia → el código cambia → esa llave no valida.
+
+   MODELO DE SEGURIDAD: candado de CONVENIENCIA, NO DRM militar. El secreto
+   maestro (LIC_SECRET) va EMBEBIDO en esta app, así que un experto con el APK
+   podría extraerlo y fabricarse llaves. Es suficiente para el mercado objetivo
+   (evita la copia casual entre teléfonos y ata la venta a un equipo). Fuente de
+   verdad del secreto: ~/porcipeso_secrets/README.md. Si se filtra, se rota ahí
+   y aquí (LIC_SECRET) + packaging/emitir_llave.html y se publica versión nueva.
+   ============================================================ */
+
+/* ===== INICIO NÚCLEO DE LICENCIA (idéntico a porcipeso/licensing/reference.js
+   y a packaging/emitir_llave.html) — SHA-256 + HMAC-SHA256 propios (sin
+   crypto.subtle) para funcionar en cualquier contexto, incluido file://. ===== */
+const LIC_SECRET = 'fc437ab3333024f51ca8cbb1d323882d3e7d43dcabbe7252748bb4a161b9d40b';
+const LIC_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford (sin I,L,O,U)
+const LIC_ALPHASET = new Set(LIC_ALPHABET.split(''));
+const LIC_AMBIG = { O: '0', I: '1', L: '1' };
+const _LIC_K = new Uint32Array([
+  0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+  0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+  0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+  0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+  0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+  0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+  0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+  0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+]);
+function _licRotr(x, n) { return (x >>> n) | (x << (32 - n)); }
+function _licSha256(msg) {
+  let h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,
+      h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
+  const l = msg.length, withOne = l + 1;
+  const k = ((56 - (withOne % 64)) + 64) % 64;
+  const total = withOne + k + 8;
+  const buf = new Uint8Array(total);
+  buf.set(msg, 0); buf[l] = 0x80;
+  const bitLen = l * 8;
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(total - 4, bitLen >>> 0, false);
+  dv.setUint32(total - 8, Math.floor(bitLen / 0x100000000) >>> 0, false);
+  const w = new Uint32Array(64);
+  let i;
+  for (let off = 0; off < total; off += 64) {
+    for (i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+    for (i = 16; i < 64; i++) {
+      const s0 = _licRotr(w[i-15],7) ^ _licRotr(w[i-15],18) ^ (w[i-15] >>> 3);
+      const s1 = _licRotr(w[i-2],17) ^ _licRotr(w[i-2],19) ^ (w[i-2] >>> 10);
+      w[i] = (w[i-16] + s0 + w[i-7] + s1) >>> 0;
+    }
+    let a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+    for (i = 0; i < 64; i++) {
+      const S1 = _licRotr(e,6) ^ _licRotr(e,11) ^ _licRotr(e,25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + _LIC_K[i] + w[i]) >>> 0;
+      const S0 = _licRotr(a,2) ^ _licRotr(a,13) ^ _licRotr(a,22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) >>> 0;
+      h=g; g=f; f=e; e=(d + t1) >>> 0; d=c; c=b; b=a; a=(t1 + t2) >>> 0;
+    }
+    h0=(h0+a)>>>0; h1=(h1+b)>>>0; h2=(h2+c)>>>0; h3=(h3+d)>>>0;
+    h4=(h4+e)>>>0; h5=(h5+f)>>>0; h6=(h6+g)>>>0; h7=(h7+h)>>>0;
+  }
+  const outb = new Uint8Array(32), ov = new DataView(outb.buffer), hs = [h0,h1,h2,h3,h4,h5,h6,h7];
+  for (i = 0; i < 8; i++) ov.setUint32(i*4, hs[i] >>> 0, false);
+  return outb;
+}
+function _licUtf8(str) { return new Uint8Array(new TextEncoder().encode(str)); }
+function _licHmac(keyStr, msgStr) {
+  let key = _licUtf8(keyStr);
+  if (key.length > 64) key = _licSha256(key);
+  const kpad = new Uint8Array(64); kpad.set(key, 0);
+  const ipad = new Uint8Array(64), opad = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) { ipad[i] = kpad[i] ^ 0x36; opad[i] = kpad[i] ^ 0x5c; }
+  const msg = _licUtf8(msgStr);
+  const inner = new Uint8Array(64 + msg.length); inner.set(ipad, 0); inner.set(msg, 64);
+  const ih = _licSha256(inner);
+  const outer = new Uint8Array(96); outer.set(opad, 0); outer.set(ih, 64);
+  return _licSha256(outer);
+}
+function _licB32(bytes, length) {
+  let bits = 0, value = 0, out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    value = (value << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += LIC_ALPHABET[(value >>> bits) & 31];
+      if (out.length >= length) return out;
+    }
+    value &= (1 << bits) - 1;
+  }
+  if (bits > 0 && out.length < length) out += LIC_ALPHABET[(value << (5 - bits)) & 31];
+  return out.slice(0, length);
+}
+function licDeviceCode(deviceId) {
+  const p = _licB32(_licSha256(_licUtf8(deviceId || '')), 8);
+  return 'PORCI-' + p.slice(0, 4) + '-' + p.slice(4, 8);
+}
+function licNormalizeDeviceCode(code) {
+  let s = (code || '').toUpperCase().replace(/^\s*PORCI[\s-]*/, '');
+  s = Array.from(s).map((c) => LIC_AMBIG[c] || c).join('');
+  const payload = Array.from(s).filter((c) => LIC_ALPHASET.has(c)).join('').slice(0, 8);
+  return 'PORCI-' + payload.slice(0, 4) + '-' + payload.slice(4, 8);
+}
+function licActivationKeyFromCode(code) {
+  const canon = licNormalizeDeviceCode(code);
+  const p = _licB32(_licHmac(LIC_SECRET, canon), 16);
+  return p.slice(0,4) + '-' + p.slice(4,8) + '-' + p.slice(8,12) + '-' + p.slice(12,16);
+}
+function licActivationKey(deviceId) { return licActivationKeyFromCode(licDeviceCode(deviceId)); }
+function licNormalizeKey(key) {
+  let s = (key || '').toUpperCase();
+  s = Array.from(s).map((c) => LIC_AMBIG[c] || c).join('');
+  return Array.from(s).filter((c) => LIC_ALPHASET.has(c)).join('');
+}
+/* ===== FIN NÚCLEO DE LICENCIA ===== */
+
+/* expuestas para pruebas (paridad con keygen.py); inofensivo (candado de
+   conveniencia). */
+try {
+  globalThis.PorciLicense = {
+    deviceCode: licDeviceCode, activationKey: licActivationKey,
+    activationKeyFromCode: licActivationKeyFromCode,
+    normalizeDeviceCode: licNormalizeDeviceCode, normalizeKey: licNormalizeKey,
+  };
+} catch { /* sin globalThis */ }
+
+/* ---------------- estado + almacenamiento de la licencia ---------------- */
+const LIC_DEVICE_KEY = 'porcipeso_device';    // deviceId estable (UUID) persistido
+const LIC_LICENSE_KEY = 'porcipeso_license';  // {deviceId, key, activated_at}
+const LIC_BLOCK_KEY = 'porcipeso_act_block';  // enfriamiento por intentos fallidos
+const LIC_MAX_FAILS = 5;
+const LIC_COOLDOWN_MS = 15000;
+
+let _licDeviceId = null;
+let _licCode = null;
+let _actFails = 0;
+let _actBlockedUntil = 0;
+let _actTimer = null;
+
+function _licNewUuid() {
+  try { if (globalThis.crypto?.randomUUID) return crypto.randomUUID(); } catch { /* sigue */ }
+  const a = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) crypto.getRandomValues(a);
+  else for (let i = 0; i < 16; i++) a[i] = Math.floor(Math.random() * 256);
+  a[6] = (a[6] & 0x0f) | 0x40; a[8] = (a[8] & 0x3f) | 0x80;
+  const h = [...a].map((b) => b.toString(16).padStart(2, '0'));
+  return `${h.slice(0,4).join('')}-${h.slice(4,6).join('')}-${h.slice(6,8).join('')}-${h.slice(8,10).join('')}-${h.slice(10,16).join('')}`;
+}
+function licGetDeviceId() {
+  let id = null;
+  try { id = localStorage.getItem(LIC_DEVICE_KEY); } catch { id = null; }
+  if (!id) {
+    id = _licNewUuid();
+    try { localStorage.setItem(LIC_DEVICE_KEY, id); } catch { /* sin storage: id efímero */ }
+  }
+  return id;
+}
+function licReadLicense() { try { return JSON.parse(localStorage.getItem(LIC_LICENSE_KEY) || 'null'); } catch { return null; } }
+function licSaveLicense(obj) { try { localStorage.setItem(LIC_LICENSE_KEY, JSON.stringify(obj)); } catch { /* sin storage */ } }
+function licIsActivated(deviceId) {
+  const rec = licReadLicense();
+  if (!rec || !rec.key || rec.deviceId !== deviceId) return false;
+  // re-verifica el HMAC: una licencia manipulada o de otro equipo no pasa
+  return licNormalizeKey(rec.key) === licNormalizeKey(licActivationKey(deviceId));
+}
+
+/* ---------------- pantalla de activación (#activationScreen) ---------------- */
+function _actErr(msg) {
+  const el = $('actError');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('show', !!msg);
+}
+function _actSetBlocked(on) {
+  if ($('actKey')) $('actKey').disabled = on;
+  if ($('actSubmit')) $('actSubmit').disabled = on;
+}
+function _actTick() {
+  const left = Math.ceil((_actBlockedUntil - Date.now()) / 1000);
+  if (left > 0) { _actErr(`Demasiados intentos, espera un momento (${left}s)…`); _actSetBlocked(true); }
+  else {
+    if (_actTimer) { clearInterval(_actTimer); _actTimer = null; }
+    _actFails = 0; _actBlockedUntil = 0;
+    try { sessionStorage.removeItem(LIC_BLOCK_KEY); } catch { /* sin storage */ }
+    _actSetBlocked(false); _actErr('');
+    if ($('actKey')) { try { $('actKey').focus(); } catch { /* ok */ } }
+  }
+}
+function _actRunCooldownTimer() {
+  if (_actTimer) clearInterval(_actTimer);
+  _actTick();
+  if (_actBlockedUntil > Date.now()) _actTimer = setInterval(_actTick, 1000);
+}
+function _actStartCooldown() {
+  _actBlockedUntil = Date.now() + LIC_COOLDOWN_MS;
+  try { sessionStorage.setItem(LIC_BLOCK_KEY, String(_actBlockedUntil)); } catch { /* sin storage */ }
+  _actRunCooldownTimer();
+}
+
+function showActivationScreen(code) {
+  document.documentElement.classList.add('is-unactivated');
+  if ($('actCode')) $('actCode').textContent = code;
+  const inp = $('actKey');
+  if (inp) setTimeout(() => { try { inp.focus(); } catch { /* ok */ } }, 60);
+}
+function hideActivationScreen() { document.documentElement.classList.remove('is-unactivated'); }
+
+function _actCopyCode(btnId) {
+  const btn = $(btnId);
+  const done = () => { if (btn) { const t = btn.textContent; btn.textContent = 'Copiado ✓'; setTimeout(() => { btn.textContent = t; }, 1600); } };
+  const txt = _licCode || '';
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt).then(done, () => _actLegacyCopy(txt, done));
+  else _actLegacyCopy(txt, done);
+}
+function _actLegacyCopy(text, done) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta); done();
+  } catch { /* no se pudo copiar; el cliente lo puede escribir a mano */ }
+}
+
+function _actTrySubmit() {
+  if (Date.now() < _actBlockedUntil) return;          // en enfriamiento
+  const inp = $('actKey');
+  const entered = inp ? inp.value : '';
+  if (!licNormalizeKey(entered)) { _actErr('Escribe la llave que te dio tu proveedor.'); return; }
+  const ok = licNormalizeKey(entered) === licNormalizeKey(licActivationKey(_licDeviceId));
+  if (ok) {
+    _actFails = 0;
+    try { sessionStorage.removeItem(LIC_BLOCK_KEY); } catch { /* sin storage */ }
+    licSaveLicense({ deviceId: _licDeviceId, key: licActivationKey(_licDeviceId), activated_at: Date.now() });
+    _actErr('');
+    if (inp) inp.value = '';
+    hideActivationScreen();
+    // tras activar, aplica el candado de contraseña OPCIONAL si el dueño lo dejó puesto
+    initLock();
+    try { refreshLicBox(); } catch { /* la sección puede no estar montada aún */ }
+  } else {
+    _actFails++;
+    if (inp) { inp.value = ''; try { inp.focus(); } catch { /* ok */ } }
+    if (_actFails >= LIC_MAX_FAILS) _actStartCooldown();
+    else {
+      const left = LIC_MAX_FAILS - _actFails;
+      _actErr(`Esa llave no es válida para este equipo. Te queda${left === 1 ? '' : 'n'} ${left} intento${left === 1 ? '' : 's'}.`);
+    }
+  }
+}
+
+function initActivation() {
+  _licDeviceId = licGetDeviceId();
+  _licCode = licDeviceCode(_licDeviceId);
+  if ($('actCode')) $('actCode').textContent = _licCode;
+
+  const form = $('actForm');
+  if (form && !form.dataset.wired) {
+    form.dataset.wired = '1';
+    form.addEventListener('submit', (e) => { e.preventDefault(); _actTrySubmit(); });
+  }
+  if ($('actCopy') && !$('actCopy').dataset.wired) {
+    $('actCopy').dataset.wired = '1';
+    $('actCopy').addEventListener('click', () => _actCopyCode('actCopy'));
+  }
+
+  const activated = licIsActivated(_licDeviceId);
+  if (activated) { hideActivationScreen(); return true; }
+
+  // reanudar enfriamiento si veníamos bloqueados (recarga durante el bloqueo)
+  let until = 0; try { until = Number(sessionStorage.getItem(LIC_BLOCK_KEY)) || 0; } catch { until = 0; }
+  if (until > Date.now()) { _actFails = LIC_MAX_FAILS; _actBlockedUntil = until; _actRunCooldownTimer(); }
+  showActivationScreen(_licCode);
+  return false;
+}
+
+/* estado de licencia dentro de ⚙ Báscula → 🔒 Seguridad */
+function refreshLicBox() {
+  if ($('licDeviceCode')) $('licDeviceCode').textContent = _licCode || licDeviceCode(licGetDeviceId());
+  if ($('licEstado')) {
+    $('licEstado').innerHTML = licIsActivated(_licDeviceId || licGetDeviceId())
+      ? '✅ <b>Activado</b> en este dispositivo (licencia permanente).'
+      : '⚠️ <b>Sin activar.</b>';
+  }
+  if ($('bLicCopy') && !$('bLicCopy').dataset.wired) {
+    $('bLicCopy').dataset.wired = '1';
+    $('bLicCopy').addEventListener('click', () => _actCopyCode('bLicCopy'));
+  }
+}
+
+/* ============================================================
    🔒 CANDADO DE ACCESO — candado LOCAL de conveniencia
    ------------------------------------------------------------
    Opcional y APAGADO por defecto: sin contraseña la app abre normal.
@@ -2732,6 +3031,7 @@ function _secClearInputs() {
   }
 }
 function refreshSecBox() {
+  try { refreshLicBox(); } catch { /* sección de licencia opcional */ }
   const has = lockConfigured();
   _secHideForms();
   _secClearInputs();
@@ -2796,7 +3096,8 @@ function initSecUI() {
    ARRANQUE
    ============================================================ */
 (function init() {
-  initLock();
+  initActivation();   // 🔑 gate PRINCIPAL: sin licencia válida, la app queda bloqueada
+  initLock();         // 🔒 candado de contraseña OPCIONAL, después de activar
   // PWA
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

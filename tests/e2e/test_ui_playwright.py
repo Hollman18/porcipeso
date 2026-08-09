@@ -63,6 +63,9 @@ def page(server_url):
             "localStorage.setItem('porcipeso_onboard','1');"
             "localStorage.setItem('porcipeso_howto','1');"
         )
+        # app pre-activada (el gate de activación es lo primero desde v2.6.0)
+        from ._preactivate import PREACTIVATE_JS
+        ctx.add_init_script(PREACTIVATE_JS)
         pg = ctx.new_page()
         yield pg
         browser.close()
