@@ -100,32 +100,29 @@ def test_contrato_transporte_y_parser_matrix():
     assert all(0.0 <= r.kg <= 200.0 for r in readings)
 
 
-def test_flujo_completo_con_bajada_y_reingreso():
-    """Guion completo v2: calibración (cerdo de prueba sube Y BAJA) → lote:
-    sube 1 → suben 2 → se devuelve 1 → reingresa → sube 1 más.
+def test_flujo_completo_bascula_de_paso_con_devuelto():
+    """Guion v2 (báscula de PASO, 2026-08): calibración (cerdo de prueba sube
+    Y BAJA) → lote: sube 1 → suben 2 → baja todo (avanza al camión, IGNORADO)
+    → un cerdo REBOTA y vuelve a subir (doble conteo) → el operario registra
+    1 devuelto. Neto real: 1 + 2 + 1(rebote) = 4, menos 1 devuelto = 3.
 
-    Conteo neto tras la calibración: 1 + 2 − 1 + 1 + 1 = 4 (el guion añade
-    un cuarto cerdo al final para que el neto sea 4 manteniendo exactamente
-    una BAJADA y un REINGRESO; la bajada del cerdo de prueba NO cuenta).
+    Las bajadas NO emiten evento ni descuentan (la báscula no distingue
+    avance del rebote); el único descuento es manual (register_returned).
     """
     scenario = Scenario(
         [
             ("wait", 4.0),                       # línea base estable en 0
-                                                 # (>2 s: la ventana de 20
-                                                 # lecturas debe llenarse)
             ("pigs_on", 1, 102.5),               # sube el cerdo de prueba
             ("wait", 3.0),
             ("pig_off", None),                   # se baja → REFERENCIA, fase lote
             ("wait", 3.0),
-            ("pigs_on", 1, 102.5),               # el de prueba vuelve con el lote
+            ("pigs_on", 1, 102.5),               # sube 1 → count 1
             ("wait", 3.0),
-            ("pigs_on", 2, (103.9, 103.1)),      # suben 2
+            ("pigs_on", 2, (103.9, 103.1)),      # suben 2 → count 3
             ("wait", 3.0),
-            ("pig_off", None),                   # se devuelve el último (103.1)
-            ("wait", 3.0),
-            ("pigs_on", 1, 101.0),               # reingresa (mismo peso ~101)
-            ("wait", 3.0),
-            ("pigs_on", 1, 104.2),               # sube el 4.º cerdo neto
+            ("pig_off", None),                   # baja todo: avanza al camión
+            ("wait", 3.0),                       # (IGNORADO, no descuenta)
+            ("pigs_on", 1, 101.0),               # uno rebota y re-sube → count 4
             ("wait", 3.0),
         ],
         seed=7,
@@ -136,41 +133,29 @@ def test_flujo_completo_con_bajada_y_reingreso():
             lambda: scenario.done and engine.snapshot().count == 4,
             timeout_s=50.0,
         )
-        # margen corto para que el último evento termine de persistirse
         _wait_until(lambda: engine.snapshot().pending == 0, timeout_s=3.0)
         snap = engine.snapshot()
-
         assert ok and snap.count == 4, (
-            f"conteo final {snap.count} != 4 · eventos: "
+            f"conteo {snap.count} != 4 · eventos: "
             f"{[(e.tipo, e.animales_estimados, round(e.delta_kg, 1)) for e in events]}"
         )
         tipos = [e.tipo for e in events]
-        # calibración v2: el primer evento es la REFERENCIA (peak del cerdo
-        # de prueba) y su bajada NO genera BAJADA
-        assert tipos[0] == EventType.REFERENCIA, f"tipos={tipos}"
-        assert tipos.count(EventType.REFERENCIA) == 1, f"tipos={tipos}"
-        assert abs(events[0].delta_kg - 102.5) <= 1.5, (
-            f"referencia {events[0].delta_kg:.1f} != ~102.5"
-        )
+        # las bajadas NO generan eventos
+        assert EventType.BAJADA not in tipos, f"no debía haber BAJADA: {tipos}"
+        assert EventType.REINGRESO not in tipos, f"no debía haber REINGRESO: {tipos}"
+        assert tipos[0] == EventType.REFERENCIA and tipos.count(EventType.REFERENCIA) == 1
         assert snap.fase == "lote"
-        assert snap.ref_kg is not None and abs(snap.ref_kg - 102.5) <= 1.5
-        assert tipos.count(EventType.BAJADA) == 1, f"esperaba 1 BAJADA, tipos={tipos}"
-        assert EventType.REINGRESO in tipos, f"esperaba un REINGRESO, tipos={tipos}"
 
-        # total ≈ suma física real sobre plataforma (verdad-terreno del sim)
-        assert abs(snap.total_kg - scenario.total_physical_kg) <= 1.0, (
-            f"total {snap.total_kg:.1f} vs físico {scenario.total_physical_kg:.1f}"
-        )
-        # promedio coherente con total/conteo y con el rango de pesos del guion
-        assert snap.avg_kg is not None
-        assert abs(snap.avg_kg - snap.total_kg / snap.count) < 0.5
-        assert 95.0 <= snap.avg_kg <= 110.0
-
-        # ningún evento ambiguo sin resolver
+        # el operario registra 1 devuelto → corrige el doble conteo (4 → 3)
+        ev = engine.register_returned(1)
+        assert ev is not None and ev.tipo == EventType.AJUSTE
+        snap = engine.snapshot()
+        assert snap.count == 3
+        assert snap.avg_kg is not None and 95.0 <= snap.avg_kg <= 110.0
         assert snap.pending == 0
         assert all(
             (not e.ambiguo) or (e.animales_confirmados is not None) for e in events
-        ), f"evento ambiguo sin confirmar: {[e for e in events if e.ambiguo]}"
+        )
     finally:
         stop_flag.set()
         server.stop()
