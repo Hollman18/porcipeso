@@ -231,36 +231,44 @@ describe("CSV — bytes UTF-8 con BOM (sin mojibake)", () => {
 });
 
 // ============================================================== informe
-describe("Descargar informe (report) — flujo de descarga", () => {
+// El botón "Descargar PDF" ahora genera un PDF REAL (jsPDF, ver
+// report-pdf.ts): en NATIVO se escribe/comparte como archivo .pdf
+// (shareReport recibe bytes), en WEB se descarga con jsPDF `.save()`.
+describe("Descargar informe (report) — PDF real", () => {
   async function makeBackend(deps: Partial<ConstructorParameters<typeof LocalBackend>[0]> = {}) {
     const driver = await createSqlJsDriver({ locateFile: () => WASM });
     const repo = await Repo.create(driver);
     return new LocalBackend({ repo, profiles: [], hub: new Hub(), ...deps });
   }
 
-  it("nativo: escribe/comparte un ARCHIVO (shareReport), no window.print()", async () => {
-    const reports: Array<{ filename: string; html: string }> = [];
+  it("nativo: escribe/comparte un ARCHIVO .pdf REAL (shareReport recibe bytes %PDF)", async () => {
+    const reports: Array<{ filename: string; bytes: Uint8Array }> = [];
     const backend = await makeBackend({
-      shareReport: async (filename, html) => {
-        reports.push({ filename, html });
+      shareReport: async (filename, bytes) => {
+        reports.push({ filename, bytes });
       },
     });
     const sid = await backend.repo.createSession({ lote: "Informe" });
-    const okReport = await backend.reportAndPrint(sid);
-    expect(okReport).toBe(true);
+    const ok = await backend.downloadReport(sid);
+    expect(ok).toBe(true);
     expect(reports).toHaveLength(1);
-    expect(reports[0].filename).toBe(`informe_sesion_${sid}.html`);
-    expect(reports[0].html).toContain("PorciPeso");
-    expect(reports[0].html).toContain("Informe"); // el lote sale en el informe
+    expect(reports[0].filename).toBe(`informe_sesion_${sid}.pdf`);
+    // bytes = PDF real: cabecera %PDF y tamaño razonable (> 5 KB)
+    const b = reports[0].bytes;
+    expect(String.fromCharCode(b[0], b[1], b[2], b[3])).toBe("%PDF");
+    expect(b.length).toBeGreaterThan(5000);
     await backend.repo.close();
   });
 
-  it("web: sin shareReport y sin DOM → no revienta (devuelve false)", async () => {
+  // El camino WEB (jsPDF `.save()`) se prueba con mocks en
+  // report_download.test.ts (save es una propiedad de instancia, no del
+  // prototipo, así que no se puede espiar aquí sin mockear el módulo).
+
+  it("ni shareReport ni document → devuelve false sin reventar", async () => {
     const backend = await makeBackend(); // sin shareReport
-    const sid = await backend.repo.createSession({ lote: "Web" });
-    // en Node no hay `document`: el camino web queda inerte, sin lanzar
-    expect(typeof document).toBe("undefined");
-    expect(await backend.reportAndPrint(sid)).toBe(false);
+    const sid = await backend.repo.createSession({ lote: "Nada" });
+    expect(typeof document).toBe("undefined"); // en Node no hay DOM
+    expect(await backend.downloadReport(sid)).toBe(false);
     await backend.repo.close();
   });
 });

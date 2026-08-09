@@ -779,13 +779,13 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
 describe("installShim — parcheo de fetch/WebSocket/window.open", () => {
   it("desvía /api/* y /ws al backend local; lo demás sigue nativo", async () => {
     const shared: string[] = [];
-    const reports: Array<{ filename: string; html: string }> = [];
+    const reports: Array<{ filename: string; bytes: Uint8Array }> = [];
     const backend = await makeBackend({
       shareCsv: async (filename) => {
         shared.push(filename);
       },
-      shareReport: async (filename, html) => {
-        reports.push({ filename, html });
+      shareReport: async (filename, bytes) => {
+        reports.push({ filename, bytes });
       },
     });
     const nativeFetchCalls: string[] = [];
@@ -837,14 +837,18 @@ describe("installShim — parcheo de fetch/WebSocket/window.open", () => {
     await backend.flush();
     expect(shared).toEqual([`sesion_${sid}.csv`]);
 
-    // window.open del informe (report.pdf) → archivo compartido (nativo),
-    // NO window.print(): en el APK habría sido un no-op silencioso.
+    // window.open del informe (report.pdf) → PDF REAL compartido como
+    // archivo .pdf (nativo), NO window.print() (que en el APK sería un
+    // no-op silencioso). El generador jsPDF corre tras un import dinámico,
+    // así que esperamos activamente a que el archivo se comparta.
     fakeWindow.open(`/api/sessions/${sid}/report.pdf`);
-    await new Promise((r) => setTimeout(r, 0));
-    await backend.flush();
+    for (let i = 0; i < 200 && reports.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     expect(reports).toHaveLength(1);
-    expect(reports[0].filename).toBe(`informe_sesion_${sid}.html`);
-    expect(reports[0].html).toContain("PorciPeso");
+    expect(reports[0].filename).toBe(`informe_sesion_${sid}.pdf`);
+    const b = reports[0].bytes;
+    expect(String.fromCharCode(b[0], b[1], b[2], b[3])).toBe("%PDF");
     await backend.repo.close();
   });
 });

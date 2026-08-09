@@ -38,16 +38,16 @@ async function nativeShareCsv(filename: string, csv: string): Promise<void> {
   await Share.share({ title: filename, files: [res.uri] });
 }
 
-async function nativeShareReport(filename: string, html: string): Promise<void> {
+async function nativeSharePdf(filename: string, pdfBytes: Uint8Array): Promise<void> {
   const { Filesystem, Directory } = await import("@capacitor/filesystem");
   const { Share } = await import("@capacitor/share");
-  // Mismo mecanismo del CSV para el informe: archivo real + Share. Bytes
-  // UTF-8 crudos (base64, sin `encoding`) → sin mojibake; el <meta charset>
-  // del HTML hace el resto. El usuario abre en Chrome/visor y usa
-  // "Imprimir → Guardar como PDF", o lo comparte.
+  // Mismo mecanismo del CSV, pero con un PDF REAL (jsPDF, ver report-pdf.ts):
+  // escribimos los bytes crudos del PDF como base64 SIN `encoding` (Capacitor
+  // los decodifica y guarda tal cual) y compartimos el archivo. La extensión
+  // .pdf hace que Share/visores lo traten como application/pdf.
   const res = await Filesystem.writeFile({
     path: filename,
-    data: bytesToBase64(new TextEncoder().encode(html)),
+    data: bytesToBase64(pdfBytes),
     directory: Directory.Cache,
   });
   await Share.share({ title: filename, files: [res.uri] });
@@ -89,7 +89,7 @@ async function initBackend(hub: Hub): Promise<LocalBackend> {
     profiles: PROFILES,
     hub,
     shareCsv: native ? nativeShareCsv : undefined,
-    shareReport: native ? nativeShareReport : undefined,
+    shareReport: native ? nativeSharePdf : undefined,
     cloud: {
       route: (method, path, body) => sync.route(method, path, body),
       onSessionClosed: () => sync.pushSoon(),

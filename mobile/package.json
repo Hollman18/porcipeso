@@ -19,6 +19,8 @@
     "@capacitor/filesystem": "^6.0.3",
     "@capacitor/share": "^6.0.3",
     "@e-is/capacitor-bluetooth-serial": "^6.0.3",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "sql.js": "^1.13.0"
   },
   "devDependencies": {

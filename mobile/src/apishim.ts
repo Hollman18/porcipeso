@@ -172,12 +172,13 @@ export interface BackendDeps {
   /** Exportador CSV nativo (Filesystem+Share); si falta, descarga web. */
   shareCsv?: (filename: string, csv: string) => Promise<void>;
   /**
-   * Guardar/compartir el informe nativo (Filesystem+Share). En el APK
-   * window.print() del WebView es un no-op (no hay PDF), así que el
-   * informe se entrega como ARCHIVO real (misma vía que el CSV). Si
-   * falta, la web usa el print-view + window.print() de siempre.
+   * Guardar/compartir el informe como PDF REAL nativo (Filesystem+Share,
+   * misma vía que el CSV). En el APK window.print() del WebView es un no-op
+   * y no hay reportlab, así que el PDF se genera en el cliente (jsPDF, ver
+   * report-pdf.ts) y se entrega como ARCHIVO `.pdf`. Si falta esta función
+   * (web), el informe se descarga con jsPDF `.save()`.
    */
-  shareReport?: (filename: string, html: string) => Promise<void>;
+  shareReport?: (filename: string, pdfBytes: Uint8Array) => Promise<void>;
   /** Sync a la nube (opcional): resuelve /api/cloud/* y recibe el aviso
    *  de cierre de sesión de pesaje para empujar sin esperar el timer. */
   cloud?: {
@@ -1075,18 +1076,29 @@ export class LocalBackend {
     };
   }
 
-  /**
-   * Print-view del informe (ruta report.pdf en móvil): HTML imprimible
-   * con la marca "PorciPeso · una solución ELEIA" (ver reportview.ts).
-   */
-  async buildReportHtml(sessionId: number): Promise<string | null> {
+  /** Trae session/events/stats de una sesión (o null si no existe). */
+  private async reportData(
+    sessionId: number,
+  ): Promise<{ session: Record<string, unknown>; events: Record<string, unknown>[]; stats: Record<string, unknown> } | null> {
     const session = await this.repo.getSession(sessionId);
     if (session === null) return null;
     const events = await this.repo.listEvents(sessionId);
     const stats = await this.repo.stats(sessionId);
+    return { session, events, stats };
+  }
+
+  /**
+   * Print-view HTML del informe. LEGADO: la ruta fetch report.pdf lo sigue
+   * devolviendo, pero el botón "Descargar PDF" ya NO lo usa (genera un PDF
+   * real, ver downloadReport). Se conserva porque la ruta fetch aún lo
+   * referencia; misma marca/estructura que el PDF (ver reportview.ts).
+   */
+  async buildReportHtml(sessionId: number): Promise<string | null> {
+    const data = await this.reportData(sessionId);
+    if (data === null) return null;
     const { buildReportHtml } = await import("./reportview");
     const { APP_VERSION } = await import("./update");
-    return buildReportHtml(session, events, stats, APP_VERSION);
+    return buildReportHtml(data.session, data.events, data.stats, APP_VERSION);
   }
 
   private async reportPrintView(sessionId: number): Promise<JsonResponse> {
@@ -1100,30 +1112,35 @@ export class LocalBackend {
   }
 
   /**
-   * Informe para window.open() ("Descargar PDF").
+   * "Descargar PDF" → PDF REAL generado en el cliente (jsPDF, ver
+   * report-pdf.ts), NO el print-view HTML.
    *
-   * CAUSA RAÍZ del PDF que no bajaba en el APK: window.print() del
-   * WebView de Android NO está cableado al PrintManager del sistema, así
-   * que la llamada es un no-op silencioso (ni diálogo, ni archivo). El
-   * CSV sí funcionaba porque usa Filesystem+Share (archivo real).
-   *
-   * ARREGLO: en nativo replicamos EXACTAMENTE la vía del CSV — escribimos
-   * el informe como archivo real y lo abrimos/compartimos (shareReport);
-   * el usuario lo abre en Chrome/visor y usa "Imprimir → Guardar como
-   * PDF", o lo comparte. En web (navegador) sigue igual que hoy:
-   * print-view en iframe + window.print().
+   * CAUSA RAÍZ de que el PDF no bajara en el APK: window.print() del
+   * WebView de Android no está cableado al PrintManager, y no hay
+   * reportlab. ARREGLO: generamos el PDF en JS y lo entregamos como
+   * ARCHIVO `.pdf` real —
+   *   · NATIVO: escribimos los bytes (base64) con @capacitor/filesystem y
+   *     compartimos con @capacitor/share (misma vía que el CSV, que sí
+   *     funciona), mime application/pdf → informe_sesion_{id}.pdf.
+   *   · WEB (navegador del shim): jsPDF `.save()` descarga el .pdf real.
    */
-  async reportAndPrint(sessionId: number): Promise<boolean> {
-    const html = await this.buildReportHtml(sessionId);
-    if (html === null) return false;
+  async downloadReport(sessionId: number): Promise<boolean> {
+    const data = await this.reportData(sessionId);
+    if (data === null) return false;
+    const { buildReportDoc } = await import("./report-pdf");
+    const { APP_VERSION } = await import("./update");
+    const doc = buildReportDoc(data.session, data.events, data.stats, APP_VERSION);
+    const filename = `informe_sesion_${sessionId}.pdf`;
     if (this.shareReportFn) {
-      await this.shareReportFn(`informe_sesion_${sessionId}.html`, html);
+      const bytes = new Uint8Array(doc.output("arraybuffer") as ArrayBuffer);
+      await this.shareReportFn(filename, bytes);
       return true;
     }
-    if (typeof document === "undefined") return false;
-    const { openPrintView } = await import("./reportview");
-    openPrintView(html);
-    return true;
+    if (typeof document !== "undefined") {
+      doc.save(filename); // descarga .pdf real en el navegador
+      return true;
+    }
+    return false;
   }
 
   /** Export para window.open(): comparte en nativo o descarga en web. */
@@ -1379,11 +1396,12 @@ export function installShim(
       void getBackend().then((b) => b.exportAndShare(Number(m[1])));
       return null;
     }
-    // report.pdf → print-view + window.print() (PDF nativo de Android;
-    // ver reportview.ts para la diferencia con el reportlab de escritorio)
+    // report.pdf → PDF REAL generado en el cliente (jsPDF): archivo .pdf
+    // compartido en nativo (Filesystem+Share) o descargado en web (.save).
+    // Ver LocalBackend.downloadReport / report-pdf.ts.
     const mp = /\/api\/sessions\/(\d+)\/report\.pdf$/.exec(path);
     if (mp) {
-      void getBackend().then((b) => b.reportAndPrint(Number(mp[1])));
+      void getBackend().then((b) => b.downloadReport(Number(mp[1])));
       return null;
     }
     return origOpen ? origOpen(url, target, features) : null;

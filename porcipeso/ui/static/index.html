@@ -9,8 +9,47 @@
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="styles.css">
+<script>
+/* CANDADO DE ACCESO (local) — decide ANTES de pintar si hay que mostrar la
+   pantalla de bloqueo, para que la app no se asome un instante. La lógica
+   completa (hash SHA-256 + salt, verificación, ajustes) vive en app.js.
+   Solo se activa si el dueño configuró una contraseña (clave localStorage
+   'porcipeso_lock') y la sesión aún no se ha desbloqueado. */
+(function () {
+  try {
+    var hasLock = false, unlocked = false;
+    try { hasLock = !!localStorage.getItem('porcipeso_lock'); } catch (e) {}
+    try { unlocked = sessionStorage.getItem('porcipeso_unlocked') === '1'; } catch (e) {}
+    if (hasLock && !unlocked) document.documentElement.classList.add('is-locked');
+  } catch (e) { /* sin storage: la app abre normal */ }
+})();
+</script>
 </head>
 <body>
+
+<!-- ===== CANDADO DE ACCESO: PANTALLA DE BLOQUEO =====
+     Overlay a pantalla completa; solo se ve con html.is-locked (lo enciende
+     el script del <head> y app.js). Es un candado LOCAL de conveniencia:
+     evita el uso no autorizado del dispositivo; NO cifra los datos. -->
+<div id="lockScreen" class="lockscreen" role="dialog" aria-modal="true" aria-labelledby="lockTitle">
+  <div class="lockcard">
+    <div class="lock-brand">
+      <span class="pig">🐷</span>
+      <div><b>PorciPeso</b>
+        <small class="eleia-line">una solución <b>ELEIA</b></small></div>
+    </div>
+    <h1 id="lockTitle" class="lock-title">Ingresa tu contraseña</h1>
+    <p class="lock-sub">Esta báscula está protegida.</p>
+    <form id="lockForm" class="lock-form">
+      <input id="lockPass" type="password" class="lock-input" inputmode="text"
+             autocomplete="current-password" autocapitalize="off" autocorrect="off"
+             spellcheck="false" placeholder="Contraseña" aria-label="Contraseña">
+      <p class="lock-error form-error" id="lockError" role="alert"></p>
+      <button type="submit" class="btn-primary lock-btn" id="lockSubmit">Entrar</button>
+    </form>
+  </div>
+</div>
+
 <div class="appshell">
 
   <!-- ===== NAVEGACIÓN LATERAL (escritorio) ===== -->
@@ -434,6 +473,73 @@
             </div>
           </div>
           <div class="test-result" id="cleanResult"></div>
+        </div>
+      </details>
+
+      <!-- 🔒 SEGURIDAD: candado de acceso opcional (protege el dispositivo).
+           Apagado por defecto: sin contraseña la app abre normal. -->
+      <details class="collap nube" id="secBox">
+        <summary><span class="ct">🔒 Seguridad</span><span class="caret" aria-hidden="true">▸</span></summary>
+        <div class="nube-body">
+          <p class="wizhelp" id="secEstado">Cargando…</p>
+
+          <!-- botón que abre "proteger" (solo cuando NO hay contraseña) -->
+          <div class="config-actions" id="secProtegerRow" hidden>
+            <button class="btn-primary" id="bSecProteger">🔒 Proteger con contraseña</button>
+          </div>
+
+          <!-- formulario: crear contraseña -->
+          <div class="sec-form" id="secSetup" hidden>
+            <label class="addrlbl">Nueva contraseña <span class="sec-hint">(mínimo 4 caracteres)</span>
+              <input id="secNew1" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+            </label>
+            <label class="addrlbl">Repite la contraseña
+              <input id="secNew2" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+            </label>
+            <div class="config-actions">
+              <button class="btn-primary" id="bSecGuardar">Guardar contraseña</button>
+              <button id="bSecCancel1">Cancelar</button>
+            </div>
+          </div>
+
+          <!-- botones: cambiar / quitar (solo cuando SÍ hay contraseña) -->
+          <div class="config-actions" id="secManage" hidden>
+            <button id="bSecCambiar">Cambiar contraseña</button>
+            <button class="btn-danger" id="bSecQuitar">Quitar contraseña</button>
+          </div>
+
+          <!-- formulario: cambiar contraseña -->
+          <div class="sec-form" id="secChange" hidden>
+            <label class="addrlbl">Contraseña actual
+              <input id="secCurCh" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+            </label>
+            <label class="addrlbl">Nueva contraseña <span class="sec-hint">(mínimo 4 caracteres)</span>
+              <input id="secNewCh1" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+            </label>
+            <label class="addrlbl">Repite la nueva
+              <input id="secNewCh2" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+            </label>
+            <div class="config-actions">
+              <button class="btn-primary" id="bSecChSave">Guardar cambios</button>
+              <button id="bSecChCancel">Cancelar</button>
+            </div>
+          </div>
+
+          <!-- formulario: quitar contraseña -->
+          <div class="sec-form" id="secRemove" hidden>
+            <label class="addrlbl">Escribe la contraseña actual para confirmar
+              <input id="secCurRm" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+            </label>
+            <div class="config-actions">
+              <button class="btn-danger" id="bSecRmSave">Quitar contraseña</button>
+              <button id="bSecRmCancel">Cancelar</button>
+            </div>
+          </div>
+
+          <div class="test-result" id="secResult"></div>
+          <p class="wizhelp">Es un <b>candado local de conveniencia</b>: pide la
+            contraseña al abrir la app en este dispositivo. No cifra los pesajes
+            guardados ni reemplaza el usuario de la nube.</p>
         </div>
       </details>
     </section>

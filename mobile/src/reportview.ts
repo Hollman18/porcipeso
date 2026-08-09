@@ -54,31 +54,33 @@ function esc(v: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
-function cap(s: string): string {
+// Exportados para que report-pdf.ts (el generador de PDF real) use la MISMA
+// formateo/traducción que el print-view — misma fuente de verdad, sin drift.
+export function cap(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
-function fmt(v: unknown, decimals = 1): string {
+export function fmt(v: unknown, decimals = 1): string {
   if (v === null || v === undefined) return "—";
   const n = Number(v);
   if (!Number.isFinite(n)) return esc(v);
   return n.toFixed(decimals);
 }
 
-function fecha(iso: unknown): string {
+export function fecha(iso: unknown): string {
   if (!iso) return "—";
   const d = new Date(String(iso));
   if (Number.isNaN(d.getTime())) return esc(iso);
   return d.toLocaleString("es", { dateStyle: "short", timeStyle: "short" });
 }
 
-function horaMs(tsMs: unknown): string {
+export function horaMs(tsMs: unknown): string {
   const n = Number(tsMs);
   if (!Number.isFinite(n)) return "—";
   return new Date(n).toLocaleTimeString("es");
 }
 
-function notaHumana(stats: Dict): string {
+export function notaHumana(stats: Dict): string {
   const u = stats["uniformidad_pct"];
   if (u === null || u === undefined) {
     return "Sin muestras individuales suficientes para medir qué tan parejo está el lote.";

@@ -1208,7 +1208,7 @@ function visibleMethods() {
   return out;
 }
 
-function initBascula() { showBasculaHome(); }
+function initBascula() { showBasculaHome(); initSecUI(); }
 
 /* msg opcional {cls,text} → se muestra en el resultado de la tarjeta */
 function showBasculaHome(msg) {
@@ -2562,9 +2562,241 @@ if (!ADVANCED_UI) {
 }
 
 /* ============================================================
+   🔒 CANDADO DE ACCESO — candado LOCAL de conveniencia
+   ------------------------------------------------------------
+   Opcional y APAGADO por defecto: sin contraseña la app abre normal.
+   Cuando el dueño configura una (⚙ Báscula → 🔒 Seguridad), la app pide
+   la contraseña al abrir (pantalla de bloqueo #lockScreen).
+
+   MODELO DE SEGURIDAD: es un candado de CONVENIENCIA local, NO cifra los
+   datos guardados. Guardamos SOLO {salt, hash} en localStorage (clave
+   'porcipeso_lock'); nunca la contraseña en claro. hash = SHA-256(salt+':'+pw)
+   vía Web Crypto (crypto.subtle); si no hay contexto seguro para Web Crypto,
+   degrada a un hash no-criptográfico (basta para este propósito). La sesión
+   desbloqueada se marca en sessionStorage ('porcipeso_unlocked') para no
+   re-pedir en cada navegación, pero SÍ al reabrir la app. Sirve para evitar
+   el uso no autorizado del dispositivo del cliente, no para proteger datos
+   frente a un atacante con acceso al almacenamiento.
+   ============================================================ */
+const LOCK_KEY = 'porcipeso_lock';
+const LOCK_SESSION_KEY = 'porcipeso_unlocked';
+const LOCK_BLOCK_KEY = 'porcipeso_lock_block';
+const LOCK_MAX_FAILS = 5;
+const LOCK_COOLDOWN_MS = 15000;
+
+function lockRead() { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || 'null'); } catch { return null; } }
+function lockConfigured() { return !!lockRead(); }
+function lockIsUnlocked() { try { return sessionStorage.getItem(LOCK_SESSION_KEY) === '1'; } catch { return false; } }
+function lockMarkUnlocked() { try { sessionStorage.setItem(LOCK_SESSION_KEY, '1'); } catch { /* sin storage */ } }
+function lockClear() { try { localStorage.removeItem(LOCK_KEY); } catch { /* sin storage */ } }
+
+function _lockRandHex(nBytes) {
+  const a = new Uint8Array(nBytes);
+  if (globalThis.crypto?.getRandomValues) crypto.getRandomValues(a);
+  else for (let i = 0; i < nBytes; i++) a[i] = Math.floor(Math.random() * 256);
+  return [...a].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+const _lockAlg = () => (globalThis.crypto?.subtle?.digest ? 'sha256' : 'fallback');
+
+async function _lockDigest(str, alg) {
+  if (alg === 'sha256' && globalThis.crypto?.subtle?.digest) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  // Fallback SIN Web Crypto (contexto no seguro): hash no criptográfico
+  // (xxhash-ish). Suficiente para un candado de conveniencia local.
+  let h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+}
+
+async function lockSetPassword(pw) {
+  const salt = _lockRandHex(16);
+  const alg = _lockAlg();
+  const hash = await _lockDigest(salt + ':' + pw, alg);
+  try { localStorage.setItem(LOCK_KEY, JSON.stringify({ v: 1, alg, salt, hash })); } catch { /* sin storage */ }
+}
+async function lockVerify(pw) {
+  const rec = lockRead();
+  if (!rec) return false;
+  const hash = await _lockDigest((rec.salt || '') + ':' + pw, rec.alg || 'sha256');
+  return hash === rec.hash;
+}
+
+/* ---------------- pantalla de bloqueo (#lockScreen) ---------------- */
+let _lockFails = 0;
+let _lockBlockedUntil = 0;
+let _lockTimer = null;
+
+function _lockErr(msg) {
+  const el = $('lockError');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('show', !!msg);
+}
+function _lockSetBlocked(on) {
+  if ($('lockPass')) $('lockPass').disabled = on;
+  if ($('lockSubmit')) $('lockSubmit').disabled = on;
+}
+function _lockTick() {
+  const left = Math.ceil((_lockBlockedUntil - Date.now()) / 1000);
+  if (left > 0) {
+    _lockErr(`Demasiados intentos, espera un momento (${left}s)…`);
+    _lockSetBlocked(true);
+  } else {
+    if (_lockTimer) { clearInterval(_lockTimer); _lockTimer = null; }
+    _lockFails = 0; _lockBlockedUntil = 0;
+    try { sessionStorage.removeItem(LOCK_BLOCK_KEY); } catch { /* sin storage */ }
+    _lockSetBlocked(false); _lockErr('');
+    if ($('lockPass')) $('lockPass').focus();
+  }
+}
+function _lockRunCooldownTimer() {
+  if (_lockTimer) clearInterval(_lockTimer);
+  _lockTick();
+  if (_lockBlockedUntil > Date.now()) _lockTimer = setInterval(_lockTick, 1000);
+}
+function _lockStartCooldown() {
+  _lockBlockedUntil = Date.now() + LOCK_COOLDOWN_MS;
+  try { sessionStorage.setItem(LOCK_BLOCK_KEY, String(_lockBlockedUntil)); } catch { /* sin storage */ }
+  _lockRunCooldownTimer();
+}
+
+function showLockScreen() {
+  document.documentElement.classList.add('is-locked');
+  const inp = $('lockPass');
+  if (inp) { inp.value = ''; setTimeout(() => { try { inp.focus(); } catch { /* ok */ } }, 60); }
+}
+function hideLockScreen() { document.documentElement.classList.remove('is-locked'); }
+
+async function _lockTrySubmit() {
+  if (Date.now() < _lockBlockedUntil) return;          // en enfriamiento
+  const inp = $('lockPass');
+  const pw = inp ? inp.value : '';
+  if (!pw) { _lockErr('Escribe tu contraseña.'); return; }
+  let ok = false;
+  try { ok = await lockVerify(pw); } catch { ok = false; }
+  if (ok) {
+    _lockFails = 0;
+    try { sessionStorage.removeItem(LOCK_BLOCK_KEY); } catch { /* sin storage */ }
+    lockMarkUnlocked();
+    _lockErr('');
+    if (inp) inp.value = '';
+    hideLockScreen();
+  } else {
+    _lockFails++;
+    if (inp) { inp.value = ''; inp.focus(); }
+    if (_lockFails >= LOCK_MAX_FAILS) _lockStartCooldown();
+    else {
+      const left = LOCK_MAX_FAILS - _lockFails;
+      _lockErr(`Contraseña incorrecta. Te queda${left === 1 ? '' : 'n'} ${left} intento${left === 1 ? '' : 's'}.`);
+    }
+  }
+}
+
+function initLock() {
+  const form = $('lockForm');
+  if (form && !form.dataset.wired) {
+    form.dataset.wired = '1';
+    form.addEventListener('submit', (e) => { e.preventDefault(); _lockTrySubmit(); });
+  }
+  if (lockConfigured() && !lockIsUnlocked()) {
+    // reanudar el enfriamiento si veníamos bloqueados (recarga durante el bloqueo)
+    let until = 0; try { until = Number(sessionStorage.getItem(LOCK_BLOCK_KEY)) || 0; } catch { until = 0; }
+    if (until > Date.now()) { _lockFails = LOCK_MAX_FAILS; _lockBlockedUntil = until; _lockRunCooldownTimer(); }
+    showLockScreen();
+  } else {
+    hideLockScreen();
+  }
+}
+
+/* ---------------- ⚙ Báscula → 🔒 Seguridad (ajustes) ---------------- */
+function secResult(cls, text) {
+  const res = $('secResult');
+  if (!res) return;
+  res.className = 'test-result show' + (cls ? ' ' + cls : '');
+  res.textContent = text;
+}
+function _secHideForms() {
+  for (const id of ['secSetup', 'secChange', 'secRemove']) { if ($(id)) $(id).hidden = true; }
+}
+function _secClearInputs() {
+  for (const id of ['secNew1', 'secNew2', 'secCurCh', 'secNewCh1', 'secNewCh2', 'secCurRm']) {
+    if ($(id)) $(id).value = '';
+  }
+}
+function refreshSecBox() {
+  const has = lockConfigured();
+  _secHideForms();
+  _secClearInputs();
+  if ($('secResult')) { $('secResult').className = 'test-result'; $('secResult').textContent = ''; }
+  if ($('secProtegerRow')) $('secProtegerRow').hidden = has;
+  if ($('secManage')) $('secManage').hidden = !has;
+  if ($('secEstado')) {
+    $('secEstado').innerHTML = has
+      ? '🔒 La app <b>pide contraseña</b> al abrir en este dispositivo.'
+      : 'La app abre <b>sin contraseña</b>. Puedes protegerla para que pida una clave al abrir.';
+  }
+}
+function initSecUI() {
+  const box = $('secBox');
+  if (box && !box.dataset.wired) {
+    box.dataset.wired = '1';
+    box.addEventListener('toggle', () => { if (box.open) refreshSecBox(); });
+
+    // proteger (crear contraseña)
+    $('bSecProteger').onclick = () => { _secHideForms(); $('secSetup').hidden = false; $('secProtegerRow').hidden = true; try { $('secNew1').focus(); } catch { /* ok */ } };
+    $('bSecCancel1').onclick = () => refreshSecBox();
+    $('bSecGuardar').onclick = async () => {
+      const p1 = $('secNew1').value, p2 = $('secNew2').value;
+      if (p1.length < 4) return secResult('fail', 'La contraseña debe tener al menos 4 caracteres.');
+      if (p1 !== p2) return secResult('fail', 'Las dos contraseñas no coinciden. Escríbelas igual.');
+      await lockSetPassword(p1);
+      lockMarkUnlocked();   // no te bloquees ahora mismo; pedirá al reabrir la app
+      refreshSecBox();
+      secResult('ok', '🔒 Contraseña activada. La app la pedirá la próxima vez que se abra.');
+    };
+
+    // cambiar contraseña
+    $('bSecCambiar').onclick = () => { _secHideForms(); $('secChange').hidden = false; $('secManage').hidden = true; try { $('secCurCh').focus(); } catch { /* ok */ } };
+    $('bSecChCancel').onclick = () => refreshSecBox();
+    $('bSecChSave').onclick = async () => {
+      const cur = $('secCurCh').value, n1 = $('secNewCh1').value, n2 = $('secNewCh2').value;
+      if (!(await lockVerify(cur))) return secResult('fail', 'La contraseña actual no es correcta.');
+      if (n1.length < 4) return secResult('fail', 'La nueva contraseña debe tener al menos 4 caracteres.');
+      if (n1 !== n2) return secResult('fail', 'Las dos contraseñas nuevas no coinciden.');
+      await lockSetPassword(n1);
+      lockMarkUnlocked();
+      refreshSecBox();
+      secResult('ok', 'Contraseña actualizada ✓');
+    };
+
+    // quitar contraseña
+    $('bSecQuitar').onclick = () => { _secHideForms(); $('secRemove').hidden = false; $('secManage').hidden = true; try { $('secCurRm').focus(); } catch { /* ok */ } };
+    $('bSecRmCancel').onclick = () => refreshSecBox();
+    $('bSecRmSave').onclick = async () => {
+      const cur = $('secCurRm').value;
+      if (!(await lockVerify(cur))) return secResult('fail', 'La contraseña no es correcta.');
+      lockClear();
+      try { sessionStorage.removeItem(LOCK_SESSION_KEY); } catch { /* sin storage */ }
+      refreshSecBox();
+      secResult('ok', 'Candado quitado — la app volverá a abrir sin contraseña.');
+    };
+  }
+  refreshSecBox();
+}
+
+/* ============================================================
    ARRANQUE
    ============================================================ */
 (function init() {
+  initLock();
   // PWA
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

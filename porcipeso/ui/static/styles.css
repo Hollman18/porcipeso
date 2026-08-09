@@ -605,3 +605,43 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
   border-radius:10px;background:var(--bg);color:var(--ink)}
 .q-manual button{font-size:15px;font-weight:700;padding:10px 14px;border:none;
   border-radius:10px;background:var(--accent,#178A50);color:#fff;cursor:pointer}
+
+/* ============================================================
+   🔒 CANDADO DE ACCESO — pantalla de bloqueo + ajustes de seguridad
+   Overlay opcional (apagado por defecto). Con html.is-locked se oculta
+   la app y se muestra la pantalla de bloqueo a pantalla completa.
+   ============================================================ */
+.lockscreen{display:none}
+html.is-locked .appshell{display:none !important}
+html.is-locked .lockscreen{display:flex}
+.lockscreen{position:fixed;inset:0;z-index:9999;
+  align-items:center;justify-content:center;padding:24px;
+  background:var(--surface);
+  /* respeta notch/safe-area en móvil */
+  padding-top:calc(24px + env(safe-area-inset-top));
+  padding-bottom:calc(24px + env(safe-area-inset-bottom));
+  animation:viewin .2s ease}
+@media (prefers-reduced-motion: reduce){.lockscreen{animation:none}}
+.lockcard{width:100%;max-width:420px;background:var(--card);
+  border:1px solid var(--border);border-radius:20px;
+  box-shadow:0 20px 60px rgba(0,0,0,.18);padding:30px 26px;
+  display:flex;flex-direction:column;gap:14px;text-align:center}
+@media (max-width:480px){.lockcard{padding:24px 20px}}
+.lock-brand{display:flex;gap:12px;align-items:center;justify-content:center;margin-bottom:4px}
+.lock-brand .pig{font-size:40px;line-height:1}
+.lock-brand b{font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;
+  font-size:24px;text-transform:uppercase;display:block;line-height:1.05;text-align:left}
+.lock-brand .eleia-line{display:block;font-size:11px;text-align:left}
+.lock-title{margin:2px 0 0;font-size:24px;text-transform:uppercase}
+.lock-sub{margin:0;color:var(--muted);font-size:15px}
+.lock-form{display:flex;flex-direction:column;gap:12px;margin-top:6px}
+.lock-input{font-size:18px;min-height:60px;text-align:center;
+  border:1px solid var(--border);border-radius:14px;padding:14px 16px;
+  background:var(--surface);color:var(--ink)}
+.lock-error{margin:0}
+.lock-error.show{display:block}
+.lock-btn{min-height:60px;font-size:18px}
+
+/* ajustes de seguridad (sección ⚙ Báscula → 🔒 Seguridad) */
+.sec-form{display:flex;flex-direction:column;gap:12px}
+.sec-hint{font-weight:400;color:var(--muted)}
