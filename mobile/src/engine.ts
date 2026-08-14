@@ -153,6 +153,31 @@ export class WeighingEngine {
     this.setState("movimiento");
   }
 
+  /**
+   * Fija MANUALMENTE el peso de referencia del cerdo de prueba (espejo de
+   * engine.py:set_reference). El operario escribe el peso conocido (ej. 1.5)
+   * y el motor lo toma como referencia sin depender del umbral automático:
+   * ref = avg = kg, conteo en 0, y pasa directo a fase "lote". Emite un
+   * evento REFERENCIA auditado (confirmado_por="manual"). Solo aplica en modo
+   * lote y con sesión abierta.
+   */
+  setReference(kg: number): WeighEvent | null {
+    if (this.sessionId === null || this.modo !== "lote" || kg <= 0) return null;
+    this.refKg = kg;
+    this.avgKg = kg;
+    this.count = 0;
+    this.totalKg = 0.0;
+    // base del lote = nivel vacío actual (o 0 si aún no hay uno)
+    this.baseline = this.calibBase !== null ? this.calibBase : 0.0;
+    this.calibCandidate = null;
+    this.fase = FASE_LOTE;
+    const ts = this.lastTsMs ?? 0;
+    const ev = this.newEvent(ts, 0.0, kg, kg, 1, "referencia", 0);
+    ev.confirmado_por = "manual";
+    this.onEvent(ev);
+    return ev;
+  }
+
   confirm(eventId: number, n: number): WeighEvent | null {
     const ev = this.pending.get(eventId);
     if (ev === undefined || n < 1) return null;
@@ -261,7 +286,7 @@ export class WeighingEngine {
     const rel = level - this.calibBase;
     const cand = this.calibCandidate;
 
-    if (cand !== null && (rel < cfg.min_delta_kg || rel < EMPTY_FRACTION * cand)) {
+    if (cand !== null && (rel < cfg.min_ref_kg || rel < EMPTY_FRACTION * cand)) {
       // casi vacío: el cerdo de prueba se bajó → calibración lista.
       // Su bajada NO es evento BAJADA; se emite UN evento REFERENCIA
       // semánticamente "el cerdo de prueba pesó cand".
@@ -277,7 +302,7 @@ export class WeighingEngine {
       return;
     }
 
-    if (rel < cfg.min_delta_kg) {
+    if (rel < cfg.min_ref_kg) {
       return; // sigue vacío (o vibración): aún no sube el de prueba
     }
 

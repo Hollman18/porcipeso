@@ -418,6 +418,28 @@ class Repo:
         self.vacuum()
         return result
 
+    def delete_session(self, session_id: int) -> int:
+        """Borra UN lote (sesión) con sus eventos y lecturas crudas en
+        cascada, dentro de una sola transacción. Retorna cuántos eventos
+        borró. Idempotente: si la sesión no existe retorna 0 sin fallar.
+
+        No mira el estado: la regla "no borrar un pesaje abierto" vive en
+        el endpoint (DELETE /api/sessions/{id} → 409), no aquí.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM sesiones WHERE id = ?", (session_id,)
+            ).fetchone()
+            if row is None:
+                return 0
+            (n_eventos,) = self._conn.execute(
+                "SELECT COUNT(*) FROM eventos_pesaje WHERE sesion_id = ?",
+                (session_id,),
+            ).fetchone()
+            self._purge_sessions_locked([session_id])
+        self.vacuum()
+        return int(n_eventos)
+
     def _purge_sessions_locked(self, ids: list[int]) -> None:
         """Borra sesiones con sus eventos y lecturas (lock YA tomado)."""
         marks = ",".join("?" * len(ids)) or "NULL"

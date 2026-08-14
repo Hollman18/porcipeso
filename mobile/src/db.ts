@@ -558,6 +558,22 @@ export class Repo {
     return result;
   }
 
+  /**
+   * Borra UN lote (sesión) con sus eventos y lecturas crudas en cascada
+   * — espejo de repo.delete_session. Retorna cuántos eventos borró.
+   * Idempotente: si la sesión no existe retorna 0 sin fallar. No mira el
+   * estado (la regla "no borrar abierta" vive en el endpoint → 409).
+   */
+  async deleteSession(sessionId: number): Promise<number> {
+    const session = await this.getSession(sessionId);
+    if (session === null) return 0;
+    const nEventos = Number(
+      await this.scalar("SELECT COUNT(*) FROM eventos_pesaje WHERE sesion_id = ?", [sessionId]),
+    );
+    await this.purgeSessions([sessionId]);
+    return nEventos;
+  }
+
   /** Borra sesiones con sus eventos, lecturas y pendientes de sync. */
   private async purgeSessions(ids: number[]): Promise<void> {
     const marks = ids.map(() => "?").join(",") || "NULL";

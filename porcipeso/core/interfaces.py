@@ -69,6 +69,12 @@ class Engine(ABC):
         motores que no lo soporten; WeighingEngine lo implementa."""
         return None
 
+    def set_reference(self, kg: float) -> Optional[WeighEvent]:
+        """Fija a mano el peso de referencia del cerdo de prueba (kg > 0).
+        Default no-op para motores que no lo soporten; WeighingEngine lo
+        implementa (ref = avg = kg, conteo 0, fase → 'lote')."""
+        return None
+
     @abstractmethod
     def snapshot(self) -> EngineSnapshot: ...
 

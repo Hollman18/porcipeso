@@ -1,8 +1,14 @@
-"""E2E de la ACTIVACIÓN POR DISPOSITIVO (gate principal) en la UI real.
+"""E2E de la ACTIVACIÓN POR DISPOSITIVO en la UI real.
+
+Por defecto el gate está APAGADO (el cliente quiere que la app abra directo):
+`test_por_defecto_abre_directo_sin_activacion` lo verifica. El resto de tests
+ENCIENDE el flag `porcipeso_requiere_activacion` para seguir cubriendo la
+lógica del gate (que se conserva íntegra para reactivarla al vender con nube).
 
 Cubre (Playwright + FastAPI real):
-  1. Sin licencia: la app está BLOQUEADA -> se ve la pantalla de activación con
-     el CÓDIGO DE DISPOSITIVO grande; la app (appshell) no se ve.
+  0. Por defecto (sin flag): la app abre directo, sin pantalla de activación.
+  1. Con el flag y sin licencia: la app está BLOQUEADA -> se ve la pantalla de
+     activación con el CÓDIGO DE DISPOSITIVO grande; la app (appshell) no se ve.
   2. El código mostrado coincide con keygen.device_code(deviceId) del equipo.
   3. Llave incorrecta -> error claro y sigue bloqueada.
   4. Llave correcta (calculada en el test con el secreto vía keygen) -> activa y
@@ -33,6 +39,15 @@ from porcipeso.licensing import keygen  # noqa: E402
 
 EXPECT = pw.expect
 _EMITTER_HTML = Path(__file__).resolve().parents[2] / "packaging" / "emitir_llave.html"
+
+# Desde que el cliente pidió "que abra directo" (sin muros), la ACTIVACIÓN POR
+# DISPOSITIVO queda APAGADA por defecto: la app arranca sin pantalla de
+# activación. El núcleo de licencia sigue intacto y se puede reactivar con el
+# flag localStorage 'porcipeso_requiere_activacion'. Estos tests encienden el
+# flag para seguir cubriendo la lógica del gate cuando se reactive.
+_REQUIRE_ACT_JS = (
+    "try{localStorage.setItem('porcipeso_requiere_activacion','1')}catch(e){}"
+)
 
 
 # ------------------------------------------------------------- infraestructura
@@ -91,9 +106,19 @@ def _is_unactivated(page) -> bool:
 
 # --------------------------------------------------------------------- tests
 
+def test_por_defecto_abre_directo_sin_activacion(page, server_url):
+    """NUEVO DEFAULT: sin el flag, la app abre directo (sin pantalla de
+    activación) aunque no haya licencia — se descarga, se instala y abre."""
+    page.goto(server_url + "/")
+    EXPECT(page.locator("#pvHome")).to_be_visible()
+    EXPECT(page.locator("#activationScreen")).to_be_hidden()
+    assert not _is_unactivated(page)
+
+
 def test_sin_licencia_bloquea_y_muestra_codigo(page, server_url):
-    """(1)(2) Sin licencia la app está bloqueada; se ve la pantalla de
-    activación con el código, y el código coincide con keygen."""
+    """(1)(2) Con el gate ENCENDIDO (flag): sin licencia la app está bloqueada;
+    se ve la pantalla de activación con el código, y coincide con keygen."""
+    page.add_init_script(_REQUIRE_ACT_JS)
     page.goto(server_url + "/")
     EXPECT(page.locator("#activationScreen")).to_be_visible()
     EXPECT(page.locator("#actTitle")).to_contain_text("Activa tu PorciPeso")
@@ -107,8 +132,9 @@ def test_sin_licencia_bloquea_y_muestra_codigo(page, server_url):
 
 
 def test_flujo_completo_activacion(page, server_url):
-    """(3)(4)(5) Llave mala -> error; llave correcta -> activa y desbloquea;
-    recargar sigue activa."""
+    """(3)(4)(5) Con el gate ENCENDIDO: llave mala -> error; llave correcta ->
+    activa y desbloquea; recargar sigue activa."""
+    page.add_init_script(_REQUIRE_ACT_JS)
     page.goto(server_url + "/")
     EXPECT(page.locator("#activationScreen")).to_be_visible()
     dev = _device_id(page)
@@ -139,7 +165,8 @@ def test_flujo_completo_activacion(page, server_url):
 
 
 def test_llave_de_otro_equipo_no_activa(page, server_url):
-    """La llave de OTRO deviceId no sirve en este equipo."""
+    """Con el gate ENCENDIDO: la llave de OTRO deviceId no sirve en este equipo."""
+    page.add_init_script(_REQUIRE_ACT_JS)
     page.goto(server_url + "/")
     ajena = keygen.activation_key("otro-telefono-distinto-999")
     page.fill("#actKey", ajena)
@@ -149,7 +176,9 @@ def test_llave_de_otro_equipo_no_activa(page, server_url):
 
 
 def test_rate_limit_tras_cinco_fallos(page, server_url):
-    """Rate limit suave: tras 5 intentos fallidos se bloquea el input."""
+    """Con el gate ENCENDIDO: rate limit suave: tras 5 intentos fallidos se
+    bloquea el input."""
+    page.add_init_script(_REQUIRE_ACT_JS)
     page.goto(server_url + "/")
     EXPECT(page.locator("#activationScreen")).to_be_visible()
     for _ in range(5):
@@ -161,8 +190,10 @@ def test_rate_limit_tras_cinco_fallos(page, server_url):
 
 
 def test_convivencia_con_candado_de_contrasena(page, server_url):
-    """(6) Activación primero, contraseña opcional después: con ambas puestas,
-    al reabrir se pide la contraseña (ya activada, no re-pide llave)."""
+    """(6) Con el gate ENCENDIDO: activación primero, contraseña opcional
+    después: con ambas puestas, al reabrir se pide la contraseña (ya activada,
+    no re-pide llave)."""
+    page.add_init_script(_REQUIRE_ACT_JS)
     # activar
     page.goto(server_url + "/")
     dev = _device_id(page)

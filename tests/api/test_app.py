@@ -95,6 +95,32 @@ def test_devueltos_manual_endpoint(ctx):
     assert len(aj) == 1 and aj[0]["motivo_bajada"] == "devuelto_manual"
 
 
+def test_referencia_manual_endpoint(ctx):
+    """POST /api/session/reference fija a mano la referencia del cerdo de
+    prueba (ref=avg=kg, fase→lote) y persiste un evento REFERENCIA manual;
+    400 si kg<=0, 409 sin sesión activa."""
+    client, holder = ctx
+    # sin sesión activa → 409
+    assert client.post("/api/session/reference", json={"kg": 1.5}).status_code == 409
+    session = _open_session(client)
+    sid = session["id"]
+    # kg<=0 → 400
+    assert client.post("/api/session/reference", json={"kg": 0}).status_code == 400
+    assert client.post("/api/session/reference", json={"kg": -3}).status_code == 400
+    # fija la referencia con un peso pequeño (2 kg)
+    r = client.post("/api/session/reference", json={"kg": 2.0})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["ref_kg"] == pytest.approx(2.0)
+    assert body["fase"] == "lote"
+    # quedó un evento REFERENCIA manual persistido
+    evs = client.get(f"/api/sessions/{sid}/events").json()
+    refs = [e for e in evs if e["tipo"] == "referencia"]
+    assert len(refs) == 1 and refs[0]["confirmado_por"] == "manual"
+    assert refs[0]["delta_kg"] == pytest.approx(2.0)
+
+
 # --------------------------------------------------------------- ciclo completo
 
 def test_ciclo_completo(ctx):

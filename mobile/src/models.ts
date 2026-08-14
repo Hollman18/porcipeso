@@ -52,6 +52,10 @@ export interface EngineConfig {
   window_readings: number; // 2 s @ 10 Hz
   stability_range_kg: number; // max-min dentro de la ventana
   min_delta_kg: number; // escalón mínimo para ser evento
+  // peso mínimo (kg) para CAPTURAR la referencia del cerdo de prueba —
+  // antes se exigían 40 kg (min_delta) y no tomaba pesos pequeños; ahora
+  // desde 1 kg apenas la báscula se estabiliza. Separado del umbral de conteo.
+  min_ref_kg: number;
   tolerance: number; // residuo máximo antes de marcar ambiguo
   no_signal_after_s: number; // watchdog SIN_SENAL
 }
@@ -60,6 +64,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   window_readings: 20,
   stability_range_kg: 2.0,
   min_delta_kg: 40.0,
+  min_ref_kg: 1.0,
   tolerance: 0.2,
   no_signal_after_s: 3.0,
 };

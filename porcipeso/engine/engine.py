@@ -164,6 +164,30 @@ class WeighingEngine(Engine):
         self._movement_start_ts = self._last_ts_ms
         self._set_state(EngineState.MOVIMIENTO)
 
+    def set_reference(self, kg: float) -> Optional[WeighEvent]:
+        """Fija MANUALMENTE el peso de referencia del cerdo de prueba.
+
+        El operario escribe el peso conocido (ej. 1.5) y el motor lo toma
+        como referencia sin depender del umbral automático: ref = avg = kg,
+        conteo en 0, y pasa directo a fase "lote". Emite un evento REFERENCIA
+        auditado. Solo aplica en modo lote y con sesión abierta.
+        """
+        if self._session_id is None or self._modo != "lote" or kg <= 0:
+            return None
+        self._ref_kg = kg
+        self._avg_kg = kg
+        self._count = 0
+        self._total_kg = 0.0
+        # base del lote = nivel vacío actual (o 0 si aún no hay uno)
+        self._baseline = self._calib_base if self._calib_base is not None else 0.0
+        self._calib_candidate = None
+        self._fase = FASE_LOTE
+        ts = self._last_ts_ms or 0
+        ev = self._new_event(ts, 0.0, kg, kg, 1, EventType.REFERENCIA, 0)
+        ev.confirmado_por = "manual"
+        self._on_event(ev)
+        return ev
+
     def confirm(self, event_id: int, n: int) -> Optional[WeighEvent]:
         ev = self._pending.get(event_id)
         if ev is None or n < 1:
@@ -262,7 +286,7 @@ class WeighingEngine(Engine):
         cand = self._calib_candidate
 
         if cand is not None and (
-            rel < cfg.min_delta_kg or rel < EMPTY_FRACTION * cand
+            rel < cfg.min_ref_kg or rel < EMPTY_FRACTION * cand
         ):
             # casi vacío: el cerdo de prueba se bajó → calibración lista.
             # Su bajada NO es evento BAJADA; se emite UN evento REFERENCIA
@@ -279,7 +303,7 @@ class WeighingEngine(Engine):
             self._on_event(ev)
             return
 
-        if rel < cfg.min_delta_kg:
+        if rel < cfg.min_ref_kg:
             return  # sigue vacío (o vibración): aún no sube el de prueba
 
         if cand is None:

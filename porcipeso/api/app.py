@@ -145,6 +145,13 @@ class ReturnedBody(BaseModel):
     n: int
 
 
+class ReferenceBody(BaseModel):
+    """Referencia MANUAL del cerdo de prueba: el operario escribe el peso
+    conocido (kg > 0) y el motor lo fija como referencia sin esperar al
+    umbral automático (engine.set_reference). Solo aplica en modo lote."""
+    kg: float
+
+
 class LimpiarBody(BaseModel):
     """🧹 Liberar espacio: 'lecturas' (siempre seguro) o 'pesajes' cerrados
     anteriores a una fecha (irreversible; dry_run cuenta sin borrar)."""
@@ -568,6 +575,21 @@ def create_app(
             raise HTTPException(404, "sesión no encontrada")
         return session
 
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: int) -> dict[str, Any]:
+        """Elimina un lote (sesión) con sus eventos y lecturas crudas en
+        cascada. 404 si no existe; 409 si está ABIERTA (hay que cerrar el
+        pesaje antes de borrarlo). Las sesiones DEMO se borran igual. Un
+        pesaje cerrado nunca es el activo del motor, así que no hay estado
+        vivo que tocar."""
+        session = repo.get_session(session_id)
+        if session is None:
+            raise HTTPException(404, "sesión no encontrada")
+        if session["estado"] == "abierta":
+            raise HTTPException(409, "cierra el pesaje antes de borrarlo")
+        n_eventos = repo.delete_session(session_id)
+        return {"deleted": True, "id": session_id, "eventos": n_eventos}
+
     @app.post("/api/sessions/{session_id}/close")
     def close_session(session_id: int, body: CloseBody) -> dict[str, Any]:
         session = repo.get_session(session_id)
@@ -644,6 +666,24 @@ def create_app(
         snap = _snapshot_dict(st.engine.snapshot())
         return {"ok": True, "descontados": ev.animales_confirmados,
                 "count": snap["count"], "total_kg": snap["total_kg"]}
+
+    @app.post("/api/session/reference")
+    def session_reference(body: ReferenceBody) -> dict[str, Any]:
+        """Fija a mano el peso del cerdo de prueba en la sesión activa. El
+        evento REFERENCIA (confirmado_por='manual') lo persiste y difunde el
+        wiring on_engine_event; aquí solo validamos y devolvemos el estado."""
+        if body.kg <= 0:
+            raise HTTPException(400, "kg debe ser > 0")
+        if st.engine is None or st.current_session_id is None:
+            raise HTTPException(409, "no hay un pesaje activo")
+        ev = st.engine.set_reference(body.kg)
+        if ev is None:
+            raise HTTPException(
+                409, "no se pudo fijar la referencia (¿la sesión es modo lote?)"
+            )
+        snap = _snapshot_dict(st.engine.snapshot())
+        return {"ok": True, "ref_kg": snap["ref_kg"],
+                "fase": snap.get("fase", "lote")}
 
     @app.get("/api/sessions/{session_id}/stats")
     def session_stats(session_id: int) -> dict[str, Any]:

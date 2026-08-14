@@ -483,6 +483,9 @@ export class LocalBackend {
       const session = await this.repo.getSession(Number(m[1]));
       return session === null ? err(404, "sesión no encontrada") : ok(session);
     }
+    if ((m = /^\/api\/sessions\/(\d+)$/.exec(path)) && method === "DELETE") {
+      return this.deleteSession(Number(m[1]));
+    }
     if ((m = /^\/api\/sessions\/(\d+)\/close$/.exec(path)) && method === "POST") {
       return this.closeSession(Number(m[1]), body);
     }
@@ -509,6 +512,9 @@ export class LocalBackend {
     }
     if (method === "POST" && path === "/api/session/returned") {
       return this.sessionReturned(body);
+    }
+    if (method === "POST" && path === "/api/session/reference") {
+      return this.sessionReference(body);
     }
     if ((m = /^\/api\/events\/(\d+)\/confirm$/.exec(path)) && method === "POST") {
       return this.confirmEvent(Number(m[1]), body);
@@ -998,6 +1004,23 @@ export class LocalBackend {
     return ok(closed);
   }
 
+  /**
+   * Elimina un lote (sesión) con sus eventos y lecturas en cascada —
+   * espejo de app.py:delete_session. 404 si no existe; 409 si está
+   * ABIERTA (cierra el pesaje antes de borrarlo). Las DEMO se borran
+   * igual. Un pesaje cerrado nunca es el activo del motor.
+   */
+  private async deleteSession(sessionId: number): Promise<JsonResponse> {
+    await this.flush(); // persistir escrituras en vuelo antes de borrar
+    const session = await this.repo.getSession(sessionId);
+    if (session === null) return err(404, "sesión no encontrada");
+    if (session["estado"] === "abierta") {
+      return err(409, "cierra el pesaje antes de borrarlo");
+    }
+    const nEventos = await this.repo.deleteSession(sessionId);
+    return ok({ deleted: true, id: sessionId, eventos: nEventos });
+  }
+
   private async sessionReturned(body: Record<string, unknown>): Promise<JsonResponse> {
     const n = Number(body["n"]);
     if (!Number.isInteger(n) || n < 1) return err(400, "n debe ser ≥ 1");
@@ -1013,6 +1036,27 @@ export class LocalBackend {
       descontados: ev.animales_confirmados,
       count: snap["count"],
       total_kg: snap["total_kg"],
+    });
+  }
+
+  /** Referencia MANUAL del cerdo de prueba (espejo de app.py:session_reference).
+   *  El evento REFERENCIA (confirmado_por="manual") se persiste vía onEvent. */
+  private async sessionReference(body: Record<string, unknown>): Promise<JsonResponse> {
+    const kg = Number(body["kg"]);
+    if (!Number.isFinite(kg) || kg <= 0) return err(400, "kg debe ser > 0");
+    if (this.engine === null || this.currentSessionId === null) {
+      return err(409, "no hay un pesaje activo");
+    }
+    const ev = this.engine.setReference(kg);
+    if (ev === null) {
+      return err(409, "no se pudo fijar la referencia (¿la sesión es modo lote?)");
+    }
+    await this.flush(); // el evento REFERENCIA se persiste vía onEvent
+    const snap = this.snapshotDict(this.engine.snapshot());
+    return ok({
+      ok: true,
+      ref_kg: snap["ref_kg"],
+      fase: snap["fase"] ?? "lote",
     });
   }
 

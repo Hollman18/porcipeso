@@ -76,6 +76,20 @@ class FakeEngine(Engine):
         self.on_event(ev)
         return ev
 
+    def set_reference(self, kg: float) -> Optional[WeighEvent]:
+        if self.session_id is None or self.modo != "lote" or kg <= 0:
+            return None
+        self.set_snapshot(ref_kg=kg, avg_kg=kg, count=0, total_kg=0.0,
+                          fase="lote")
+        ev = WeighEvent(
+            id=None, session_id=self.session_id, ts_ms=1,
+            peso_antes=0.0, peso_despues=kg, delta_kg=kg,
+            animales_estimados=1, tipo=EventType.REFERENCIA,
+            confirmado_por="manual",
+        )
+        self.on_event(ev)
+        return ev
+
     def snapshot(self) -> EngineSnapshot:
         return self._snapshot
 

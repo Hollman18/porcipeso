@@ -518,9 +518,11 @@ function startWeighing(nombre) {
   if (APP.mode === 'unidades') {
     setGuide('🐷 De a <b>UN</b> cerdo a la vez — yo llevo la cuenta');
     say('Sube un cerdo a la báscula', 'calm');
+    showManualRef(false);
   } else {
     setStep(1);
     say('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
+    showManualRef(true);  // peso a mano disponible durante la calibración
   }
   refreshSimUi();
   setSubview('modPesaje', 'pvWeigh');
@@ -545,17 +547,56 @@ function applyFase(fase, src) {
   if (fase === 'calibracion') {
     setStep(1);
     say('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
+    showManualRef(true);
   } else if (fase === 'bajar_prueba') {
     setGuide(`✓ Cerdo de prueba: <b>${fmt(ref, 0)} kg</b> — ahora bájalo de la báscula`);
     say(`✓ Cerdo de prueba: ${fmt(ref, 0)} kg — ahora bájalo de la báscula`, 'calm', 4000);
+    showManualRef(true);
   } else if (fase === 'lote') {
     setStep(2, ref);
+    showManualRef(false);
     if (!APP.loteAnnounced) {
       APP.loteAnnounced = true;
       say('¡Listo! Ya puedes subir TODO el lote 🎉', 'calm', 6000);
     }
   } else if (fase === 'unidades') {
     setGuide('🐷 De a <b>UN</b> cerdo a la vez — yo llevo la cuenta');
+    showManualRef(false);
+  }
+}
+
+/* ---------------- referencia a mano (peso del cerdo de prueba) ----------------
+   Si la báscula no toma sola el peso de calibración, el operario lo escribe
+   y POST /api/session/reference lo fija. La app pasa a fase "lote". */
+function showManualRef(show) {
+  const box = $('manualRef');
+  if (!box) return;
+  box.hidden = !show;
+  if (!show) {
+    if ($('manualRefForm')) $('manualRefForm').hidden = true;
+    if ($('inpManualRef')) $('inpManualRef').value = '';
+  }
+}
+
+async function usarPesoManual() {
+  const raw = ($('inpManualRef')?.value || '').replace(',', '.').trim();
+  const kg = Number(raw);
+  if (!Number.isFinite(kg) || kg <= 0) {
+    say('Escribe un peso mayor que 0 (por ejemplo 1.5)', 'alert', 3500);
+    try { $('inpManualRef')?.focus(); } catch { /* ok */ }
+    return;
+  }
+  try {
+    const r = await apiJson('/api/session/reference', { method: 'POST', body: { kg } });
+    APP.refKg = r?.ref_kg ?? kg;
+    APP.candKg = APP.refKg;
+    showManualRef(false);
+    // el backend ya pasó a fase lote; forzamos la narración/guía localmente
+    // (los mensajes de WS que lleguen después ya no la pisan: fase === APP.fase)
+    applyFase('lote', { ref_kg: APP.refKg, fase: 'lote' });
+    say(`Referencia: ${fmt(APP.refKg, 1)} kg (manual) — ya puedes subir el lote`, 'calm', 6000);
+  } catch (e) {
+    say('No pude fijar la referencia — revisa que haya un pesaje abierto', 'alert', 4000);
   }
 }
 
@@ -877,6 +918,22 @@ $('bReturned').onclick = async () => {
   } finally { $('bReturned').disabled = false; }
 };
 
+/* ---------------- referencia a mano (wiring) ---------------- */
+if ($('bManualRefToggle')) {
+  $('bManualRefToggle').onclick = () => {
+    const f = $('manualRefForm');
+    if (!f) return;
+    f.hidden = !f.hidden;
+    if (!f.hidden) { try { $('inpManualRef').focus(); } catch { /* ok */ } }
+  };
+}
+if ($('bManualRef')) $('bManualRef').onclick = usarPesoManual;
+if ($('inpManualRef')) {
+  $('inpManualRef').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); usarPesoManual(); }
+  });
+}
+
 /* ---------------- terminar ---------------- */
 $('bTerminar').onclick = async () => {
   if (!APP.session?.id) { setSubview('modPesaje', 'pvHome'); return; }
@@ -1186,6 +1243,45 @@ $('bExportPdfDatos').onclick = () => {
 $('bExportDatos').onclick = () => {
   if (APP.datosDetailId != null) window.open(`/api/sessions/${APP.datosDetailId}/export.xlsx`, '_blank');
 };
+
+/* ---------------- eliminar lote (borrado en cascada) ----------------
+   Botón rojo discreto en el detalle → confirmación doble clara (nombre del
+   lote + cuántos movimientos se pierden) → DELETE /api/sessions/{id} →
+   vuelve a la lista de Datos y refresca. Las sesiones DEMO se borran igual;
+   un pesaje ABIERTO responde 409 (hay que cerrarlo antes). */
+if ($('bDeleteLote')) {
+  $('bDeleteLote').onclick = () => {
+    if (APP.datosDetailId == null) return;
+    const nombre = $('dNombre').textContent || `Pesaje ${APP.datosDetailId}`;
+    const n = $('dMoves').querySelectorAll('.mv').length;
+    $('delLoteMsg').innerHTML =
+      `Vas a borrar el lote <b>«${escapeHtml(nombre)}»</b> con sus ${n} ` +
+      `movimiento${n === 1 ? '' : 's'}. <b>Esto no se puede deshacer.</b>`;
+    $('bDelLoteConfirm').disabled = false;
+    try { $('dlgDelLote').showModal(); } catch { /* ya abierto */ }
+  };
+}
+if ($('bDelLoteCancel')) $('bDelLoteCancel').onclick = () => $('dlgDelLote').close();
+if ($('bDelLoteConfirm')) {
+  $('bDelLoteConfirm').onclick = async () => {
+    const id = APP.datosDetailId;
+    if (id == null) { $('dlgDelLote').close(); return; }
+    $('bDelLoteConfirm').disabled = true;
+    try {
+      await apiJson(`/api/sessions/${id}`, { method: 'DELETE' });
+      uniCache.delete(id);
+      APP.datosDetailId = null;
+      $('dlgDelLote').close();
+      setSubview('modDatos', 'dvList');
+      await refreshDatos();
+    } catch (e) {
+      // conserva el diálogo abierto y explica el motivo (ej. 409 abierta)
+      $('delLoteMsg').innerHTML =
+        `No pude borrar el lote: ${escapeHtml(e?.message ?? 'error')}`;
+      $('bDelLoteConfirm').disabled = false;
+    }
+  };
+}
 
 /* ============================================================
    MÓDULO BÁSCULA — INICIO: TARJETA DE ESTADO
@@ -2704,6 +2800,24 @@ const LIC_BLOCK_KEY = 'porcipeso_act_block';  // enfriamiento por intentos falli
 const LIC_MAX_FAILS = 5;
 const LIC_COOLDOWN_MS = 15000;
 
+/* FLAG — activación por dispositivo APAGADA por defecto.
+   El cliente quiere que la app abra directo (se descarga, se instala y abre
+   sin contraseña ni activación). El NÚCLEO de licencia (HMAC, keygen,
+   emitir_llave.html) se conserva íntegro para reactivarlo cuando se venda con
+   la nube: pon REQUIERE_ACTIVACION=true, o enciéndelo en runtime con
+   localStorage.setItem('porcipeso_requiere_activacion','1'). Con el gate
+   apagado la pantalla #activationScreen NO aparece y la app arranca normal. */
+const REQUIERE_ACTIVACION = false;
+const LIC_REQUIRE_KEY = 'porcipeso_requiere_activacion';
+function licActivationRequired() {
+  try {
+    const v = localStorage.getItem(LIC_REQUIRE_KEY);
+    if (v === '1' || v === 'true') return true;
+    if (v === '0' || v === 'false') return false;
+  } catch { /* sin storage: usa la constante */ }
+  return REQUIERE_ACTIVACION;
+}
+
 let _licDeviceId = null;
 let _licCode = null;
 let _actFails = 0;
@@ -2835,6 +2949,10 @@ function initActivation() {
     $('actCopy').dataset.wired = '1';
     $('actCopy').addEventListener('click', () => _actCopyCode('actCopy'));
   }
+
+  // GATE APAGADO por defecto: la app abre directo, sin pantalla de activación.
+  // (El formulario ya quedó cableado arriba por si se reactiva con la nube.)
+  if (!licActivationRequired()) { hideActivationScreen(); return true; }
 
   const activated = licIsActivated(_licDeviceId);
   if (activated) { hideActivationScreen(); return true; }
@@ -3096,8 +3214,8 @@ function initSecUI() {
    ARRANQUE
    ============================================================ */
 (function init() {
-  initActivation();   // 🔑 gate PRINCIPAL: sin licencia válida, la app queda bloqueada
-  initLock();         // 🔒 candado de contraseña OPCIONAL, después de activar
+  initActivation();   // 🔑 activación APAGADA por defecto (flag REQUIERE_ACTIVACION): abre directo
+  initLock();         // 🔒 candado de contraseña OPCIONAL, apagado por defecto
   // PWA
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

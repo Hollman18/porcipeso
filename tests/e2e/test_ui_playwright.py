@@ -144,3 +144,47 @@ def test_chip_demo_en_resultados_datos_y_detalle(page, server_url):
     expect(page.locator("#dvDetail")).to_have_class("subview active")
     expect(page.locator("#dDemo")).to_be_visible()
     expect(page.locator("#dDemoNote")).to_be_visible()
+
+
+# --------------------------------------------- eliminar un lote (Función A)
+
+def test_eliminar_lote_desde_datos(page, server_url):
+    """Crear un pesaje (DEMO), terminarlo, abrir su detalle en Datos,
+    'Eliminar este lote' → confirmación doble → el lote desaparece."""
+    expect = pw_sync.expect
+    page.goto(server_url)
+
+    # asegurar la báscula simulada conectada (si otra prueba la dejó activa,
+    # el enlace 'Usar simulada' está oculto — no hace falta clicarlo)
+    if page.locator("#bUseSim").is_visible():
+        page.click("#bUseSim")
+    expect(page.locator("#scaleChip")).to_contain_text("Báscula")
+
+    # crear un pesaje con nombre único (unidades, sin subir cerdos → cierre en 0)
+    page.click("#bStart")
+    page.click("#bModeUnidades")
+    page.fill("#inpNombre", "LOTE-BORRAR-E2E")
+    page.click("#bComenzar")
+    expect(page.locator("#pvWeigh")).to_have_class("subview active")
+    page.click("#bTerminar")
+    expect(page.locator("#pvDone")).to_have_class("subview active")
+
+    # Datos → abrir el detalle del lote recién creado
+    page.click('.navbtn[data-mod="datos"]')
+    if page.locator("#colPesajes").get_attribute("open") is None:
+        page.click("#colPesajes summary")
+    fila = page.locator("#dataRows tr", has_text="LOTE-BORRAR-E2E")
+    expect(fila).to_have_count(1)
+    fila.first.click()
+    expect(page.locator("#dvDetail")).to_have_class("subview active")
+    expect(page.locator("#dNombre")).to_have_text("LOTE-BORRAR-E2E")
+
+    # botón rojo → diálogo de confirmación con el nombre del lote → borrar
+    page.click("#bDeleteLote")
+    expect(page.locator("#dlgDelLote")).to_be_visible()
+    expect(page.locator("#delLoteMsg")).to_contain_text("LOTE-BORRAR-E2E")
+    page.click("#bDelLoteConfirm")
+
+    # vuelve a la lista y el lote ya no aparece
+    expect(page.locator("#dvList")).to_have_class("subview active")
+    expect(page.locator("#dataRows tr", has_text="LOTE-BORRAR-E2E")).to_have_count(0)

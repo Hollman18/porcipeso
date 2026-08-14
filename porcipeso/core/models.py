@@ -63,7 +63,11 @@ class WeighEvent:
 class EngineConfig:
     window_readings: int = 20        # 2 s @ 10 Hz
     stability_range_kg: float = 2.0  # max-min dentro de la ventana
-    min_delta_kg: float = 40.0       # escalón mínimo para ser evento
+    min_delta_kg: float = 40.0       # escalón mínimo para contar cerdos (lote)
+    #: peso mínimo (kg) para CAPTURAR la referencia del cerdo de prueba —
+    #: antes se exigían 40 kg y no tomaba pesos pequeños; ahora desde 1 kg
+    #: apenas la báscula se estabiliza. Separado del umbral de conteo.
+    min_ref_kg: float = 1.0
     tolerance: float = 0.20          # residuo máximo antes de marcar ambiguo
     no_signal_after_s: float = 3.0   # watchdog SIN_SENAL
 

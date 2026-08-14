@@ -234,6 +234,19 @@
           <!-- guía de pasos explícita y persistente -->
           <div class="stepguide" id="stepGuide"><b>PASO 1</b> · Sube UN cerdo de prueba, solo</div>
 
+          <!-- referencia a mano: si la báscula no toma sola el peso del cerdo
+               de prueba, el operario lo escribe. Solo se ve en calibración. -->
+          <div class="manualref" id="manualRef" hidden>
+            <button class="btn-link" id="bManualRefToggle" type="button">✎ Poner el peso a mano</button>
+            <div class="mr-form" id="manualRefForm" hidden>
+              <label class="mr-lbl" for="inpManualRef">Escribe el peso del cerdo de prueba:</label>
+              <div class="mr-row">
+                <input type="number" id="inpManualRef" min="0" step="0.1" inputmode="decimal" placeholder="kg">
+                <button id="bManualRef" type="button">Usar este peso</button>
+              </div>
+            </div>
+          </div>
+
           <!-- LA FIRMA: la báscula que te habla claro -->
           <div class="narration" id="narration" role="status" aria-live="polite">
             <p class="txt" id="narrTxt">Un momento…</p>
@@ -378,6 +391,9 @@
           <summary>Lo que pasó, paso a paso</summary>
           <div class="moves-list" id="dMoves"></div>
         </details>
+        <div class="detail-danger">
+          <button type="button" class="btn-del-lote" id="bDeleteLote">🗑 Eliminar este lote</button>
+        </div>
       </div>
     </section>
 
@@ -658,6 +674,18 @@
     </div>
     <div class="actions">
       <button type="button" id="bWhyCancel">Cancelar</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ============ ELIMINAR LOTE: confirmación doble ============ -->
+<dialog id="dlgDelLote" aria-label="Eliminar este lote">
+  <div class="dlg">
+    <h2>Eliminar este lote</h2>
+    <p class="del-warn" id="delLoteMsg"></p>
+    <div class="actions">
+      <button type="button" id="bDelLoteCancel">Cancelar</button>
+      <button type="button" class="btn-danger" id="bDelLoteConfirm">Sí, borrar definitivamente</button>
     </div>
   </div>
 </dialog>
