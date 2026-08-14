@@ -94,6 +94,13 @@ public class PorciSerialPlugin extends Plugin {
     private Thread btReaderThread;
     private final ByteArrayOutputStream btBuffer = new ByteArrayOutputStream();
     private volatile boolean btRunning = false;
+    // Enlace REALMENTE vivo (socket abierto + hilo lector corriendo). Se cae a
+    // false en cuanto el hilo lector muere por IOException/EOF (módulo
+    // reiniciado, fuera de rango, ruido) para que btRead/btStatus reporten el
+    // estado honesto y el driver TS dispare la reconexión sin depender de una
+    // excepción del puente. Distinto de btRunning: btRunning es la INTENCIÓN
+    // (queremos leer), btConnected es el HECHO (el socket entrega bytes).
+    private volatile boolean btConnected = false;
 
     // ------------------------------------------------- estado discovery BT
     private final Object discLock = new Object();
@@ -201,15 +208,14 @@ public class PorciSerialPlugin extends Plugin {
             try {
                 closeBtLocked();
                 BluetoothDevice device = adapter.getRemoteDevice(address);
-                BluetoothSocket socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-                adapter.cancelDiscovery(); // el discovery activo rompe el connect SPP
-                socket.connect(); // bloqueante: por eso corre en el executor
+                BluetoothSocket socket = connectSpp(adapter, device);
                 InputStream in = socket.getInputStream();
                 synchronized (btLock) {
                     btSocket = socket;
                     btBuffer.reset();
                     btRunning = true;
-                    btReaderThread = new Thread(() -> btReadLoop(in), "porciserial-bt");
+                    btConnected = true;
+                    btReaderThread = new Thread(() -> btReadLoop(socket, in), "porciserial-bt");
                     btReaderThread.start();
                 }
                 call.resolve();
@@ -221,8 +227,67 @@ public class PorciSerialPlugin extends Plugin {
         });
     }
 
-    /** Hilo lector: bytes crudos del socket → buffer (drenado por btRead). */
-    private void btReadLoop(InputStream in) {
+    /**
+     * Abre el SPP de forma ROBUSTA (patrón de campo HC-05/BC04):
+     *  1) camino estándar createRfcommSocketToServiceRecord(UUID SPP) +
+     *     connect() — lo que funciona en la mayoría de módulos;
+     *  2) si el connect() lanza IOException (típico de los clones HC-05 con
+     *     SDP pobre que no publican bien el record SPP), FALLBACK a
+     *     createRfcommSocket(canal 1) por REFLEXIÓN, el truco conocido para
+     *     esos módulos.
+     * cancelDiscovery() se llama SIEMPRE antes de CADA connect: un discovery
+     * en curso rompe el establecimiento del socket SPP (causa nº1 de fallos
+     * intermitentes al conectar en campo).
+     */
+    @SuppressLint("MissingPermission")
+    private BluetoothSocket connectSpp(BluetoothAdapter adapter, BluetoothDevice device)
+            throws IOException {
+        IOException primary;
+        BluetoothSocket socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
+        try {
+            cancelDiscoverySafe(adapter);
+            socket.connect(); // bloqueante: por eso corre en el executor
+            return socket;
+        } catch (IOException e) {
+            primary = e;
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+        }
+        // Fallback HC-05: canal RFCOMM 1 por reflexión.
+        try {
+            BluetoothSocket fb = (BluetoothSocket) device.getClass()
+                .getMethod("createRfcommSocket", int.class)
+                .invoke(device, 1);
+            cancelDiscoverySafe(adapter);
+            fb.connect();
+            Log.d(TAG, "SPP conectado por fallback createRfcommSocket(1)");
+            return fb;
+        } catch (Exception reflect) {
+            throw new IOException(
+                "SPP no conectó (UUID: " + primary.getMessage()
+                    + " · canal 1: " + reflect.getMessage() + ")");
+        }
+    }
+
+    /** cancelDiscovery() tolerante: el discovery activo rompe el connect SPP. */
+    @SuppressLint("MissingPermission")
+    private void cancelDiscoverySafe(BluetoothAdapter adapter) {
+        try {
+            if (adapter != null && adapter.isDiscovering()) adapter.cancelDiscovery();
+        } catch (SecurityException ignored) {
+        }
+    }
+
+    /**
+     * Hilo lector: bytes crudos del socket → buffer (drenado por btRead).
+     * Un solo hilo, con try/catch: ante IOException/EOF (módulo reiniciado,
+     * fuera de rango, ruido) NO crashea — sale limpio y marca el enlace CAÍDO
+     * (btConnected=false) para que el driver TS reconecte. Recibe SU propio
+     * socket para no pisar el estado de una reconexión ya en curso.
+     */
+    private void btReadLoop(BluetoothSocket owner, InputStream in) {
         byte[] chunk = new byte[1024];
         while (btRunning) {
             try {
@@ -238,21 +303,43 @@ public class PorciSerialPlugin extends Plugin {
                 break;
             }
         }
+        // El socket murió. Marcar el enlace caído SOLO si sigue siendo el
+        // activo: si una reconexión ya instaló otro socket, este cleanup del
+        // hilo viejo NO debe pisar el btConnected del nuevo (evita la carrera).
+        synchronized (btLock) {
+            if (btSocket == owner) btConnected = false;
+        }
     }
 
     @PluginMethod
     public void btRead(PluginCall call) {
         byte[] data;
+        boolean connected;
         synchronized (btLock) {
-            if (btSocket == null) {
-                call.reject("no_device: Bluetooth no conectado");
-                return;
-            }
+            // Se DRENA el buffer SIEMPRE (aunque el enlace esté caído): así no
+            // se pierden los últimos bytes recibidos justo antes de una caída.
             data = btBuffer.toByteArray();
             btBuffer.reset();
+            connected = btConnected && btSocket != null;
         }
         JSObject ret = new JSObject();
         ret.put("data", Base64.encodeToString(data, Base64.NO_WRAP));
+        // Estado REAL del enlace: el driver TS lo usa para disparar la
+        // reconexión sin depender de una excepción. NO se rechaza al estar
+        // desconectado (evita perder el buffer y ruido de errores).
+        ret.put("connected", connected);
+        call.resolve(ret);
+    }
+
+    /** Estado REAL del enlace SPP (socket abierto + hilo lector vivo). */
+    @PluginMethod
+    public void btStatus(PluginCall call) {
+        boolean connected;
+        synchronized (btLock) {
+            connected = btConnected && btSocket != null;
+        }
+        JSObject ret = new JSObject();
+        ret.put("connected", connected);
         call.resolve(ret);
     }
 
@@ -265,6 +352,7 @@ public class PorciSerialPlugin extends Plugin {
     private void closeBtLocked() {
         synchronized (btLock) {
             btRunning = false;
+            btConnected = false;
             if (btSocket != null) {
                 try {
                     btSocket.close();

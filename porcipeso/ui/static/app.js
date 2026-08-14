@@ -111,11 +111,36 @@ function setSubview(modId, subId) {
 /* ============================================================
    BANNER API
    ============================================================ */
-function apiDown(msg) {
+function apiDown(msg, detail) {
   if (msg) $('apiBannerTxt').textContent = msg;
+  const d = $('apiBannerDetail');
+  if (d) {
+    const has = !!detail;
+    d.textContent = has ? detail : '';
+    d.hidden = !has;
+  }
   $('apiBanner').classList.add('show');
 }
 function apiOk() { $('apiBanner').classList.remove('show'); }
+
+/* Mensaje de "backend caído" — HONESTO según dónde corremos:
+   · Escritorio (sin shim): el server local FastAPI no responde → "revisa que
+     el computador esté encendido" (igual que siempre).
+   · App móvil (shim presente): NO hay ningún computador; el backend va
+     embebido. Si no levantó suele ser un WebView viejo → pasos útiles para el
+     teléfono, más el motivo técnico si el shim lo reportó (SHIM.initError). */
+function backendDownMessage() {
+  if (SHIM) {
+    return {
+      msg: 'Este teléfono no pudo iniciar la app. Actualiza «Android System WebView» y Chrome desde Play Store, reinícialo y vuelve a abrir.',
+      detail: SHIM.initError ? `Detalle técnico: ${SHIM.initError}` : '',
+    };
+  }
+  return {
+    msg: 'No encuentro el programa de la báscula — revisa que el computador esté encendido',
+    detail: '',
+  };
+}
 
 async function api(path, opts = {}) {
   let res;
@@ -126,7 +151,8 @@ async function api(path, opts = {}) {
       body: opts.body != null ? JSON.stringify(opts.body) : undefined,
     });
   } catch (e) {
-    apiDown('No encuentro el programa de la báscula — revisa que el computador esté encendido');
+    const b = backendDownMessage();
+    apiDown(b.msg, b.detail);
     throw e;
   }
   apiOk();
@@ -146,6 +172,60 @@ async function apiJson(path, opts = {}) {
   try { data = await res.json(); } catch { data = null; }
   if (!res.ok) throw new Error(data?.detail ? String(data.detail) : `HTTP ${res.status}`);
   return data;
+}
+
+/* ============================================================
+   DIAGNÓSTICO DEL MOTOR DE DATOS (solo app móvil)
+   El shim (main.ts) publica window.__PORCIPESO_SHIM__.dbBackend con el motor
+   que quedó activo en ESTE teléfono. Sirve para saber en campo si degradó.
+   ============================================================ */
+const DB_BACKEND_LABEL = {
+  'native': 'nativo',
+  'sqljs-fallback': 'respaldo (sql.js)',
+  'memoria-degradada': 'memoria — los pesajes NO se guardan al cerrar',
+};
+
+function renderDbDiag() {
+  const el = $('dbDiag');
+  if (!el) return;
+  if (!SHIM) { el.hidden = true; return; }
+  const b = SHIM.dbBackend;
+  let label;
+  if (b) label = DB_BACKEND_LABEL[b] ?? b;
+  else label = SHIM.initError ? 'no disponible' : 'iniciando…';
+  el.textContent = 'Motor de datos: ' + label;
+  el.classList.toggle('warn', b === 'memoria-degradada' || (!b && !!SHIM.initError));
+  el.hidden = false;
+}
+
+/* Aviso HONESTO cuando el teléfono cayó al nivel 3 (memoria): la app funciona
+   para pesar pero NO persiste. Se muestra una vez que el shim eligió motor. */
+function showDbWarnIfDegraded() {
+  const el = $('dbWarnBanner'), txt = $('dbWarnTxt');
+  if (!el || !txt) return;
+  if (SHIM && SHIM.dbBackend === 'memoria-degradada') {
+    txt.textContent = 'Este teléfono es muy viejo: los pesajes NO se guardarán al cerrar la app. Puedes pesar y exportar en el momento, pero considera otro equipo para guardar el historial.';
+    el.classList.add('show');
+  } else {
+    el.classList.remove('show');
+  }
+}
+
+/* El shim elige motor de forma asíncrona (init de la DB). Esperamos a que
+   fije dbBackend/initError para pintar el diagnóstico y el aviso de memoria. */
+function watchDbBackend() {
+  if (!SHIM) return;
+  renderDbDiag();
+  if (SHIM.dbBackend) { showDbWarnIfDegraded(); return; }
+  let tries = 0;
+  const t = setInterval(() => {
+    tries += 1;
+    if (SHIM.dbBackend || SHIM.initError || tries > 40) { // hasta ~10 s
+      clearInterval(t);
+      renderDbDiag();
+      showDbWarnIfDegraded();
+    }
+  }, 250);
 }
 
 /* ---------------- configuración guardada (báscula real) ---------------- */
@@ -756,11 +836,20 @@ function onReading(m) {
   }
 }
 
-setInterval(() => {
+setInterval(async () => {
   if (!$('pvWeigh').classList.contains('active')) return;
   if (APP.lastReadingAt && Date.now() - APP.lastReadingAt > 3000) {
-    ambient('⚠ Perdí la señal de la báscula — revisa el cable', 'alert');
     $('led').classList.remove('pulse');
+    // Estado HONESTO: si el enlace se cayó y el driver reconecta, dilo en ámbar
+    // ("Reconectando…") en vez de "Perdí la señal". El pesaje NO se pierde: el
+    // motor conserva su estado y al volver los datos sigue contando.
+    let reconnecting = false;
+    try { const st = await api('/api/scale/status'); reconnecting = !!st?.reconnecting; } catch { /* sin backend */ }
+    if (reconnecting) {
+      ambient('🔄 Reconectando con la báscula… el pesaje se mantiene', 'busy');
+    } else {
+      ambient('⚠ Perdí la señal de la báscula — revisa el cable', 'alert');
+    }
   }
 }, 1500);
 
@@ -1304,7 +1393,7 @@ function visibleMethods() {
   return out;
 }
 
-function initBascula() { showBasculaHome(); initSecUI(); }
+function initBascula() { showBasculaHome(); renderDbDiag(); initSecUI(); }
 
 /* msg opcional {cls,text} → se muestra en el resultado de la tarjeta */
 function showBasculaHome(msg) {
@@ -1341,10 +1430,17 @@ async function updateConnCard() {
 function renderConnChip(st) {
   const chip = $('ccChip');
   const connected = APP.scaleConnected;
+  // El enlace se cayó y el driver reintenta (SPP intermitente en campo): estado
+  // HONESTO en ámbar. Tiene PRECEDENCIA sobre "fresh" para NUNCA quedar en
+  // verde mintiendo mientras no lleguen datos de verdad.
+  const reconnecting = !!st?.reconnecting;
   const ts = st?.last_ts_ms != null ? parseTs(st.last_ts_ms) : null;
   const fresh = (APP.lastReadingAt && Date.now() - APP.lastReadingAt < CC_FRESH_MS)
     || (ts != null && Date.now() - ts < CC_FRESH_MS);
-  if (connected && fresh && st?.last_kg != null) {
+  if (connected && reconnecting) {
+    chip.className = 'chip warn';
+    chip.textContent = 'Reconectando…';
+  } else if (connected && fresh && st?.last_kg != null) {
     chip.className = 'chip ok';
     chip.textContent = `Conectada · ${fmt(st.last_kg)} kg`;
   } else if (connected) {
@@ -3216,6 +3312,7 @@ function initSecUI() {
 (function init() {
   initActivation();   // 🔑 activación APAGADA por defecto (flag REQUIERE_ACTIVACION): abre directo
   initLock();         // 🔒 candado de contraseña OPCIONAL, apagado por defecto
+  watchDbBackend();   // 📊 diagnóstico del motor de datos + aviso si degradó a memoria
   // PWA
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

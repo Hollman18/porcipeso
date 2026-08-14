@@ -32,6 +32,12 @@ export const DETECT_BAUDRATES = [1200, 2400, 4800, 9600, 19200] as const;
 export interface ScaleDriverLike {
   disconnect(): Promise<void>;
   isConnected(): Promise<boolean>;
+  /**
+   * Estado REAL del enlace de transporte (SPP crudo): "reconnecting" cuando el
+   * socket se cayó y el driver reintenta de forma transparente. Opcional: el
+   * simulador y los drivers sin reconexión no lo exponen (→ undefined/null).
+   */
+  linkStatus?(): "connecting" | "connected" | "reconnecting" | "closed" | null;
 }
 
 export const READING_BROADCAST_MIN_S = 0.2; // throttle ~5 msgs/s (igual que app.py)
@@ -834,8 +840,14 @@ export class LocalBackend {
 
   private async scaleStatus(): Promise<JsonResponse> {
     let connected = this.sim !== null && this.sim.running;
+    // Enlace CAÍDO y reintentando de forma transparente: el driver sigue
+    // "conectado" (el motor conserva el pesaje) pero la UI debe mostrar
+    // "Reconectando…" en ámbar, NUNCA verde mintiendo si no llegan datos.
+    let reconnecting = false;
     if (!connected && this.btDriver !== null) {
       connected = await this.btDriver.isConnected();
+      const link = this.btDriver.linkStatus?.();
+      reconnecting = link === "reconnecting" || link === "connecting";
     }
     const reading = this.lastReading;
     let state = "idle";
@@ -848,6 +860,7 @@ export class LocalBackend {
     }
     return ok({
       connected,
+      reconnecting,
       profile_id: this.driverProfile ? this.driverProfile.id : null,
       last_kg: reading ? reading.kg : null,
       last_ts_ms: reading ? reading.ts_ms : null,

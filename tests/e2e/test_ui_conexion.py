@@ -153,6 +153,50 @@ def test_tarjeta_conectada_desconectar_reconectar(page, server_url):
     EXPECT(page.locator("#wizard")).to_be_hidden()
 
 
+def test_tarjeta_reconectando_estado_honesto(page, server_url):
+    """Endurecimiento SPP: si el enlace se cayó y el driver reintenta, la
+    tarjeta muestra 'Reconectando…' en ÁMBAR (chip warn) — NUNCA verde
+    mintiendo. Estado forzado con page.route sobre /api/scale/status."""
+    _seed_cfg(page, {"method": "bluetooth", "profile_id": "auto",
+                     "name": "Báscula BT", "port": "00:14:03:05:59:02"})
+
+    # estado FORZADO: conectado (el motor conserva el pesaje) pero el enlace
+    # SPP está reconectando de forma transparente
+    def handle_status(route):
+        route.fulfill(json={
+            "connected": True, "reconnecting": True,
+            "profile_id": "auto", "last_kg": None, "last_ts_ms": None,
+            "state": "sin_senal", "error": None,
+        })
+
+    page.route("**/api/scale/status", handle_status)
+    page.goto(server_url + "/#bascula")
+
+    card = page.locator("#connCard")
+    EXPECT(card).to_be_visible()
+    # chip HONESTO: ámbar "Reconectando…", no verde
+    EXPECT(page.locator("#ccChip")).to_contain_text("Reconectando", timeout=10_000)
+    EXPECT(page.locator("#ccChip")).to_have_class("chip warn")
+    # sigue "conectada" a efectos de acciones (Desconectar visible)
+    EXPECT(page.locator("#bccDisconnect")).to_be_visible()
+    EXPECT(page.locator("#bccConnect")).to_be_hidden()
+
+    # al recuperar el enlace y llegar un peso fresco → vuelve a verde honesto
+    def handle_status_ok(route):
+        route.fulfill(json={
+            "connected": True, "reconnecting": False,
+            "profile_id": "auto", "last_kg": 126.35,
+            "last_ts_ms": int(time.time() * 1000),
+            "state": "estable", "error": None,
+        })
+
+    page.unroute("**/api/scale/status")
+    page.route("**/api/scale/status", handle_status_ok)
+    # el poll de la tarjeta corre cada 2.5 s; la UI se corrige sola
+    EXPECT(page.locator("#ccChip")).to_contain_text("Conectada", timeout=10_000)
+    EXPECT(page.locator("#ccChip")).to_have_class("chip ok")
+
+
 # --------------------------- 2+3) serial tras flag avanzado + salto de pregunta
 
 def test_serial_oculto_sin_flag_y_salto_de_pregunta(page, server_url):

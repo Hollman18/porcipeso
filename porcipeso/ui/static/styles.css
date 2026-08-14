@@ -147,6 +147,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
 td .chip.demo,.sim-note .chip.demo{font-size:10px;padding:2px 8px;margin-left:6px}
 .demo-note{color:var(--amber);font-size:13px;margin:6px 0 0}
 .chip.ok{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
+/* enlace caído y reintentando (SPP intermitente): estado HONESTO en ámbar,
+   con latido para que se lea como "trabajando en ello", no como error fijo */
+.chip.warn{background:var(--amber-soft);color:var(--amber);border-color:var(--amber);
+  animation:chipPulse 1.2s ease-in-out infinite}
+@keyframes chipPulse{0%,100%{opacity:1}50%{opacity:.55}}
 .chip.err{color:var(--red);border-color:var(--red);background:transparent}
 
 /* ------------- diálogos ------------- */
@@ -354,8 +359,19 @@ tbody tr:hover{background:var(--accent-soft)}
 .banner .dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
 .banner-err{background:var(--red);color:#fff}
 .banner-err .dot{background:#fff;animation:blink 1.2s infinite}
+/* cuerpo en columna: mensaje + detalle técnico pequeño (app móvil) */
+.banner .dot{align-self:flex-start;margin-top:5px}
+.banner-body{display:flex;flex-direction:column;gap:3px;min-width:0}
+.banner-detail{font-weight:400;font-size:12px;opacity:.9;word-break:break-word}
+/* aviso nivel 3 (memoria): ámbar de advertencia, no rojo de error */
+.banner-warn{background:var(--amber-soft,#fff4e0);color:var(--amber,#b26a00);border:1px solid var(--amber,#e5a54b)}
+.banner-warn .dot{background:var(--amber,#e5a54b)}
 @keyframes blink{50%{opacity:.25}}
 @media (prefers-reduced-motion: reduce){.banner .dot{animation:none}}
+
+/* diagnóstico de campo: qué motor de datos quedó activo (solo app móvil) */
+.db-diag{font-size:12px;color:var(--muted);margin:8px 2px 0;text-align:center}
+.db-diag.warn{color:var(--amber,#b26a00);font-weight:600}
 
 footer{font-size:13px;color:var(--muted);text-align:center;margin-top:auto}
 

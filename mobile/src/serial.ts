@@ -53,7 +53,14 @@ export interface PorciSerialPlugin {
   openLocationSettings(): Promise<void>;
   /** Canal SPP crudo: bytes sin decodificar (base64). */
   btConnect(o: { address: string }): Promise<void>;
-  btRead(): Promise<{ data: string }>; // base64
+  /**
+   * Drena el buffer (base64) Y reporta el estado REAL del enlace: `connected`
+   * cae a false en cuanto el socket muere (el driver reconecta sin depender de
+   * una excepción). Opcional por compat con APKs anteriores al endurecimiento.
+   */
+  btRead(): Promise<{ data: string; connected?: boolean }>; // base64 + enlace
+  /** Estado REAL del enlace SPP (socket abierto + hilo lector vivo). */
+  btStatus(): Promise<{ connected: boolean }>;
   btDisconnect(): Promise<void>;
   /** Dispositivos USB serial conectados por OTG. */
   usbDevices(): Promise<{ devices: UsbDeviceInfo[] }>;
@@ -123,6 +130,9 @@ export function humanizeSerialError(e: unknown): string {
 
 // ------------------------------------------------------------ transportes
 
+/** Estado REAL de un enlace de transporte (para el indicador HONESTO). */
+export type LinkStatus = "connecting" | "connected" | "reconnecting" | "closed";
+
 /**
  * Transporte de BYTES: mismo rol que porcipeso/drivers/transports.py.
  * read() drena lo disponible (puede devolver vacío); nunca bloquea largo.
@@ -132,28 +142,171 @@ export interface ByteTransport {
   open(): Promise<void>;
   read(): Promise<Uint8Array>;
   close(): Promise<void>;
+  /** Estado del enlace (opcional): el driver lo expone para el indicador. */
+  status?(): LinkStatus;
 }
 
-/** SPP crudo vía plugin local (bytes intactos, apto para señal invertida). */
+const EMPTY_BYTES = new Uint8Array(0);
+
+/** Backoff de reconexión (ms): 0.5→1→2→5 s; el último se repite indefinido. */
+export const DEFAULT_BACKOFF_MS = [500, 1000, 2000, 5000];
+/** Sin un solo byte por más de esto aunque "conectado" → enlace zombi. */
+export const DEFAULT_NO_DATA_TIMEOUT_MS = 4000;
+/** Fallos de btRead seguidos que disparan reconexión. */
+export const DEFAULT_MAX_READ_FAILS = 3;
+
+/** Resiliencia del SPP (inyectable en tests). */
+export interface RawBtOptions {
+  plugin?: PorciSerialPlugin;
+  backoffMs?: number[];
+  noDataTimeoutMs?: number;
+  maxReadFails?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Aviso de cambio de estado del enlace (logs/UI). */
+  onStatus?: (status: LinkStatus) => void;
+}
+
+/**
+ * SPP crudo vía plugin local (bytes intactos, apto para señal invertida) CON
+ * RECONEXIÓN AUTOMÁTICA TRANSPARENTE. En campo el HC-05/BC04 pierde el socket
+ * (alimentación floja que reinicia el módulo, el celular se aleja, ruido): sin
+ * esto el driver dejaba de leer y no reintentaba ("no toma bien los datos").
+ *
+ * Ahora read() NUNCA lanza por una caída: si el socket muere (el plugin
+ * reporta connected=false), si no llegan bytes en X s aunque "conectado", o si
+ * btRead falla N veces seguidas, el transporte cierra limpio y REINTENTA
+ * conectar al MISMO dispositivo con backoff, indefinidamente, hasta lograrlo o
+ * hasta que el usuario desconecte. El parser vive por ENCIMA (SerialScaleDriver)
+ * y es tolerante a fragmentación, así que no se pierden bytes entre reintentos.
+ */
 export class RawBtTransport implements ByteTransport {
   readonly label: string;
   private plugin: PorciSerialPlugin;
+  private linkStatus: LinkStatus = "connecting";
+  private lastDataAt = 0;
+  private readFails = 0;
+  private reconnecting = false;
 
-  constructor(private address: string, plugin?: PorciSerialPlugin) {
+  private readonly backoffMs: number[];
+  private readonly noDataTimeoutMs: number;
+  private readonly maxReadFails: number;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly onStatus: (status: LinkStatus) => void;
+
+  constructor(private address: string, opts: RawBtOptions | PorciSerialPlugin = {}) {
     this.label = `bluetooth ${address}`;
-    this.plugin = plugin ?? requireNative();
+    // Compat: el 2º arg histórico era el plugin directo (new RawBtTransport(a, plugin)).
+    const o: RawBtOptions =
+      opts && typeof (opts as PorciSerialPlugin).btConnect === "function"
+        ? { plugin: opts as PorciSerialPlugin }
+        : (opts as RawBtOptions);
+    this.plugin = o.plugin ?? requireNative();
+    this.backoffMs = o.backoffMs && o.backoffMs.length ? o.backoffMs : DEFAULT_BACKOFF_MS;
+    this.noDataTimeoutMs = o.noDataTimeoutMs ?? DEFAULT_NO_DATA_TIMEOUT_MS;
+    this.maxReadFails = o.maxReadFails ?? DEFAULT_MAX_READ_FAILS;
+    this.now = o.now ?? (() => Date.now());
+    this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.onStatus = o.onStatus ?? (() => {});
+  }
+
+  status(): LinkStatus {
+    return this.linkStatus;
+  }
+
+  private setStatus(s: LinkStatus): void {
+    if (this.linkStatus === s) return;
+    this.linkStatus = s;
+    try {
+      this.onStatus(s);
+    } catch {
+      /* un listener roto no rompe el enlace */
+    }
   }
 
   async open(): Promise<void> {
+    this.setStatus("connecting");
     await this.plugin.btConnect({ address: this.address });
+    this.lastDataAt = this.now();
+    this.readFails = 0;
+    this.setStatus("connected");
   }
 
   async read(): Promise<Uint8Array> {
-    const r = await this.plugin.btRead();
-    return base64ToBytes(r.data ?? "");
+    // Mientras el enlace está caído/reconectando, el bucle de reconexión es el
+    // ÚNICO dueño del socket: no competimos con btRead/btConnect.
+    if (this.linkStatus === "closed" || this.reconnecting) return EMPTY_BYTES;
+    try {
+      const r = await this.plugin.btRead();
+      const bytes = base64ToBytes(r.data ?? "");
+      if (bytes.length) {
+        this.lastDataAt = this.now();
+        this.readFails = 0;
+      }
+      // El plugin nuevo informa el estado REAL del socket: si el hilo lector
+      // nativo murió reconectamos aunque btRead no haya lanzado. (undefined =
+      // APK viejo → se ignora este camino y queda el watchdog SIN DATOS.)
+      if (r.connected === false) {
+        this.triggerReconnect();
+        return bytes; // no perdemos los últimos bytes drenados
+      }
+      this.readFails = 0;
+      // Watchdog SIN DATOS: "conectado" pero sin un byte en X s → enlace zombi
+      // (el SPP intermitente clásico); forzamos reconexión limpia.
+      if (!bytes.length && this.now() - this.lastDataAt > this.noDataTimeoutMs) {
+        this.triggerReconnect();
+      }
+      return bytes;
+    } catch {
+      // Fallo puntual del puente: uno no tumba el enlace; N seguidos sí.
+      if (++this.readFails >= this.maxReadFails) this.triggerReconnect();
+      return EMPTY_BYTES;
+    }
+  }
+
+  private triggerReconnect(): void {
+    if (this.reconnecting || this.linkStatus === "closed") return;
+    this.reconnecting = true;
+    this.setStatus("reconnecting");
+    void this.reconnectLoop();
+  }
+
+  /**
+   * Reintenta conectar al MISMO dispositivo con backoff, indefinidamente, hasta
+   * lograrlo o hasta que el usuario desconecte (close() → "closed"). Cierra
+   * limpio antes de cada intento para no acumular sockets zombis.
+   */
+  private async reconnectLoop(): Promise<void> {
+    let attempt = 0;
+    // this.status() (no la propiedad) para que el narrowing de TS no descarte
+    // "closed": close() puede cambiarlo DURANTE los await de este bucle.
+    while (this.status() !== "closed") {
+      try {
+        await this.plugin.btDisconnect();
+      } catch {
+        /* ya caído */
+      }
+      const wait = this.backoffMs[Math.min(attempt, this.backoffMs.length - 1)];
+      await this.sleep(wait);
+      if (this.status() === "closed") break;
+      try {
+        await this.plugin.btConnect({ address: this.address });
+        this.lastDataAt = this.now();
+        this.readFails = 0;
+        this.reconnecting = false;
+        this.setStatus("connected");
+        return;
+      } catch {
+        attempt++;
+      }
+    }
+    this.reconnecting = false;
   }
 
   async close(): Promise<void> {
+    this.setStatus("closed");
+    this.reconnecting = false;
     try {
       await this.plugin.btDisconnect();
     } catch {

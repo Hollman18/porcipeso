@@ -5,7 +5,8 @@
  *  2. Copia porcipeso/ui/static → www/ (la UI NO se modifica en origen).
  *  3. Bundle esbuild de src/main.ts → www/shim.js (IIFE).
  *  4. Inyecta <script src="shim.js"> ANTES de app.js en www/index.html.
- *  5. Copia sql-wasm.wasm (fallback web de la DB) a www/.
+ *  5. Copia sql-wasm.wasm (fallback nivel 2 de la DB) y sql-asm.js
+ *     (fallback nivel 3 EN MEMORIA, JS puro sin WebAssembly) a www/.
  */
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -53,9 +54,11 @@ if (!html.includes('src="shim.js"')) {
   writeFileSync(indexPath, html, "utf-8");
 }
 
-// 5. wasm de sql.js para el fallback web. OJO: esbuild (platform browser)
-// resuelve la variante "browser" de sql.js, que pide sql-wasm-browser.wasm.
-for (const f of ["sql-wasm.wasm", "sql-wasm-browser.wasm"]) {
+// 5. Motores sql.js. OJO: esbuild (platform browser) resuelve la variante
+// "browser" de sql.js, que pide sql-wasm-browser.wasm. sql-asm.js es el
+// nivel 3 (JS puro, sin WebAssembly): NO se empaqueta en shim.js, se carga
+// por <script> desde www/ SOLO en WebViews viejos (ver main.ts:loadSqlAsm).
+for (const f of ["sql-wasm.wasm", "sql-wasm-browser.wasm", "sql-asm.js"]) {
   const src = join(MOBILE, "node_modules", "sql.js", "dist", f);
   if (existsSync(src)) cpSync(src, join(WWW, f));
 }

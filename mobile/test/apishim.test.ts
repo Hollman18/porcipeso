@@ -441,6 +441,39 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     await bt.repo.close();
   });
 
+  it("scale/status expone reconnecting cuando el enlace SPP se cayó y reintenta", async () => {
+    let link: "connected" | "reconnecting" | "closed" = "connected";
+    const bt = await makeBackend({
+      createBtDriver: async (profile, address) =>
+        ({
+          profile,
+          address,
+          disconnect: async () => {},
+          isConnected: async () => true, // el driver NO se desconecta durante la reconexión
+          linkStatus: () => link,
+        }) as any,
+    });
+    await call(bt, "POST", "/api/scale/connect", {
+      profile_id: "matrix-adr00",
+      port: "00:14:03:05:59:02",
+    });
+
+    // enlace vivo → conectado, sin reconexión (verde honesto)
+    let status = await call(bt, "GET", "/api/scale/status");
+    expect(status.json.connected).toBe(true);
+    expect(status.json.reconnecting).toBe(false);
+
+    // el SPP se cae y el driver reintenta transparente → connected sigue true
+    // (el motor conserva el pesaje) PERO reconnecting=true (UI en ámbar)
+    link = "reconnecting";
+    status = await call(bt, "GET", "/api/scale/status");
+    expect(status.json.connected).toBe(true);
+    expect(status.json.reconnecting).toBe(true);
+
+    await bt.stopDriver();
+    await bt.repo.close();
+  });
+
   it("GET /api/bt/devices responde {name,address,paired} (forma de scanBtDevices() en app.js)", async () => {
     const bt = await makeBackend({
       serial: {

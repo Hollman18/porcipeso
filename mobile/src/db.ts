@@ -100,6 +100,9 @@ export interface SqlDriver {
 
 // ------------------------------------------------- sql.js (web/dev/tests)
 
+/** Fábrica de sql.js: por defecto la build WASM (import("sql.js")). */
+export type InitSqlJs = (typeof import("sql.js"))["default"];
+
 export interface SqlJsOptions {
   /** Ruta del wasm (web: '/sql-wasm.wasm'; node: path absoluto). */
   locateFile?: (file: string) => string;
@@ -109,10 +112,17 @@ export interface SqlJsOptions {
   restore?: Uint8Array | null;
   /** Debounce del persist en ms (default 500). */
   persistDebounceMs?: number;
+  /**
+   * Fábrica del módulo sql.js. Por defecto la build WASM (sql-wasm), que
+   * EXIGE WebAssembly. El nivel 3 del fallback (WebViews viejos SIN
+   * WebAssembly) inyecta aquí la build asm.js (JavaScript puro) para que
+   * la app siga abriendo. Ver mobile/src/main.ts:createDriver.
+   */
+  init?: () => Promise<InitSqlJs>;
 }
 
 export async function createSqlJsDriver(opts: SqlJsOptions = {}): Promise<SqlDriver> {
-  const initSqlJs = (await import("sql.js")).default;
+  const initSqlJs = opts.init ? await opts.init() : (await import("sql.js")).default;
   const SQL = await initSqlJs(opts.locateFile ? { locateFile: opts.locateFile } : {});
   const db = opts.restore ? new SQL.Database(opts.restore) : new SQL.Database();
 

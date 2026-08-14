@@ -8,7 +8,7 @@
  */
 import { Reading, ScaleProfile } from "./models";
 import { FrameParser, isParserSupported, PARSER_REGISTRY } from "./parsers";
-import type { ByteTransport } from "./serial";
+import type { ByteTransport, LinkStatus } from "./serial";
 import { ingressBytes } from "./signal";
 
 const POLL_MS = 40;
@@ -79,5 +79,16 @@ export class SerialScaleDriver {
 
   async isConnected(): Promise<boolean> {
     return this.connected;
+  }
+
+  /**
+   * Estado REAL del enlace de transporte para el indicador HONESTO: durante
+   * una reconexión transparente del SPP el driver sigue "conectado"
+   * (isConnected=true, el motor conserva el pesaje) pero el enlace está
+   * "reconnecting" — la UI lo muestra en ámbar en vez de mentir en verde.
+   * null si el transporte no reporta estado (p.ej. USB).
+   */
+  linkStatus(): LinkStatus | null {
+    return this.transport.status ? this.transport.status() : null;
   }
 }
