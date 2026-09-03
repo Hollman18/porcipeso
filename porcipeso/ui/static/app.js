@@ -305,7 +305,8 @@ async function connectFromCfg(cfg) {
   } else if (cfg.port) {
     body.port = cfg.port;
     if (SHIM && cfg.method === 'bluetooth') {
-      body.transport = 'bluetooth';
+      // TIPO de enlace guardado: 'ble' → transporte BLE, si no SPP clásico.
+      body.transport = cfg.transport === 'ble' ? 'ble' : 'bluetooth';
       // perfil "auto": reconecta con el parser que detectó la primera vez
       if (cfg.profile_id === 'auto' && cfg.parser) body.parser = cfg.parser;
     }
@@ -1803,8 +1804,9 @@ function renderAddr() {
       <div class="config-actions">
         <button id="bBtScan" type="button">🔍 Buscar de nuevo</button>
       </div>
-      <p class="wizhelp">¿No aparece? Empareja primero el módulo en <b>Ajustes → Bluetooth</b>
-        (PIN <b>1234</b>) y vuelve a buscar.</p>
+      <p class="wizhelp">¿No aparece? Si el módulo es <b>Clásico</b>, empáralo primero en
+        <b>Ajustes → Bluetooth</b> (PIN <b>1234</b>). Si es <b>BLE</b> no se empareja: basta
+        <b>acercarlo</b> y encenderlo. Luego vuelve a buscar.</p>
       <button class="btn-link discreet" id="bBtAdvanced" type="button">Ajustes avanzados — elegir marca y señal a mano</button>`;
     $('bBtScan').onclick = () => { btAutoScan().catch(() => {}); };
     $('bBtAdvanced').onclick = () => { WIZ.advanced = true; wizGo(2); };
@@ -1988,7 +1990,10 @@ async function scanBtDevices() {
   await liveBtScan((dev) => {
     const inp = $('wizPort');
     if (inp) inp.value = dev.address;
-    if (!dev.paired) {
+    // recordar el TIPO para enrutar el transporte del connect avanzado
+    WIZ.btKind = dev.kind === 'ble' ? 'ble' : 'classic';
+    // BLE no se empareja (se acerca); el aviso de emparejar es solo para clásico
+    if (!dev.paired && dev.kind !== 'ble') {
       wizResult('', 'Ese módulo aún no está emparejado: empareja primero en Ajustes → Bluetooth (PIN 1234).');
     }
   });
@@ -2004,14 +2009,19 @@ const waitMs = (ms) => new Promise(r => setTimeout(r, ms));
 function renderBtDeviceRows(list, devices, onPick) {
   list.innerHTML = devices.length ? '<div class="bt-title">Toca el tuyo para elegirlo:</div>' : '';
   for (const dev of devices) {
+    // TIPO de enlace: 'ble' (GATT-notify) o 'classic' (SPP). El badge se lo
+    // dice al usuario y el kind viaja al backend para enrutar el transporte.
+    const kind = dev?.kind === 'ble' ? 'ble' : 'classic';
+    const kindLabel = kind === 'ble' ? 'BLE' : 'Clásico';
     const b = document.createElement('button');
     b.className = 'bt-item';
     b.innerHTML = `<span class="bt-n">${escapeHtml(dev?.name || `Dispositivo BT (${dev?.address ?? ''})`)}</span>` +
       `<span class="bt-a mono">${escapeHtml(dev?.address ?? '')}</span>` +
+      `<span class="bt-kind ${kind}">${kindLabel}</span>` +
       `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
     b.onclick = () => {
       for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
-      onPick({ name: dev?.name || '', address: dev?.address ?? '', paired: !!dev?.paired });
+      onPick({ name: dev?.name || '', address: dev?.address ?? '', paired: !!dev?.paired, kind });
     };
     list.appendChild(b);
   }
@@ -2100,11 +2110,11 @@ function finishBtScan(list, devices, btn) {
   if (btn) btn.disabled = false;
   const cercanos = devices.filter(d => !d.paired).length;
   if (!devices.length) {
-    list.innerHTML = '<div class="empty">No encontré dispositivos. Plan B: empareja el módulo en Ajustes → Bluetooth (PIN 1234) y toca «Buscar de nuevo».</div>';
+    list.innerHTML = '<div class="empty">No encontré dispositivos. Si es <b>Clásico</b>: empárejalo en Ajustes → Bluetooth (PIN 1234). Si es <b>BLE</b>: no se empareja — basta acercarlo y encenderlo. Luego toca «Buscar de nuevo».</div>';
   } else if (!cercanos) {
     const note = document.createElement('div');
     note.className = 'empty';
-    note.textContent = 'No aparecieron cercanos nuevos. Si el tuyo no está: empareja primero el módulo en Ajustes → Bluetooth (PIN 1234) y vuelve a buscar.';
+    note.innerHTML = 'No aparecieron cercanos nuevos. Si el tuyo no está: empareja el módulo <b>Clásico</b> en Ajustes → Bluetooth (PIN 1234), o acerca y enciende el módulo <b>BLE</b>, y vuelve a buscar.';
     list.appendChild(note);
   }
 }
@@ -2119,6 +2129,10 @@ async function btAutoScan() {
 async function btAutoConnect(dev) {
   const status = $('btAutoStatus');
   if (!dev.address) return;
+  // TIPO de enlace del dispositivo tocado: 'ble' → transporte BLE (GATT-notify),
+  // 'classic' → SPP clásico. El detector y el connect corren IGUAL encima.
+  const transport = dev.kind === 'ble' ? 'ble' : 'bluetooth';
+  const tipoTxt = dev.kind === 'ble' ? 'BLE' : 'Bluetooth';
   btScanSeq++; // congela el escaneo en vivo (el connect nativo cancela el discovery)
   showHexPanel(true);
   if (status) status.innerHTML = `🎧 Escuchando <b>${escapeHtml(dev.name || dev.address)}</b>… ` +
@@ -2128,7 +2142,7 @@ async function btAutoConnect(dev) {
   try {
     r = await apiJson('/api/scale/detect', {
       method: 'POST',
-      body: { profile_id: 'auto', transport: 'bluetooth', port: dev.address },
+      body: { profile_id: 'auto', transport, port: dev.address },
     });
   } catch (e) {
     showHexPanel(false);
@@ -2143,7 +2157,7 @@ async function btAutoConnect(dev) {
       await api('/api/scale/connect', {
         method: 'POST',
         body: {
-          profile_id: 'auto', parser: r.parser, transport: 'bluetooth',
+          profile_id: 'auto', parser: r.parser, transport,
           port: dev.address, invert_bits: !!r.invert_bits,
           reverse_frame: !!r.reverse_frame,
         },
@@ -2156,13 +2170,14 @@ async function btAutoConnect(dev) {
     }
     APP.scaleConnected = true;
     APP.simActive = false;
-    // el parser y la polaridad detectados quedan guardados: la próxima
-    // vez la app conecta directo, sin volver a detectar
+    // el parser, la polaridad y el TIPO de enlace quedan guardados: la próxima
+    // vez la app conecta directo, sin volver a detectar (transport enruta BLE/SPP)
     saveCfg({
-      method: 'bluetooth', profile_id: 'auto', parser: r.parser,
+      method: 'bluetooth', transport, kind: dev.kind === 'ble' ? 'ble' : 'classic',
+      profile_id: 'auto', parser: r.parser,
       invert_bits: !!r.invert_bits, reverse_frame: !!r.reverse_frame,
       port: dev.address, signal: 'auto',
-      name: `Báscula Bluetooth (${dev.name || dev.address})`,
+      name: `Báscula ${tipoTxt} (${dev.name || dev.address})`,
     });
     if (status) status.textContent = '';
     const fixes = [];
@@ -2441,8 +2456,10 @@ function wizAddress() {
   }
   // App móvil · bluetooth (avanzado): señal eléctrica + números al revés
   if (SHIM && WIZ.method === 'bluetooth') {
+    // TIPO de enlace del dispositivo elegido de la lista (BLE o SPP clásico).
+    const transport = WIZ.btKind === 'ble' ? 'ble' : 'bluetooth';
     const body = {
-      profile_id: WIZ.profileId, port, transport: 'bluetooth',
+      profile_id: WIZ.profileId, port, transport,
       reverse_frame: WIZ.detected?.reverse_frame ?? WIZ.reverse,
     };
     const inv = signalInvert();
@@ -2450,7 +2467,8 @@ function wizAddress() {
     return {
       ok: true, body, detect: WIZ.signal === 'auto' && !WIZ.detected,
       cfgExtra: {
-        port, signal: WIZ.signal, reverse_frame: body.reverse_frame,
+        port, transport, kind: WIZ.btKind === 'ble' ? 'ble' : 'classic',
+        signal: WIZ.signal, reverse_frame: body.reverse_frame,
         ...(inv != null ? { invert_bits: inv } : {}),
       },
     };

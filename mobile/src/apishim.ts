@@ -161,17 +161,23 @@ export interface BackendDeps {
   ) => Promise<ScaleDriverLike>;
   /** Capa serial nativa (inyectable en tests): listados BT/USB y transportes. */
   serial?: {
-    listBt?: () => Promise<Array<{ name: string; address: string; paired: boolean }>>;
-    /** Discovery en vivo de cercanos (inyectable en tests). */
+    listBt?: () => Promise<
+      Array<{ name: string; address: string; paired: boolean; kind?: "classic" | "ble" }>
+    >;
+    /** Discovery en vivo de cercanos CLÁSICOS (inyectable en tests). */
     startDiscovery?: () => Promise<void>;
     pollDiscovery?: () => Promise<{
       devices: Array<{ name: string; address: string }>;
       finished: boolean;
     }>;
+    /** Scan LE en vivo de cercanos BLE (inyectable en tests). */
+    startBleScan?: () => Promise<void>;
+    pollBleScan?: () => Promise<{ devices: Array<{ name: string; address: string }> }>;
+    stopBleScan?: () => Promise<void>;
     openLocationSettings?: () => Promise<void>;
     listUsb?: () => Promise<UsbDeviceInfo[]>;
     makeTransport?: (
-      kind: "bluetooth" | "usb",
+      kind: "bluetooth" | "ble" | "usb",
       opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
     ) => Promise<ByteTransport>;
   };
@@ -209,6 +215,16 @@ function ok(body: unknown, status = 200): JsonResponse {
 
 function err(status: number, detail: string): JsonResponse {
   return { status, body: { detail } };
+}
+
+/**
+ * Enruta el transporte por el campo body.transport: 'usb' (OTG), 'ble'
+ * (GATT-notify) o 'bluetooth' (SPP clásico, por defecto). La UI lo fija según
+ * el TIPO del dispositivo tocado (kind 'classic' → 'bluetooth', 'ble' → 'ble').
+ */
+function transportKind(body: Record<string, unknown>): "bluetooth" | "ble" | "usb" {
+  const t = String(body["transport"] ?? "bluetooth");
+  return t === "usb" ? "usb" : t === "ble" ? "ble" : "bluetooth";
 }
 
 // ---------------------------------------------------------------- backend
@@ -578,13 +594,15 @@ export class LocalBackend {
   }
 
   /** Inicia el ciclo de discovery nativo (~12 s). 409 + aviso accionable si
-   *  la Ubicación del sistema está apagada (Android ≤11 / MIUI). */
+   *  la Ubicación del sistema está apagada (Android ≤11 / MIUI).
+   *  El scan BLE arranca EN PARALELO (best-effort): si el módulo del cliente
+   *  es BLE, sus cercanos aparecen junto a los clásicos. Un fallo del scan
+   *  BLE (equipo sin BLE, etc.) NO tumba el discovery clásico. */
   private async btDiscoveryStart(): Promise<JsonResponse> {
     try {
       const start =
         this.serialDeps?.startDiscovery ?? (await import("./serial")).startBtDiscovery;
       await start();
-      return ok({ started: true });
     } catch (e) {
       const serial = await import("./serial");
       const msg = serial.humanizeSerialError(e);
@@ -592,17 +610,43 @@ export class LocalBackend {
       if (/permiso .*denegado/i.test(msg)) return err(403, msg);
       return err(503, `Bluetooth no disponible: ${msg}`);
     }
+    // BLE en paralelo — best-effort, nunca rompe el discovery clásico.
+    try {
+      const startBle = this.serialDeps?.startBleScan ?? (await import("./serial")).startBleScan;
+      await startBle();
+    } catch {
+      /* sin BLE (equipo sin soporte, BT apagado, plugin ausente): seguimos con clásicos */
+    }
+    return ok({ started: true });
   }
 
-  /** Acumulado EN VIVO: emparejados (cache) + cercanos hallados, sin
-   *  duplicados por MAC y con nombre por defecto "Dispositivo BT (MAC)". */
+  /** Acumulado EN VIVO: emparejados (cache, clásicos) + cercanos CLÁSICOS +
+   *  cercanos BLE, sin duplicados por MAC/id, con nombre por defecto
+   *  "Dispositivo BT (MAC)" y su TIPO. Al terminar el ciclo clásico se detiene
+   *  también el scan BLE (best-effort). */
   private async btDiscoveryPoll(): Promise<JsonResponse> {
     try {
       const serial = await import("./serial");
       const poll = this.serialDeps?.pollDiscovery ?? serial.pollBtDiscovery;
       const { devices, finished } = await poll();
+      // BLE best-effort: si no hay plugin/soporte, cae a lista vacía sin romper.
+      let bleDevices: Array<{ name: string; address: string }> = [];
+      try {
+        const pollBle = this.serialDeps?.pollBleScan ?? serial.pollBleScan;
+        bleDevices = (await pollBle()).devices ?? [];
+      } catch {
+        bleDevices = [];
+      }
+      if (finished) {
+        try {
+          const stopBle = this.serialDeps?.stopBleScan ?? serial.stopBleScan;
+          await stopBle();
+        } catch {
+          /* nada que detener */
+        }
+      }
       return ok({
-        devices: serial.mergeBtDevices(this.btPairedCache, devices),
+        devices: serial.mergeBtDevices(this.btPairedCache, devices, bleDevices),
         finished,
       });
     } catch (e) {
@@ -635,9 +679,9 @@ export class LocalBackend {
     }
   }
 
-  /** Fábrica de transportes de bytes (BT SPP crudo / USB OTG). */
+  /** Fábrica de transportes de bytes (BT SPP crudo / BLE GATT-notify / USB OTG). */
   private async makeTransport(
-    kind: "bluetooth" | "usb",
+    kind: "bluetooth" | "ble" | "usb",
     opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
   ): Promise<ByteTransport> {
     if (this.serialDeps?.makeTransport) return this.serialDeps.makeTransport(kind, opts);
@@ -650,6 +694,11 @@ export class LocalBackend {
         stopBits: opts.profile.stopbits ?? 1,
         parity: opts.profile.parity ?? "N",
       });
+    }
+    if (kind === "ble") {
+      // El "puerto" del perfil es el id del dispositivo BLE (MAC en Android,
+      // UUID en iOS). GATT-notify → MISMO pipeline de parsers que el clásico.
+      return new serial.BleTransport(opts.address as string);
     }
     return new serial.RawBtTransport(opts.address as string);
   }
@@ -699,8 +748,9 @@ export class LocalBackend {
 
     if (!isParserSupported(profile.parser)) return this.unsupportedProfileError(profile);
 
-    const kind = String(body["transport"] ?? "bluetooth") === "usb" ? "usb" : "bluetooth";
+    const kind = transportKind(body);
     if (kind === "usb") return this.usbConnect(profile, body);
+    if (kind === "ble") return this.bleConnect(profile, body);
 
     // En el teléfono el "puerto" es la dirección MAC Bluetooth del
     // conversor SPP (ej. 00:14:03:05:59:02) — va en el campo Puerto de
@@ -766,6 +816,40 @@ export class LocalBackend {
   }
 
   /**
+   * Conexión BLE (GATT-notify): mismo pipeline de parsers que el SPP clásico.
+   * El "puerto" del perfil es el id del dispositivo BLE. El BleTransport hace
+   * connect + descubrimiento de la característica UART + suscripción a NOTIFY
+   * (y reconexión automática con backoff igual que el clásico).
+   */
+  private async bleConnect(
+    profile: ScaleProfile,
+    body: Record<string, unknown>,
+  ): Promise<JsonResponse> {
+    const address = (profile.port ?? String(body["port"] ?? "")).trim();
+    if (!address) {
+      return err(400, "el perfil requiere 'port': el id del dispositivo BLE");
+    }
+    await this.stopDriver();
+    this.ensureEngine();
+    this.driverError = null;
+    try {
+      const transport = await this.makeTransport("ble", { profile, address, baud: null });
+      const { SerialScaleDriver } = await import("./serialdriver");
+      const driver = new SerialScaleDriver(profile, transport, this.onReading, (msg) => {
+        this.driverError = msg;
+      });
+      await driver.connect();
+      this.btDriver = driver;
+      this.driverProfile = profile;
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      this.driverError = humanizeSerialError(e);
+      return err(400, this.driverError);
+    }
+    return ok({ connected: true, profile_id: profile.id, transport: "ble" });
+  }
+
+  /**
    * Detector de señal directa/invertida (y barrido de baudios en USB).
    * Emite {"type":"detect",hex,baud} por el WS para el panel HEX en vivo
    * y responde el veredicto en humano (ver detector.ts).
@@ -785,11 +869,16 @@ export class LocalBackend {
       if (!isParserSupported(profile.parser)) return this.unsupportedProfileError(profile);
     }
 
-    const kind = String(body["transport"] ?? "bluetooth") === "usb" ? "usb" : "bluetooth";
+    const kind = transportKind(body);
     const address = String(body["port"] ?? "").trim();
     const deviceId = Number(body["device_id"]);
-    if (kind === "bluetooth" && !address) {
-      return err(400, "falta 'port': la dirección Bluetooth (MAC) del indicador");
+    if ((kind === "bluetooth" || kind === "ble") && !address) {
+      return err(
+        400,
+        kind === "ble"
+          ? "falta 'port': el id del dispositivo BLE"
+          : "falta 'port': la dirección Bluetooth (MAC) del indicador",
+      );
     }
     if (kind === "usb" && !Number.isFinite(deviceId)) {
       return err(400, "falta 'device_id': elige el dispositivo USB de la lista");

@@ -334,6 +334,56 @@ def test_otg_avanzado_conserva_marcas_manuales(page, server_url):
     EXPECT(page.locator("#bProbar")).to_be_visible()      # Probar/Guardar clásicos
 
 
+# ------------------- 4bis) selector Bluetooth con badges Clásico / BLE
+
+def test_bt_scan_muestra_badges_clasico_y_ble(page, server_url):
+    """APK simulado: el scan combinado (clásico + BLE) pinta CADA dispositivo
+    con su badge de TIPO ('Clásico' o 'BLE') en el selector 'Buscar básculas
+    Bluetooth'. Endpoints nativos mockeados con page.route, como en el APK."""
+    page.add_init_script("window.__PORCIPESO_SHIM__ = { native: true };")
+
+    def handle_devices(route):  # emparejados (siempre clásicos) al instante
+        route.fulfill(json=[
+            {"name": "BC04-BT", "address": "00:14:03:05:59:02",
+             "paired": True, "kind": "classic"},
+        ])
+
+    def handle_disc_start(route):
+        route.fulfill(json={"started": True})
+
+    def handle_disc(route):  # merge clásico + BLE, ciclo terminado
+        route.fulfill(json={"devices": [
+            {"name": "BC04-BT", "address": "00:14:03:05:59:02",
+             "paired": True, "kind": "classic"},
+            {"name": "PorciScale-BLE", "address": "AB:CD:EF:00:11:22",
+             "paired": False, "kind": "ble"},
+        ], "finished": True})
+
+    page.route("**/api/bt/devices", handle_devices)
+    page.route("**/api/bt/discovery/start", handle_disc_start)
+    page.route("**/api/bt/discovery", handle_disc)
+
+    page.goto(server_url + "/#bascula")
+    page.locator("#bConnStart").click()
+
+    # APK: Bluetooth + OTG → pregunta visible; elegimos Bluetooth
+    EXPECT(page.locator("#wizPane1")).to_have_class("wizpane active")
+    page.locator('#wizPane1 [data-method="bluetooth"]').click()
+    EXPECT(page.locator("#wizPane3")).to_have_class("wizpane active")
+
+    # el selector muestra AMBOS dispositivos, cada uno con su badge de TIPO
+    btlist = page.locator("#btList")
+    EXPECT(btlist.locator(".bt-item")).to_have_count(2, timeout=10_000)
+    EXPECT(btlist).to_contain_text("Clásico")
+    EXPECT(btlist).to_contain_text("BLE")
+
+    # el badge BLE está en la fila del módulo BLE; el Clásico en la del clásico
+    ble_row = btlist.locator(".bt-item", has_text="PorciScale-BLE")
+    EXPECT(ble_row.locator(".bt-kind.ble")).to_have_text("BLE")
+    classic_row = btlist.locator(".bt-item", has_text="BC04-BT")
+    EXPECT(classic_row.locator(".bt-kind.classic")).to_have_text("Clásico")
+
+
 # ---------------------- 5) "Usar báscula simulada" deja tarjeta de estado
 
 def test_usar_simulada_guarda_config_y_tarjeta(page, server_url):

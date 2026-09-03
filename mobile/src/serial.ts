@@ -102,13 +102,23 @@ export const LOCATION_OFF_MSG =
   "Para buscar dispositivos cercanos, Android exige la Ubicación encendida — " +
   "actívala un momento y vuelve a buscar.";
 
+export const BLE_NO_UART_MSG =
+  "Ese dispositivo BLE no expone una característica de datos (NOTIFY) — " +
+  "acércalo, enciéndelo y prueba de nuevo; si el problema sigue, puede que no " +
+  "sea una báscula serial-BLE compatible.";
+
 export function humanizeSerialError(e: unknown): string {
   const raw = String(e instanceof Error ? e.message : e);
   if (/not implemented|unimplemented|not available on web/i.test(raw)) {
     return NOT_ANDROID_MSG;
   }
-  if (/location_off/i.test(raw)) {
+  // Android exige la Ubicación encendida para escanear: el plugin clásico
+  // devuelve "location_off"; el BLE lanza "Location services are disabled".
+  if (/location_off|location services|servicios? de ubicaci/i.test(raw)) {
     return LOCATION_OFF_MSG;
+  }
+  if (/no_uart/i.test(raw)) {
+    return BLE_NO_UART_MSG;
   }
   if (/permission|permiso|denied/i.test(raw)) {
     return (
@@ -359,21 +369,27 @@ export class UsbTransport implements ByteTransport {
 
 // ------------------------------------------------------- listados (shim)
 
+/** Tipo de enlace del dispositivo: SPP clásico o BLE (GATT-notify). */
+export type BtKind = "classic" | "ble";
+
 export interface BtDeviceInfo {
   name: string;
   address: string;
   paired: boolean;
+  /** 'classic' (SPP) o 'ble' (GATT-notify). El transporte se enruta por esto. */
+  kind: BtKind;
 }
 
 /**
  * EMPAREJADOS (getBondedDevices, instantáneo) → GET /api/bt/devices.
- * Los CERCANOS ya no salen de aquí: van llegando EN VIVO por el discovery
- * propio del plugin (startDiscovery/discoveryPoll — ver mergeBtDevices).
+ * SIEMPRE clásicos (el emparejamiento es cosa del SPP; BLE no se empareja,
+ * se acerca). Los CERCANOS van llegando EN VIVO por el discovery del plugin
+ * (clásico) + el scan BLE (startDiscovery/discoveryPoll — ver mergeBtDevices).
  */
 export async function listBtDevices(): Promise<BtDeviceInfo[]> {
   const res = await requireNative().listPaired(); // puede lanzar: permiso denegado
   return (res.devices ?? [])
-    .map((d) => ({ name: d.name ?? "", address: d.address, paired: true }))
+    .map((d) => ({ name: d.name ?? "", address: d.address, paired: true, kind: "classic" as BtKind }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -399,31 +415,35 @@ export async function openLocationSettings(): Promise<void> {
 }
 
 /**
- * Merge EN VIVO emparejados + cercanos, sin duplicados por MAC, con los
- * sin nombre como "Dispositivo BT (MAC)". Emparejados primero, luego los
- * cercanos en orden de hallazgo. Puro → testeable en vitest.
+ * Merge EN VIVO emparejados (clásicos) + cercanos CLÁSICOS + cercanos BLE,
+ * sin duplicados por MAC/id, con los sin nombre como "Dispositivo BT (MAC)"
+ * y cada uno con su TIPO ('classic' | 'ble'). Emparejados primero, luego los
+ * clásicos cercanos, luego los BLE (en orden de hallazgo). Un dispositivo
+ * dual-mode que aparece por ambos gana el enlace CLÁSICO (SPP probado): se
+ * procesa antes y el dedupe conserva el primero. Puro → testeable en vitest.
  */
 export function mergeBtDevices(
   paired: Array<{ name?: string; address: string }>,
-  found: Array<{ name?: string; address: string }>,
+  classicFound: Array<{ name?: string; address: string }>,
+  bleFound: Array<{ name?: string; address: string }> = [],
 ): BtDeviceInfo[] {
   const out = new Map<string, BtDeviceInfo>();
-  for (const d of paired) {
-    if (!d?.address) continue;
+  const add = (
+    d: { name?: string; address: string } | undefined,
+    isPaired: boolean,
+    kind: BtKind,
+  ): void => {
+    if (!d?.address || out.has(d.address)) return; // dedupe por MAC/id (primero gana)
     out.set(d.address, {
       name: d.name || `Dispositivo BT (${d.address})`,
       address: d.address,
-      paired: true,
+      paired: isPaired,
+      kind,
     });
-  }
-  for (const d of found) {
-    if (!d?.address || out.has(d.address)) continue; // dedupe por MAC
-    out.set(d.address, {
-      name: d.name || `Dispositivo BT (${d.address})`,
-      address: d.address,
-      paired: false,
-    });
-  }
+  };
+  for (const d of paired) add(d, true, "classic");
+  for (const d of classicFound) add(d, false, "classic");
+  for (const d of bleFound) add(d, false, "ble");
   return Array.from(out.values());
 }
 
@@ -445,3 +465,17 @@ export async function listUsbDevices(): Promise<UsbDeviceInfo[]> {
     driver: DRIVER_CHIP[d.driver] ?? d.driver,
   }));
 }
+
+// --------------------------------------------------------------------- BLE
+// Transporte GATT-notify + scan LE viven en ble.ts (import dinámico del
+// plugin @capacitor-community/bluetooth-le, fuera del path web/tests). Se
+// re-exportan aquí para que apishim los consuma por el MISMO módulo `serial`.
+export {
+  BleTransport,
+  bleAvailable,
+  startBleScan,
+  pollBleScan,
+  stopBleScan,
+  pickUartCharacteristic,
+} from "./ble";
+export type { BleClientLike, BleServiceInfo, DiscoveredUart, BleOptions } from "./ble";

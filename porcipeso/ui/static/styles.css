@@ -571,6 +571,11 @@ body.rol-operador #bVerDatos{display:none !important}
 .bt-badge{font-size:12px;font-weight:700;padding:3px 8px;border-radius:999px;
   border:1px solid var(--panel-edge);color:var(--muted);white-space:nowrap}
 .bt-badge.paired{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)}
+/* TIPO de enlace: Clásico (SPP) vs BLE (GATT-notify) */
+.bt-kind{font-size:12px;font-weight:800;padding:3px 8px;border-radius:999px;
+  border:1px solid var(--panel-edge);white-space:nowrap;letter-spacing:.02em}
+.bt-kind.classic{color:var(--accent-ink);border-color:var(--accent);background:var(--accent-soft)}
+.bt-kind.ble{color:#0b6bcb;border-color:#0b6bcb;background:rgba(11,107,203,.10)}
 .sigsel{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
 .sigsel button{flex:1 1 auto;padding:10px 12px;border-radius:12px;font-size:15px;
   font-weight:600;border:1px solid var(--panel-edge);background:transparent;cursor:pointer}

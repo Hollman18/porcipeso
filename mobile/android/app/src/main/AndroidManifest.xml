@@ -81,6 +81,15 @@
         android:name="android.hardware.bluetooth"
         android:required="false" />
 
+    <!-- Bluetooth Low Energy (BLE): el módulo del cliente puede ser BLE o
+         dual-mode que solo anuncia por BLE. El scan LE + GATT lo maneja
+         @capacitor-community/bluetooth-le, que REUSA los MISMOS permisos de
+         arriba: BLUETOOTH_SCAN/CONNECT (12+, con neverForLocation) y
+         BLUETOOTH/ADMIN + ubicación en ≤11. No obligatorio para instalar. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+
     <!-- Cable OTG (USB serial): host USB no obligatorio para instalar. -->
     <uses-feature
         android:name="android.hardware.usb.host"
