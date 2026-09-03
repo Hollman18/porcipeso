@@ -249,6 +249,12 @@ export class LocalBackend {
   lastReading: Reading | null = null;
   /** Emparejados cacheados para el merge del discovery en vivo. */
   private btPairedCache: Array<{ name: string; address: string; paired: boolean }> = [];
+  /**
+   * MACs vistas por BLE durante el último discovery. Habilita el FALLBACK BLE
+   * dual-mode del connect clásico aunque la UI no mande el hint `also_ble`
+   * (p.ej. la reconexión directa por config guardada como 'classic').
+   */
+  private btBleAddrCache = new Set<string>();
   private lastReadingBroadcast = 0;
   private eventIdMap = new Map<number, number>(); // id de DB -> id interno engine
   /** Cadena que serializa escrituras DB + broadcasts (orden de app.py). */
@@ -634,6 +640,8 @@ export class LocalBackend {
       try {
         const pollBle = this.serialDeps?.pollBleScan ?? serial.pollBleScan;
         bleDevices = (await pollBle()).devices ?? [];
+        // recuerda las MACs BLE para el fallback dual-mode del connect clásico
+        for (const d of bleDevices) if (d?.address) this.btBleAddrCache.add(d.address);
       } catch {
         bleDevices = [];
       }
@@ -776,7 +784,23 @@ export class LocalBackend {
       this.btDriver = driver;
       this.driverProfile = profile;
     } catch (e) {
-      this.driverError = String(e instanceof Error ? e.message : e);
+      const classicErr = String(e instanceof Error ? e.message : e);
+      // FALLBACK BLE dual-mode: si el enlace CLÁSICO (SPP) no conectó y la MISMA
+      // MAC se anuncia por BLE, reintenta por BLE ANTES de rendirse. El hint
+      // `also_ble` lo manda la UI (del merge, campo alsoBle); el cache de MACs
+      // BLE del discovery lo cubre en la reconexión directa por config guardada.
+      const alsoBle = Boolean(body["also_ble"]) || this.btBleAddrCache.has(address);
+      if (alsoBle) {
+        const bleRes = await this.bleConnect(profile, body);
+        if (bleRes.status === 200) {
+          // responde QUÉ transporte quedó: la UI guarda 'ble' para reconectar
+          // directo la próxima vez (fell_back marca que hubo caída del clásico).
+          const b = (bleRes.body ?? {}) as Record<string, unknown>;
+          return ok({ ...b, fell_back: true, classic_error: classicErr });
+        }
+        // BLE tampoco: el error CLÁSICO original es el más informativo.
+      }
+      this.driverError = classicErr;
       return err(400, this.driverError);
     }
     return ok({ connected: true, profile_id: profile.id, transport: "bluetooth" });

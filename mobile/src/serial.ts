@@ -107,10 +107,25 @@ export const BLE_NO_UART_MSG =
   "acércalo, enciéndelo y prueba de nuevo; si el problema sigue, puede que no " +
   "sea una báscula serial-BLE compatible.";
 
+/** Emparejado fallido/cancelado (el nativo rechaza con "no_pair: …"). */
+export const NO_PAIR_MSG =
+  "No pude emparejar el módulo. Acepta el emparejamiento de Android (el PIN " +
+  "suele ser 1234 o 0000) y toca «Emparejar e intentar de nuevo».";
+
+/** ¿El error del connect es un fallo de EMPAREJADO? (la UI ofrece re-emparejar) */
+export function isPairError(e: unknown): boolean {
+  return /no_pair/i.test(String(e instanceof Error ? e.message : e));
+}
+
 export function humanizeSerialError(e: unknown): string {
   const raw = String(e instanceof Error ? e.message : e);
   if (/not implemented|unimplemented|not available on web/i.test(raw)) {
     return NOT_ANDROID_MSG;
+  }
+  // Emparejado: el SPP a un módulo NO bonded falla con "read ret: -1"; el
+  // nativo ahora fuerza el bond y, si no lo logra, rechaza con "no_pair: …".
+  if (/no_pair/i.test(raw)) {
+    return NO_PAIR_MSG;
   }
   // Android exige la Ubicación encendida para escanear: el plugin clásico
   // devuelve "location_off"; el BLE lanza "Location services are disabled".
@@ -378,6 +393,12 @@ export interface BtDeviceInfo {
   paired: boolean;
   /** 'classic' (SPP) o 'ble' (GATT-notify). El transporte se enruta por esto. */
   kind: BtKind;
+  /**
+   * Dual-mode: el MISMO address también se anuncia por BLE. Habilita el
+   * FALLBACK — si el enlace clásico (SPP) no conecta, se reintenta por BLE a
+   * la misma MAC antes de rendirse (ver LocalBackend.scaleConnect y la UI).
+   */
+  alsoBle?: boolean;
 }
 
 /**
@@ -420,7 +441,9 @@ export async function openLocationSettings(): Promise<void> {
  * y cada uno con su TIPO ('classic' | 'ble'). Emparejados primero, luego los
  * clásicos cercanos, luego los BLE (en orden de hallazgo). Un dispositivo
  * dual-mode que aparece por ambos gana el enlace CLÁSICO (SPP probado): se
- * procesa antes y el dedupe conserva el primero. Puro → testeable en vitest.
+ * procesa antes y el dedupe conserva el primero, PERO se marca `alsoBle:true`
+ * para RECORDAR que la misma MAC también está por BLE — así el connect puede
+ * caer a BLE si el SPP no conecta. Puro → testeable en vitest.
  */
 export function mergeBtDevices(
   paired: Array<{ name?: string; address: string }>,
@@ -428,18 +451,24 @@ export function mergeBtDevices(
   bleFound: Array<{ name?: string; address: string }> = [],
 ): BtDeviceInfo[] {
   const out = new Map<string, BtDeviceInfo>();
+  // Direcciones vistas por BLE: un clásico con la misma MAC es dual-mode.
+  const bleAddrs = new Set<string>();
+  for (const d of bleFound) if (d?.address) bleAddrs.add(d.address);
   const add = (
     d: { name?: string; address: string } | undefined,
     isPaired: boolean,
     kind: BtKind,
   ): void => {
     if (!d?.address || out.has(d.address)) return; // dedupe por MAC/id (primero gana)
-    out.set(d.address, {
+    const entry: BtDeviceInfo = {
       name: d.name || `Dispositivo BT (${d.address})`,
       address: d.address,
       paired: isPaired,
       kind,
-    });
+    };
+    // dual-mode: clásico que TAMBIÉN se anuncia por BLE → habilita el fallback
+    if (kind === "classic" && bleAddrs.has(d.address)) entry.alsoBle = true;
+    out.set(d.address, entry);
   };
   for (const d of paired) add(d, true, "classic");
   for (const d of classicFound) add(d, false, "classic");

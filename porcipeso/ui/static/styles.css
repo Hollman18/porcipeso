@@ -596,6 +596,10 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
 .wizsteps[hidden]{display:none !important}      /* BT automático: sin pasos */
 .bt-auto-status{margin:10px 0;font-size:16px;font-weight:600}
 .btn-link.discreet{font-size:13px;color:var(--muted)}
+/* botones de recuperación tras un fallo de conexión (emparejar / probar BLE) */
+.bt-recover{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.bt-recover[hidden]{display:none !important}
+.bt-recover button{flex:1 1 auto}
 
 /* ============ 🔁 números al revés (reverse_frame) ============ */
 .revtoggle{display:flex;align-items:flex-start;gap:10px;margin:12px 0 4px;

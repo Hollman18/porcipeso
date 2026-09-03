@@ -307,6 +307,8 @@ async function connectFromCfg(cfg) {
     if (SHIM && cfg.method === 'bluetooth') {
       // TIPO de enlace guardado: 'ble' → transporte BLE, si no SPP clásico.
       body.transport = cfg.transport === 'ble' ? 'ble' : 'bluetooth';
+      // dual-mode: si el SPP clásico no conecta, el backend cae a BLE solo
+      if (cfg.alsoBle) body.also_ble = true;
       // perfil "auto": reconecta con el parser que detectó la primera vez
       if (cfg.profile_id === 'auto' && cfg.parser) body.parser = cfg.parser;
     }
@@ -1419,6 +1421,10 @@ function showBasculaHome(msg) {
     res.className = 'test-result';
     res.textContent = '';
   }
+  // el panel de recuperación (emparejar / BLE) solo lo puebla bccConnect tras
+  // un fallo; cualquier re-render limpio de la tarjeta lo oculta.
+  const rec = $('ccRecover');
+  if (rec && !msg?.keepRecover) { rec.hidden = true; rec.innerHTML = ''; }
   updateConnCard().catch(() => {});
 }
 
@@ -1502,11 +1508,56 @@ $('bccConnect').onclick = async () => {
     await connectFromCfg(loadCfg());
     showBasculaHome({ cls: 'ok', text: '✓ Conectada — esperando la primera lectura de la báscula…' });
   } catch {
-    showBasculaHome({ cls: 'fail', text: 'No pude conectar. Revisa que la báscula esté encendida, o toca «Cambiar de báscula».' });
+    showBasculaHome({
+      cls: 'fail', keepRecover: true,
+      text: 'No pude conectar. Revisa que la báscula esté encendida, o toca «Emparejar e intentar de nuevo».',
+    });
+    renderCardRecover(loadCfg());
   } finally {
     b.disabled = false;
   }
 };
+
+/* botones de RECUPERACIÓN en la tarjeta ⚙ Báscula tras un fallo de reconexión:
+   - 🔗 Emparejar e intentar de nuevo: re-dispara connectFromCfg; el nativo
+     AUTO-EMPAREJA el módulo clásico antes del SPP (fallo típico "read ret: -1").
+   - Probar como BLE: solo si el dispositivo guardado es dual-mode (cfg.alsoBle)
+     o ya es BLE — reconecta forzando el transporte BLE a la misma MAC. */
+function renderCardRecover(cfg) {
+  const rec = $('ccRecover');
+  if (!rec) return;
+  rec.innerHTML = '';
+  rec.hidden = false;
+
+  const bPair = document.createElement('button');
+  bPair.className = 'btn-primary';
+  bPair.textContent = cfg?.transport === 'ble'
+    ? '↻ Intentar de nuevo'
+    : '🔗 Emparejar e intentar de nuevo';
+  bPair.onclick = () => { $('bccConnect').click(); };
+  rec.appendChild(bPair);
+
+  if (SHIM && cfg?.transport !== 'ble' && cfg?.alsoBle) {
+    const bBle = document.createElement('button');
+    bBle.textContent = 'Probar como BLE';
+    bBle.onclick = async () => {
+      bBle.disabled = true;
+      try {
+        await connectFromCfg({ ...cfg, transport: 'ble', kind: 'ble' });
+        showBasculaHome({ cls: 'ok', text: '✓ Conectada por BLE — esperando la primera lectura…' });
+      } catch {
+        showBasculaHome({
+          cls: 'fail', keepRecover: true,
+          text: 'Tampoco pude por BLE. Acerca y enciende el módulo, o toca «Cambiar de báscula».',
+        });
+        renderCardRecover(cfg);
+      } finally {
+        bBle.disabled = false;
+      }
+    };
+    rec.appendChild(bBle);
+  }
+}
 
 /* ============================================================
    MÓDULO BÁSCULA — WIZARD DE CONEXIÓN (método → marca → dirección)
@@ -1992,6 +2043,7 @@ async function scanBtDevices() {
     if (inp) inp.value = dev.address;
     // recordar el TIPO para enrutar el transporte del connect avanzado
     WIZ.btKind = dev.kind === 'ble' ? 'ble' : 'classic';
+    WIZ.alsoBle = !!dev.alsoBle; // dual-mode → habilita el fallback a BLE
     // BLE no se empareja (se acerca); el aviso de emparejar es solo para clásico
     if (!dev.paired && dev.kind !== 'ble') {
       wizResult('', 'Ese módulo aún no está emparejado: empareja primero en Ajustes → Bluetooth (PIN 1234).');
@@ -2021,7 +2073,8 @@ function renderBtDeviceRows(list, devices, onPick) {
       `<span class="bt-badge ${dev?.paired ? 'paired' : ''}">${dev?.paired ? 'emparejado' : 'cercano'}</span>`;
     b.onclick = () => {
       for (const x of list.querySelectorAll('.bt-item')) x.classList.toggle('sel', x === b);
-      onPick({ name: dev?.name || '', address: dev?.address ?? '', paired: !!dev?.paired, kind });
+      // alsoBle (dual-mode): habilita el fallback y el botón "Probar como BLE"
+      onPick({ name: dev?.name || '', address: dev?.address ?? '', paired: !!dev?.paired, kind, alsoBle: !!dev?.alsoBle });
     };
     list.appendChild(b);
   }
@@ -2153,13 +2206,16 @@ async function btAutoConnect(dev) {
   }
   showHexPanel(false);
   if (r?.ok && r?.parser_ok && r?.parser) {
+    let cr = null;
     try {
-      await api('/api/scale/connect', {
+      cr = await api('/api/scale/connect', {
         method: 'POST',
         body: {
           profile_id: 'auto', parser: r.parser, transport,
           port: dev.address, invert_bits: !!r.invert_bits,
           reverse_frame: !!r.reverse_frame,
+          // dual-mode: si el SPP clásico no conecta, el backend cae a BLE solo
+          also_ble: !!dev.alsoBle,
         },
       });
     } catch {
@@ -2170,17 +2226,24 @@ async function btAutoConnect(dev) {
     }
     APP.scaleConnected = true;
     APP.simActive = false;
+    // el backend pudo caer a BLE (dual-mode) si el clásico no respondió: se
+    // guarda el transporte que REALMENTE quedó, para reconectar directo a él.
+    const finalTransport = cr?.transport === 'ble' ? 'ble' : (cr?.transport === 'usb' ? 'usb' : transport);
+    const finalKind = finalTransport === 'ble' ? 'ble' : 'classic';
+    const finalTipo = finalTransport === 'ble' ? 'BLE' : 'Bluetooth';
     // el parser, la polaridad y el TIPO de enlace quedan guardados: la próxima
     // vez la app conecta directo, sin volver a detectar (transport enruta BLE/SPP)
     saveCfg({
-      method: 'bluetooth', transport, kind: dev.kind === 'ble' ? 'ble' : 'classic',
+      method: 'bluetooth', transport: finalTransport, kind: finalKind,
+      alsoBle: !!dev.alsoBle,
       profile_id: 'auto', parser: r.parser,
       invert_bits: !!r.invert_bits, reverse_frame: !!r.reverse_frame,
       port: dev.address, signal: 'auto',
-      name: `Báscula ${tipoTxt} (${dev.name || dev.address})`,
+      name: `Báscula ${finalTipo} (${dev.name || dev.address})`,
     });
     if (status) status.textContent = '';
     const fixes = [];
+    if (cr?.fell_back) fixes.push('conecté por BLE porque el clásico no respondió');
     if (r.invert_bits) fixes.push('señal invertida corregida sola');
     if (r.reverse_frame) fixes.push('números al revés corregidos solos');
     const kgTxt = r.kg != null ? `la báscula responde: ${fmt(r.kg)} kg` : 'la báscula responde';
@@ -2196,17 +2259,38 @@ async function btAutoConnect(dev) {
   }
 }
 
-/* tras un fallo: botón Reintentar (mismo dispositivo); "Ajustes avanzados"
-   ya está en pantalla para forzar marca/señal a mano */
+/* tras un fallo: botones de RECUPERACIÓN accionables (mismo dispositivo).
+   - 🔗 Emparejar e intentar de nuevo: re-dispara el connect; el nativo
+     AUTO-EMPAREJA (createBond) antes del SPP — el fallo típico de campo
+     ("read ret: -1") es justo un módulo clásico sin emparejar.
+   - Probar como BLE: solo si el dispositivo es dual-mode (alsoBle) o BLE —
+     reintenta el mismo flujo por el transporte BLE (GATT-notify).
+   "Ajustes avanzados" ya está en pantalla para forzar marca/señal a mano. */
 function btAutoRetry(dev) {
   const status = $('btAutoStatus');
   if (!status || !status.isConnected) return;
   status.innerHTML = '';
-  const b = document.createElement('button');
-  b.className = 'btn-primary';
-  b.textContent = `↻ Reintentar con ${dev.name || dev.address}`;
-  b.onclick = () => { btAutoConnect(dev).catch(() => {}); };
-  status.appendChild(b);
+  const wrap = document.createElement('div');
+  wrap.className = 'bt-recover';
+
+  const bPair = document.createElement('button');
+  bPair.className = 'btn-primary';
+  // BLE no se empareja (se acerca); para el clásico ofrecemos re-emparejar.
+  bPair.textContent = dev.kind === 'ble'
+    ? `↻ Reintentar con ${dev.name || dev.address}`
+    : '🔗 Emparejar e intentar de nuevo';
+  bPair.onclick = () => { btAutoConnect(dev).catch(() => {}); };
+  wrap.appendChild(bPair);
+
+  // Probar como BLE: dispositivo dual-mode (clásico que TAMBIÉN se anuncia por BLE).
+  if (dev.kind !== 'ble' && dev.alsoBle) {
+    const bBle = document.createElement('button');
+    bBle.textContent = 'Probar como BLE';
+    bBle.onclick = () => { btAutoConnect({ ...dev, kind: 'ble' }).catch(() => {}); };
+    wrap.appendChild(bBle);
+  }
+
+  status.appendChild(wrap);
 }
 
 /* ---- OTG AUTOMÁTICO (camino principal en la app, igual que BT) ----
@@ -2461,6 +2545,8 @@ function wizAddress() {
     const body = {
       profile_id: WIZ.profileId, port, transport,
       reverse_frame: WIZ.detected?.reverse_frame ?? WIZ.reverse,
+      // dual-mode: habilita el fallback nativo a BLE si el SPP no conecta
+      also_ble: !!WIZ.alsoBle,
     };
     const inv = signalInvert();
     if (inv != null) body.invert_bits = inv;
@@ -2468,6 +2554,7 @@ function wizAddress() {
       ok: true, body, detect: WIZ.signal === 'auto' && !WIZ.detected,
       cfgExtra: {
         port, transport, kind: WIZ.btKind === 'ble' ? 'ble' : 'classic',
+        alsoBle: !!WIZ.alsoBle,
         signal: WIZ.signal, reverse_frame: body.reverse_frame,
         ...(inv != null ? { invert_bits: inv } : {}),
       },

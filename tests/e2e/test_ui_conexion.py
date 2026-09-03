@@ -384,6 +384,93 @@ def test_bt_scan_muestra_badges_clasico_y_ble(page, server_url):
     EXPECT(classic_row.locator(".bt-kind.classic")).to_have_text("Clásico")
 
 
+# ------------- 4ter) fallo de conexión → botones de recuperación (emparejar/BLE)
+
+def test_bt_connect_fallo_muestra_botones_recuperacion(page, server_url):
+    """Bug de campo: el módulo 'RS232/485' (dual-mode) aparece como Clásico
+    pero el SPP no conecta ('read ret: -1'). Al fallar, la UI debe ofrecer
+    botones accionables: '🔗 Emparejar e intentar de nuevo' (re-dispara el
+    connect, que ahora AUTO-empareja en el nativo) y, como es dual-mode,
+    'Probar como BLE'. Estado forzado con page.route (como en el APK)."""
+    page.add_init_script("window.__PORCIPESO_SHIM__ = { native: true };")
+
+    dual = {"name": "RS232/485", "address": "48:87:2D:9D:D5:71",
+            "paired": False, "kind": "classic", "alsoBle": True}
+
+    def handle_devices(route):  # emparejados: ninguno
+        route.fulfill(json=[])
+
+    def handle_disc_start(route):
+        route.fulfill(json={"started": True})
+
+    def handle_disc(route):  # el dual-mode aparece como cercano, con alsoBle
+        route.fulfill(json={"devices": [dual], "finished": True})
+
+    def handle_detect(route):  # el SPP no conecta: el síntoma exacto de campo
+        route.fulfill(status=502,
+                      json={"detail": "SPP no conectó (read failed... read ret: -1)"})
+
+    page.route("**/api/bt/devices", handle_devices)
+    page.route("**/api/bt/discovery/start", handle_disc_start)
+    page.route("**/api/bt/discovery", handle_disc)
+    page.route("**/api/scale/detect", handle_detect)
+
+    page.goto(server_url + "/#bascula")
+    page.locator("#bConnStart").click()
+
+    # APK: Bluetooth + OTG → elegimos Bluetooth (flujo automático)
+    EXPECT(page.locator("#wizPane1")).to_have_class("wizpane active")
+    page.locator('#wizPane1 [data-method="bluetooth"]').click()
+    EXPECT(page.locator("#wizPane3")).to_have_class("wizpane active")
+
+    # aparece el módulo dual-mode; tocarlo dispara detect → falla
+    device = page.locator("#btList .bt-item", has_text="RS232/485")
+    EXPECT(device).to_have_count(1, timeout=10_000)
+    device.click()
+
+    # botones de RECUPERACIÓN en #btAutoStatus
+    recover = page.locator("#btAutoStatus .bt-recover")
+    EXPECT(recover).to_be_visible(timeout=10_000)
+    EXPECT(recover.get_by_text("Emparejar e intentar de nuevo")).to_be_visible()
+    # dual-mode → botón "Probar como BLE"
+    EXPECT(recover.get_by_text("Probar como BLE")).to_be_visible()
+
+    # "Probar como BLE" reintenta por BLE: el detect BLE ahora responde OK y
+    # el connect deja la báscula conectada → tarjeta "✓ Conectada".
+    detect_bodies: list[dict] = []
+    connect_bodies: list[dict] = []
+
+    def handle_detect_ok(route):
+        detect_bodies.append(route.request.post_data_json)
+        route.fulfill(json={
+            "ok": True, "verdict": "directa", "kg": 126.35,
+            "invert_bits": False, "reverse_frame": False, "parser_ok": True,
+            "parser": "matrix", "message": "✓ La báscula responde: 126.35 kg",
+            "hex": "3D 20 31 32 36",
+        })
+
+    def handle_connect_ok(route):
+        connect_bodies.append(route.request.post_data_json)
+        route.fulfill(json={"connected": True, "profile_id": "auto", "transport": "ble"})
+
+    page.unroute("**/api/scale/detect")
+    page.route("**/api/scale/detect", handle_detect_ok)
+    page.route("**/api/scale/connect", handle_connect_ok)
+
+    recover.get_by_text("Probar como BLE").click()
+    EXPECT(page.locator("#connCard")).to_be_visible(timeout=10_000)
+    EXPECT(page.locator("#ccResult")).to_contain_text("✓ Conectada")
+
+    # el reintento por BLE usó transport:'ble' a la MISMA MAC
+    assert detect_bodies and detect_bodies[0]["transport"] == "ble"
+    assert detect_bodies[0]["port"] == "48:87:2D:9D:D5:71"
+    assert connect_bodies and connect_bodies[0]["transport"] == "ble"
+    # y la config guardada queda como BLE para reconectar directo
+    cfg = page.evaluate("JSON.parse(localStorage.getItem('porcipeso_cfg'))")
+    assert cfg["transport"] == "ble"
+    assert cfg["kind"] == "ble"
+
+
 # ---------------------- 5) "Usar báscula simulada" deja tarjeta de estado
 
 def test_usar_simulada_guarda_config_y_tarjeta(page, server_url):

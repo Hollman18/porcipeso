@@ -43,8 +43,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Plugin local de PorciPeso: conectividad serial nativa que a los plugins
@@ -85,6 +87,8 @@ public class PorciSerialPlugin extends Plugin {
         UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String ACTION_USB_PERMISSION = "com.porcipeso.app.USB_PERMISSION";
     private static final int MAX_BUFFER = 64 * 1024;
+    /** Espera máxima al emparejado (Android muestra su diálogo de PIN mientras). */
+    private static final long BOND_TIMEOUT_MS = 25_000L;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -208,6 +212,10 @@ public class PorciSerialPlugin extends Plugin {
             try {
                 closeBtLocked();
                 BluetoothDevice device = adapter.getRemoteDevice(address);
+                // AUTO-EMPAREJADO: en Android un SPP a un dispositivo NO BONDED
+                // falla justo con "read ret: -1". Aseguramos el bond ANTES del
+                // connectSpp (Android muestra su diálogo de PIN si hace falta).
+                ensureBonded(adapter, device);
                 BluetoothSocket socket = connectSpp(adapter, device);
                 InputStream in = socket.getInputStream();
                 synchronized (btLock) {
@@ -219,12 +227,105 @@ public class PorciSerialPlugin extends Plugin {
                     btReaderThread.start();
                 }
                 call.resolve();
+            } catch (PairException e) {
+                // mensaje en humano tal cual ("no_pair: …"); el shim TS lo reconoce
+                call.reject(e.getMessage());
             } catch (SecurityException e) {
                 call.reject("permission_denied: " + e.getMessage());
             } catch (IOException e) {
                 call.reject("No pude conectar al Bluetooth " + address + ": " + e.getMessage());
             }
         });
+    }
+
+    /** Emparejado fallido/cancelado: rechazo claro y accionable (distinto del
+     *  fallo de SPP para que el shim/ UI ofrezca "Emparejar e intentar de nuevo").
+     *  Extiende IOException pero se captura ANTES que ella en doBtConnect. */
+    private static final class PairException extends IOException {
+        PairException(String message) {
+            super(message);
+        }
+    }
+
+    private static final String NO_PAIR_MSG =
+        "no_pair: no se pudo emparejar el módulo — acepta el emparejamiento en "
+            + "Android (PIN 1234) y reintenta";
+
+    /**
+     * Asegura que el dispositivo esté EMPAREJADO (BONDED) antes del SPP.
+     *
+     * En Android, createRfcommSocket().connect() a un dispositivo NO bonded
+     * falla con "read failed, socket might closed or timeout, read ret: -1"
+     * (el síntoma exacto de campo del módulo RS232/485). La solución es forzar
+     * el bond primero: device.createBond() dispara el diálogo de PIN del
+     * sistema (para HC-05/BC04 el PIN es 1234/0000; NO podemos autollenarlo sin
+     * ser app de sistema, así que dejamos que Android lo pida) y esperamos el
+     * resultado por un BroadcastReceiver de ACTION_BOND_STATE_CHANGED hasta
+     * BOND_BONDED o BOND_NONE, con timeout.
+     *
+     * cancelDiscovery() SIEMPRE antes del bond: un discovery en curso interfiere
+     * con el emparejado igual que con el connect. El receiver se desregistra al
+     * terminar. Verifica el permiso BLUETOOTH_CONNECT (Android 12+).
+     */
+    @SuppressLint("MissingPermission")
+    private void ensureBonded(BluetoothAdapter adapter, BluetoothDevice device)
+            throws PairException {
+        if (device.getBondState() == BluetoothDevice.BOND_BONDED) return;
+        // Android 12+: createBond()/getBondState() exigen BLUETOOTH_CONNECT.
+        if (needsBtPermission()) {
+            throw new PairException(
+                "permission_denied: Bluetooth (dispositivos cercanos) — necesario "
+                    + "para emparejar el módulo");
+        }
+        // El discovery activo rompe el emparejado (igual que el connect SPP).
+        cancelDiscoverySafe(adapter);
+
+        final String target = device.getAddress();
+        final CountDownLatch latch = new CountDownLatch(1);
+        BroadcastReceiver bondReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context ctx, Intent intent) {
+                if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+                BluetoothDevice d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                if (d == null || target == null || !target.equals(d.getAddress())) return;
+                int state = intent.getIntExtra(
+                    BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+                // BONDED = listo; NONE = el usuario canceló o el PIN falló.
+                // BONDING = sigue en curso (Android muestra el diálogo) → esperar.
+                if (state == BluetoothDevice.BOND_BONDED || state == BluetoothDevice.BOND_NONE) {
+                    latch.countDown();
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        // broadcast del SISTEMA: exento de NOT_EXPORTED en targetSdk 34.
+        ContextCompat.registerReceiver(
+            getContext(), bondReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
+        try {
+            // Solo arrancamos el bond si no está ya en curso (BONDING).
+            if (device.getBondState() == BluetoothDevice.BOND_NONE) {
+                boolean started = device.createBond();
+                if (!started && device.getBondState() == BluetoothDevice.BOND_NONE) {
+                    throw new PairException(NO_PAIR_MSG);
+                }
+            }
+            try {
+                latch.await(BOND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new PairException(NO_PAIR_MSG);
+            }
+            if (device.getBondState() != BluetoothDevice.BOND_BONDED) {
+                throw new PairException(NO_PAIR_MSG);
+            }
+        } catch (SecurityException se) {
+            throw new PairException("permission_denied: " + se.getMessage());
+        } finally {
+            try {
+                getContext().unregisterReceiver(bondReceiver);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     /**
