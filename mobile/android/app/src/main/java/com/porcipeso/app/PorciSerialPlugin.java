@@ -226,18 +226,21 @@ public class PorciSerialPlugin extends Plugin {
                 // UNA vez (algunos módulos con cifrado sí lo exigen). Si el bond
                 // también falla, propagamos el error de conexión directo (más útil)
                 // y el shim TS cae al FALLBACK BLE por MAC.
-                BluetoothSocket socket;
+                BluetoothSocket sock;
                 try {
-                    socket = connectSpp(adapter, device);
+                    sock = connectSpp(adapter, device);
                 } catch (IOException directo) {
                     try {
                         ensureBonded(adapter, device);
                     } catch (PairException pe) {
                         throw directo;
                     }
-                    socket = connectSpp(adapter, device);
+                    sock = connectSpp(adapter, device);
                 }
-                InputStream in = socket.getInputStream();
+                // alias FINAL para el lambda del hilo lector (sock se reasigna
+                // arriba en el fallback, así que no es effectively-final).
+                final BluetoothSocket socket = sock;
+                final InputStream in = socket.getInputStream();
                 synchronized (btLock) {
                     btSocket = socket;
                     btBuffer.reset();
