@@ -219,11 +219,24 @@ public class PorciSerialPlugin extends Plugin {
             try {
                 closeBtLocked();
                 BluetoothDevice device = adapter.getRemoteDevice(address);
-                // AUTO-EMPAREJADO: en Android un SPP a un dispositivo NO BONDED
-                // falla justo con "read ret: -1". Aseguramos el bond ANTES del
-                // connectSpp (Android muestra su diálogo de PIN si hace falta).
-                ensureBonded(adapter, device);
-                BluetoothSocket socket = connectSpp(adapter, device);
+                // 1º: SPP DIRECTO sin forzar emparejado (socket inseguro primero),
+                // igual que "Serial Bluetooth Terminal". La mayoría de módulos
+                // RS232-BLE / HC-05 conectan así, SIN bond. Solo si TODAS las
+                // estrategias de socket fallan, intentamos emparejar y reintentar
+                // UNA vez (algunos módulos con cifrado sí lo exigen). Si el bond
+                // también falla, propagamos el error de conexión directo (más útil)
+                // y el shim TS cae al FALLBACK BLE por MAC.
+                BluetoothSocket socket;
+                try {
+                    socket = connectSpp(adapter, device);
+                } catch (IOException directo) {
+                    try {
+                        ensureBonded(adapter, device);
+                    } catch (PairException pe) {
+                        throw directo;
+                    }
+                    socket = connectSpp(adapter, device);
+                }
                 InputStream in = socket.getInputStream();
                 synchronized (btLock) {
                     btSocket = socket;
@@ -234,12 +247,11 @@ public class PorciSerialPlugin extends Plugin {
                     btReaderThread.start();
                 }
                 call.resolve();
-            } catch (PairException e) {
-                // mensaje en humano tal cual ("no_pair: …"); el shim TS lo reconoce
-                call.reject(e.getMessage());
             } catch (SecurityException e) {
                 call.reject("permission_denied: " + e.getMessage());
             } catch (IOException e) {
+                // Incluye el fallo de SPP directo cuando el bond tampoco sirvió;
+                // el shim TS lo reconoce y cae al FALLBACK BLE por MAC.
                 call.reject("No pude conectar al Bluetooth " + address + ": " + e.getMessage());
             }
         });
@@ -347,35 +359,68 @@ public class PorciSerialPlugin extends Plugin {
      * en curso rompe el establecimiento del socket SPP (causa nº1 de fallos
      * intermitentes al conectar en campo).
      */
+    /** Nombres de las 4 estrategias de socket SPP, en orden de intento. */
+    private static final String[] SPP_STRATEGY = {
+        "inseguro-UUID", "seguro-UUID", "inseguro-canal1", "seguro-canal1"
+    };
+
+    /**
+     * Abre el SPP de forma ROBUSTA probando 4 estrategias EN ORDEN, siendo la
+     * clave que el socket INSEGURO va PRIMERO:
+     *  1) createInsecureRfcommSocketToServiceRecord(UUID) — SIN cifrado ni
+     *     emparejado. Es lo que usa "Serial Bluetooth Terminal" y lo que los
+     *     módulos RS232-BLE / clones HC-05 realmente aceptan. El socket SEGURO
+     *     a un módulo sin cifrado se conecta y CAE al primer read ("read ret:
+     *     -1") — la causa raíz del fallo de campo.
+     *  2) createRfcommSocketToServiceRecord(UUID) — seguro (módulos que sí cifran).
+     *  3) createInsecureRfcommSocket(canal 1) por reflexión (SDP pobre).
+     *  4) createRfcommSocket(canal 1) por reflexión.
+     * cancelDiscovery() SIEMPRE antes de CADA connect (un discovery activo rompe
+     * el establecimiento del socket — causa nº1 de intermitencia al conectar).
+     */
     @SuppressLint("MissingPermission")
     private BluetoothSocket connectSpp(BluetoothAdapter adapter, BluetoothDevice device)
             throws IOException {
-        IOException primary;
-        BluetoothSocket socket = device.createRfcommSocketToServiceRecord(SPP_UUID);
-        try {
-            cancelDiscoverySafe(adapter);
-            socket.connect(); // bloqueante: por eso corre en el executor
-            return socket;
-        } catch (IOException e) {
-            primary = e;
+        StringBuilder errs = new StringBuilder();
+        for (int i = 0; i < SPP_STRATEGY.length; i++) {
+            BluetoothSocket socket = null;
             try {
-                socket.close();
-            } catch (IOException ignored) {
+                socket = openSppSocket(device, i);
+                if (socket == null) continue;
+                cancelDiscoverySafe(adapter);
+                socket.connect(); // bloqueante: por eso corre en el executor
+                Log.d(TAG, "SPP conectado (" + SPP_STRATEGY[i] + ")");
+                return socket;
+            } catch (Exception e) {
+                if (socket != null) {
+                    try { socket.close(); } catch (IOException ignored) { }
+                }
+                if (errs.length() > 0) errs.append(" · ");
+                errs.append(SPP_STRATEGY[i]).append(": ").append(e.getMessage());
             }
         }
-        // Fallback HC-05: canal RFCOMM 1 por reflexión.
-        try {
-            BluetoothSocket fb = (BluetoothSocket) device.getClass()
-                .getMethod("createRfcommSocket", int.class)
-                .invoke(device, 1);
-            cancelDiscoverySafe(adapter);
-            fb.connect();
-            Log.d(TAG, "SPP conectado por fallback createRfcommSocket(1)");
-            return fb;
-        } catch (Exception reflect) {
-            throw new IOException(
-                "SPP no conectó (UUID: " + primary.getMessage()
-                    + " · canal 1: " + reflect.getMessage() + ")");
+        throw new IOException("SPP no conectó (" + errs + ")");
+    }
+
+    /** Crea (sin conectar) el socket SPP de la estrategia i (ver SPP_STRATEGY). */
+    @SuppressLint("MissingPermission")
+    private BluetoothSocket openSppSocket(BluetoothDevice device, int strategy)
+            throws Exception {
+        switch (strategy) {
+            case 0:
+                return device.createInsecureRfcommSocketToServiceRecord(SPP_UUID);
+            case 1:
+                return device.createRfcommSocketToServiceRecord(SPP_UUID);
+            case 2:
+                return (BluetoothSocket) device.getClass()
+                    .getMethod("createInsecureRfcommSocket", int.class)
+                    .invoke(device, 1);
+            case 3:
+                return (BluetoothSocket) device.getClass()
+                    .getMethod("createRfcommSocket", int.class)
+                    .invoke(device, 1);
+            default:
+                return null;
         }
     }
 
