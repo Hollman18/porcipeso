@@ -156,7 +156,16 @@ async function api(path, opts = {}) {
     throw e;
   }
   apiOk();
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    // conserva el cuerpo del backend en el error: el {detail} en humano y, en
+    // el connect BLE, el diagnóstico GATT ({gatt, gatt_text}) para la UI.
+    let body = null;
+    try { body = await res.json(); } catch { body = null; }
+    const e = new Error(body?.detail ? String(body.detail) : `HTTP ${res.status}`);
+    e.status = res.status;
+    e.body = body;
+    throw e;
+  }
   try { return await res.json(); } catch { return null; }
 }
 
@@ -170,7 +179,12 @@ async function apiJson(path, opts = {}) {
   });
   let data = null;
   try { data = await res.json(); } catch { data = null; }
-  if (!res.ok) throw new Error(data?.detail ? String(data.detail) : `HTTP ${res.status}`);
+  if (!res.ok) {
+    const e = new Error(data?.detail ? String(data.detail) : `HTTP ${res.status}`);
+    e.status = res.status;
+    e.body = data; // incluye {gatt, gatt_text} en un fallo de connect BLE
+    throw e;
+  }
   return data;
 }
 
@@ -1507,23 +1521,70 @@ $('bccConnect').onclick = async () => {
   try {
     await connectFromCfg(loadCfg());
     showBasculaHome({ cls: 'ok', text: '✓ Conectada — esperando la primera lectura de la báscula…' });
-  } catch {
+  } catch (e) {
     showBasculaHome({
       cls: 'fail', keepRecover: true,
-      text: 'No pude conectar. Revisa que la báscula esté encendida, o toca «Emparejar e intentar de nuevo».',
+      text: e?.message || 'No pude conectar. Revisa que la báscula esté encendida, o toca «Emparejar e intentar de nuevo».',
     });
-    renderCardRecover(loadCfg());
+    renderCardRecover(loadCfg(), gattTextFrom(e));
   } finally {
     b.disabled = false;
   }
 };
 
+/* 🔎 DIAGNÓSTICO GATT: cuando un connect BLE no encuentra una característica
+   UART usable, el backend devuelve la lista de servicios/características del
+   módulo (UUID + propiedades). La mostramos en un bloque COPIABLE para que, si
+   el módulo usa un perfil raro, el técnico nos envíe el UUID exacto. */
+function renderGattDiag(container, gattText) {
+  if (!container || !gattText) return false;
+  const box = document.createElement('div');
+  box.className = 'gatt-diag';
+  const title = document.createElement('div');
+  title.className = 'gatt-diag-title';
+  title.textContent = '🔎 Detalle técnico del módulo — envíaselo a soporte';
+  const pre = document.createElement('pre');
+  pre.className = 'gatt-diag-pre mono';
+  pre.textContent = gattText;
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'btn-link gatt-diag-copy';
+  copy.textContent = '📋 Copiar';
+  copy.onclick = async () => {
+    let done = false;
+    try { await navigator.clipboard.writeText(gattText); done = true; } catch { done = false; }
+    if (!done) {
+      // respaldo sin permiso de portapapeles: selecciona el texto para copiar a mano
+      try {
+        const r = document.createRange(); r.selectNodeContents(pre);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      } catch { /* nada más que hacer */ }
+    }
+    copy.textContent = done ? '✓ Copiado' : 'Selecciona y copia';
+    setTimeout(() => { copy.textContent = '📋 Copiar'; }, 2500);
+  };
+  box.appendChild(title);
+  box.appendChild(pre);
+  box.appendChild(copy);
+  container.appendChild(box);
+  return true;
+}
+
+/* extrae el texto de diagnóstico GATT de un error de connect (api()/apiJson()
+   adjuntan el cuerpo del backend a e.body) o de una respuesta ya parseada */
+function gattTextFrom(x) {
+  const b = x?.body ?? x;
+  return b?.gatt_text ?? null;
+}
+
 /* botones de RECUPERACIÓN en la tarjeta ⚙ Báscula tras un fallo de reconexión:
    - 🔗 Emparejar e intentar de nuevo: re-dispara connectFromCfg; el nativo
      AUTO-EMPAREJA el módulo clásico antes del SPP (fallo típico "read ret: -1").
-   - Probar como BLE: solo si el dispositivo guardado es dual-mode (cfg.alsoBle)
-     o ya es BLE — reconecta forzando el transporte BLE a la misma MAC. */
-function renderCardRecover(cfg) {
+   - Probar como BLE: SIEMPRE (en la app), porque un módulo "clásico/cercano"
+     que en realidad es BLE debe poder forzarse — reconecta por el transporte
+     BLE (GATT-notify) a la MISMA MAC.
+   - Si el intento BLE devolvió el diagnóstico GATT, se muestra copiable. */
+function renderCardRecover(cfg, gattText) {
   const rec = $('ccRecover');
   if (!rec) return;
   rec.innerHTML = '';
@@ -1537,7 +1598,9 @@ function renderCardRecover(cfg) {
   bPair.onclick = () => { $('bccConnect').click(); };
   rec.appendChild(bPair);
 
-  if (SHIM && cfg?.transport !== 'ble' && cfg?.alsoBle) {
+  // "Probar como BLE" disponible para CUALQUIER dispositivo en la app (no solo
+  // dual-mode): el módulo RS232-BLE de campo llega etiquetado "clásico".
+  if (SHIM && cfg?.transport !== 'ble') {
     const bBle = document.createElement('button');
     bBle.textContent = 'Probar como BLE';
     bBle.onclick = async () => {
@@ -1545,18 +1608,20 @@ function renderCardRecover(cfg) {
       try {
         await connectFromCfg({ ...cfg, transport: 'ble', kind: 'ble' });
         showBasculaHome({ cls: 'ok', text: '✓ Conectada por BLE — esperando la primera lectura…' });
-      } catch {
+      } catch (e) {
         showBasculaHome({
           cls: 'fail', keepRecover: true,
-          text: 'Tampoco pude por BLE. Acerca y enciende el módulo, o toca «Cambiar de báscula».',
+          text: e?.message || 'Tampoco pude por BLE. Acerca y enciende el módulo, o toca «Cambiar de báscula».',
         });
-        renderCardRecover(cfg);
+        renderCardRecover(cfg, gattTextFrom(e));
       } finally {
         bBle.disabled = false;
       }
     };
     rec.appendChild(bBle);
   }
+
+  renderGattDiag(rec, gattText);
 }
 
 /* ============================================================
@@ -1873,8 +1938,13 @@ function renderAddr() {
       <label class="addrlbl">Dirección del adaptador
         <input id="wizPort" placeholder="Ej: 00:14:03:xx:xx:xx" autocomplete="off" value="${escapeHtml(same ? cfg?.port ?? '' : '')}">
       </label>
+      <label class="revtoggle bletoggle">
+        <input type="checkbox" id="bleToggle"${WIZ.btKind === 'ble' ? ' checked' : ''}>
+        <span>📡 Conectar por BLE (GATT) <small>(módulos BLE / RS232-BLE que no se emparejan; escribe o elige la MAC arriba)</small></span>
+      </label>
       <p class="wizhelp">¿No aparece? Empareja primero el módulo en <b>Ajustes → Bluetooth</b>
-        (PIN <b>1234</b>) y vuelve a buscar.</p>
+        (PIN <b>1234</b>) y vuelve a buscar. Si es un módulo <b>BLE</b> (no se empareja),
+        marca <b>«Conectar por BLE (GATT)»</b>.</p>
       ${reverseToggleHtml()}
       ${signalSelectorHtml()}
       <details class="wizhelp-more">
@@ -1889,6 +1959,7 @@ function renderAddr() {
     $('bBtScan').onclick = () => { scanBtDevices().catch(() => {}); };
     bindSignalSel();
     bindReverseToggle();
+    bindBleToggle();
     return;
   }
   if (IS_MOBILE) {
@@ -1949,6 +2020,15 @@ function reverseToggleHtml() {
       <span>🔁 ¿Los números se ven al revés? <small>(ves 001 cuando la báscula marca 100)</small></span>
     </label>
     <div class="test-result" id="revLive"></div>`;
+}
+
+/* ---- 📡 Conectar por BLE (GATT) (Ajustes avanzados): fuerza el transporte
+   BLE a la MAC escrita/elegida, aunque el scan etiquetara el módulo "clásico".
+   Un módulo RS232-BLE que no se empareja SOLO conecta por aquí. ---- */
+function bindBleToggle() {
+  const t = $('bleToggle');
+  if (!t) return;
+  t.onchange = () => { WIZ.btKind = t.checked ? 'ble' : 'classic'; };
 }
 
 function bindReverseToggle() {
@@ -2044,6 +2124,9 @@ async function scanBtDevices() {
     // recordar el TIPO para enrutar el transporte del connect avanzado
     WIZ.btKind = dev.kind === 'ble' ? 'ble' : 'classic';
     WIZ.alsoBle = !!dev.alsoBle; // dual-mode → habilita el fallback a BLE
+    // refleja el TIPO en la casilla "Conectar por BLE (GATT)" (override manual)
+    const bleT = $('bleToggle');
+    if (bleT) bleT.checked = WIZ.btKind === 'ble';
     // BLE no se empareja (se acerca); el aviso de emparejar es solo para clásico
     if (!dev.paired && dev.kind !== 'ble') {
       wizResult('', 'Ese módulo aún no está emparejado: empareja primero en Ajustes → Bluetooth (PIN 1234).');
@@ -2218,10 +2301,10 @@ async function btAutoConnect(dev) {
           also_ble: !!dev.alsoBle,
         },
       });
-    } catch {
+    } catch (e) {
       if (status) status.textContent = '';
-      wizResult('fail', 'La detecté pero no pude dejarla conectada — intenta de nuevo.');
-      btAutoRetry(dev);
+      wizResult('fail', e?.message || 'La detecté pero no pude dejarla conectada — intenta de nuevo.');
+      btAutoRetry(dev, gattTextFrom(e));
       return;
     }
     APP.scaleConnected = true;
@@ -2263,10 +2346,12 @@ async function btAutoConnect(dev) {
    - 🔗 Emparejar e intentar de nuevo: re-dispara el connect; el nativo
      AUTO-EMPAREJA (createBond) antes del SPP — el fallo típico de campo
      ("read ret: -1") es justo un módulo clásico sin emparejar.
-   - Probar como BLE: solo si el dispositivo es dual-mode (alsoBle) o BLE —
-     reintenta el mismo flujo por el transporte BLE (GATT-notify).
+   - Probar como BLE: SIEMPRE (en la app), aunque el scan lo etiquetara
+     "clásico"/"cercano" — el módulo RS232-BLE de campo llega así y debe poder
+     forzarse por el transporte BLE (GATT-notify) a la misma MAC.
+   - Si el intento BLE devolvió el diagnóstico GATT, se muestra copiable.
    "Ajustes avanzados" ya está en pantalla para forzar marca/señal a mano. */
-function btAutoRetry(dev) {
+function btAutoRetry(dev, gattText) {
   const status = $('btAutoStatus');
   if (!status || !status.isConnected) return;
   status.innerHTML = '';
@@ -2282,8 +2367,8 @@ function btAutoRetry(dev) {
   bPair.onclick = () => { btAutoConnect(dev).catch(() => {}); };
   wrap.appendChild(bPair);
 
-  // Probar como BLE: dispositivo dual-mode (clásico que TAMBIÉN se anuncia por BLE).
-  if (dev.kind !== 'ble' && dev.alsoBle) {
+  // Probar como BLE disponible para CUALQUIER dispositivo en la app.
+  if (SHIM && dev.kind !== 'ble') {
     const bBle = document.createElement('button');
     bBle.textContent = 'Probar como BLE';
     bBle.onclick = () => { btAutoConnect({ ...dev, kind: 'ble' }).catch(() => {}); };
@@ -2291,6 +2376,7 @@ function btAutoRetry(dev) {
   }
 
   status.appendChild(wrap);
+  renderGattDiag(status, gattText);
 }
 
 /* ---- OTG AUTOMÁTICO (camino principal en la app, igual que BT) ----

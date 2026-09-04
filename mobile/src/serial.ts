@@ -506,5 +506,24 @@ export {
   pollBleScan,
   stopBleScan,
   pickUartCharacteristic,
+  describeGatt,
+  formatGattDump,
+  BleNoUartError,
+  NUS_SERVICE,
+  NUS_TX_NOTIFY,
+  NUS_RX_WRITE,
+  HM10_SERVICE,
+  HM10_CHAR,
+  MICROCHIP_SERVICE,
+  MICROCHIP_TX_NOTIFY,
+  MICROCHIP_RX_WRITE,
+  MICROCHIP_RX_WRITE_NR,
 } from "./ble";
-export type { BleClientLike, BleServiceInfo, DiscoveredUart, BleOptions } from "./ble";
+export type {
+  BleClientLike,
+  BleServiceInfo,
+  DiscoveredUart,
+  BleOptions,
+  GattServiceDump,
+  GattCharDump,
+} from "./ble";

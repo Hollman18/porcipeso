@@ -13,13 +13,20 @@
 import { describe, expect, it } from "vitest";
 import {
   BleTransport,
+  BleNoUartError,
   pickUartCharacteristic,
+  describeGatt,
+  formatGattDump,
   normalizeUuid,
   NUS_SERVICE,
   NUS_TX_NOTIFY,
   NUS_RX_WRITE,
   HM10_SERVICE,
   HM10_CHAR,
+  MICROCHIP_SERVICE,
+  MICROCHIP_TX_NOTIFY,
+  MICROCHIP_RX_WRITE,
+  MICROCHIP_RX_WRITE_NR,
   type BleClientLike,
   type BleServiceInfo,
 } from "../src/ble";
@@ -58,6 +65,26 @@ const HM10_SERVICES: BleServiceInfo[] = [
 /** HM-10 declarado en forma 16-bit ("ffe0"/"ffe1"): normalizeUuid lo expande. */
 const HM10_SHORT_SERVICES: BleServiceInfo[] = [
   { uuid: "ffe0", characteristics: [{ uuid: "ffe1", properties: { notify: true } }] },
+];
+/** Microchip / ISSC "Transparent UART" (RN4870/71, BM70/71) — RS232-BLE. */
+const MICROCHIP_SERVICES: BleServiceInfo[] = [
+  {
+    uuid: MICROCHIP_SERVICE,
+    characteristics: [
+      { uuid: MICROCHIP_RX_WRITE, properties: { write: true } },
+      { uuid: MICROCHIP_TX_NOTIFY, properties: { notify: true } },
+    ],
+  },
+];
+/** Microchip cuyo RX es SOLO write-sin-respuesta (algunos firmwares). */
+const MICROCHIP_WNR_SERVICES: BleServiceInfo[] = [
+  {
+    uuid: MICROCHIP_SERVICE,
+    characteristics: [
+      { uuid: MICROCHIP_TX_NOTIFY, properties: { notify: true } },
+      { uuid: MICROCHIP_RX_WRITE_NR, properties: { writeWithoutResponse: true } },
+    ],
+  },
 ];
 /** Un GATT cualquiera cuya única NOTIFY vive en un servivio no estándar. */
 const FALLBACK_SERVICES: BleServiceInfo[] = [
@@ -150,8 +177,8 @@ const MATRIX_PROFILE: ScaleProfile = {
 
 // ------------------------------------------------ descubrimiento de característica
 
-describe("pickUartCharacteristic — 3 caminos", () => {
-  it("(a) Nordic UART Service: TX notify + RX write", () => {
+describe("pickUartCharacteristic — los 5 perfiles de Serial Bluetooth Terminal", () => {
+  it("(1) Nordic UART Service: TX notify + RX write", () => {
     const uart = pickUartCharacteristic(NUS_SERVICES);
     expect(uart).not.toBeNull();
     expect(normalizeUuid(uart!.service)).toBe(NUS_SERVICE);
@@ -159,26 +186,54 @@ describe("pickUartCharacteristic — 3 caminos", () => {
     expect(normalizeUuid(uart!.writeChar!)).toBe(NUS_RX_WRITE);
   });
 
-  it("(b) HM-10/CC2541: FFE0/FFE1 (notify+write)", () => {
+  it("(2) TI CC254x / HM-10 / CC41-A: FFE0/FFE1 (notify+write)", () => {
     const uart = pickUartCharacteristic(HM10_SERVICES);
     expect(normalizeUuid(uart!.service)).toBe(HM10_SERVICE);
     expect(normalizeUuid(uart!.notifyChar)).toBe(HM10_CHAR);
   });
 
-  it("(b') HM-10 en forma 16-bit ('ffe0'/'ffe1') se normaliza y matchea", () => {
+  it("(2') HM-10 en forma 16-bit ('ffe0'/'ffe1') se normaliza y matchea", () => {
     const uart = pickUartCharacteristic(HM10_SHORT_SERVICES);
     expect(normalizeUuid(uart!.service)).toBe(HM10_SERVICE);
     expect(normalizeUuid(uart!.notifyChar)).toBe(HM10_CHAR);
   });
 
-  it("(c) fallback: la PRIMERA característica con NOTIFY de cualquier servicio", () => {
+  it("(3) Microchip / ISSC 'Transparent UART': TX notify + RX write (con respuesta)", () => {
+    const uart = pickUartCharacteristic(MICROCHIP_SERVICES);
+    expect(uart).not.toBeNull();
+    expect(normalizeUuid(uart!.service)).toBe(MICROCHIP_SERVICE);
+    expect(normalizeUuid(uart!.notifyChar)).toBe(MICROCHIP_TX_NOTIFY);
+    expect(normalizeUuid(uart!.writeChar!)).toBe(MICROCHIP_RX_WRITE);
+  });
+
+  it("(3') Microchip con RX SOLO write-sin-respuesta → usa la variante WNR", () => {
+    const uart = pickUartCharacteristic(MICROCHIP_WNR_SERVICES);
+    expect(normalizeUuid(uart!.service)).toBe(MICROCHIP_SERVICE);
+    expect(normalizeUuid(uart!.notifyChar)).toBe(MICROCHIP_TX_NOTIFY);
+    expect(normalizeUuid(uart!.writeChar!)).toBe(MICROCHIP_RX_WRITE_NR);
+  });
+
+  it("(4/5) fallback genérico: la PRIMERA NOTIFY de un servicio DESCONOCIDO (+ WRITE)", () => {
     const uart = pickUartCharacteristic(FALLBACK_SERVICES);
     expect(uart!.service).toBe("12345678-1234-5678-1234-56789abcdef0");
     expect(uart!.notifyChar).toBe("12345678-1234-5678-1234-56789abcdef2");
     expect(uart!.writeChar).toBe("12345678-1234-5678-1234-56789abcdef1");
   });
 
-  it("sin ninguna NOTIFY → null (no es una báscula serial-BLE)", () => {
+  it("(5) fallback por INDICATE cuando el servicio raro solo indica (sin notify)", () => {
+    const indicateOnly: BleServiceInfo[] = [
+      {
+        uuid: "aaaa1111-0000-1000-8000-00805f9b34fb",
+        characteristics: [
+          { uuid: "aaaa2222-0000-1000-8000-00805f9b34fb", properties: { indicate: true } },
+        ],
+      },
+    ];
+    const uart = pickUartCharacteristic(indicateOnly);
+    expect(uart!.notifyChar).toBe("aaaa2222-0000-1000-8000-00805f9b34fb");
+  });
+
+  it("sin ninguna NOTIFY/INDICATE → null (no es una báscula serial-BLE)", () => {
     const none: BleServiceInfo[] = [
       { uuid: "0000180a-0000-1000-8000-00805f9b34fb", characteristics: [
         { uuid: "00002a29-0000-1000-8000-00805f9b34fb", properties: { read: true } },
@@ -188,12 +243,64 @@ describe("pickUartCharacteristic — 3 caminos", () => {
   });
 });
 
+// ------------------------------------------------------- diagnóstico GATT
+
+describe("diagnóstico GATT — cuando no hay UART, expón lo que el módulo publica", () => {
+  const EXOTIC: BleServiceInfo[] = [
+    {
+      uuid: "0000180a-0000-1000-8000-00805f9b34fb", // Device Information
+      characteristics: [
+        { uuid: "00002a29-0000-1000-8000-00805f9b34fb", properties: { read: true } },
+      ],
+    },
+    {
+      uuid: "abcd0000-1234-5678-1234-56789abcdef0", // servicio raro sin notify
+      characteristics: [
+        { uuid: "abcd0001-1234-5678-1234-56789abcdef0", properties: { write: true } },
+      ],
+    },
+  ];
+
+  it("describeGatt lista servicios + características con sus propiedades", () => {
+    const dump = describeGatt(EXOTIC);
+    expect(dump).toHaveLength(2);
+    expect(dump[0].uuid).toBe("0000180a-0000-1000-8000-00805f9b34fb");
+    expect(dump[0].characteristics[0]).toMatchObject({
+      uuid: "00002a29-0000-1000-8000-00805f9b34fb",
+      properties: ["read"],
+    });
+    expect(dump[1].characteristics[0].properties).toEqual(["write"]);
+  });
+
+  it("formatGattDump produce texto copiable con UUIDs y propiedades", () => {
+    const text = formatGattDump(EXOTIC);
+    expect(text).toContain("Servicio 0000180a-0000-1000-8000-00805f9b34fb");
+    expect(text).toContain("abcd0001-1234-5678-1234-56789abcdef0 [write]");
+  });
+
+  it("BleTransport.open() rechaza con BleNoUartError que CARGA el volcado GATT", async () => {
+    const gatt = new FakeGatt(EXOTIC);
+    const t = new BleTransport("dev-1", { client: gatt.asClient(), sleep: () => Promise.resolve() });
+    let caught: unknown = null;
+    await t.open().catch((e) => (caught = e));
+    expect(caught).toBeInstanceOf(BleNoUartError);
+    const e = caught as BleNoUartError;
+    expect(e.message).toMatch(/no_uart/);
+    // el diagnóstico viaja para que la UI lo muestre y soporte clave el perfil
+    expect(e.gatt).toHaveLength(2);
+    expect(e.gattText).toContain("abcd0001-1234-5678-1234-56789abcdef0");
+    // cerró limpio el GATT antes de rendirse
+    expect(gatt.disconnectCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
 // -------------------------------------------------------- BleTransport (GATT sim)
 
 describe("BleTransport — notificaciones → bytes → parser", () => {
   for (const [name, services] of [
     ["Nordic UART Service", NUS_SERVICES],
     ["HM-10 FFE0/FFE1", HM10_SERVICES],
+    ["Microchip/ISSC Transparent UART", MICROCHIP_SERVICES],
     ["fallback primera NOTIFY", FALLBACK_SERVICES],
   ] as const) {
     it(`descubre y suscribe por: ${name}`, async () => {

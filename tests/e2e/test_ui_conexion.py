@@ -471,6 +471,99 @@ def test_bt_connect_fallo_muestra_botones_recuperacion(page, server_url):
     assert cfg["kind"] == "ble"
 
 
+# --------- 4quater) "Probar como BLE" SIEMPRE, aunque NO sea dual-mode
+
+def test_probar_como_ble_visible_para_cualquier_dispositivo(page, server_url):
+    """Un módulo etiquetado 'clásico'/'cercano' que en realidad es BLE debe
+    poder forzarse: 'Probar como BLE' aparece tras un fallo AUNQUE el
+    dispositivo NO sea dual-mode (sin alsoBle)."""
+    page.add_init_script("window.__PORCIPESO_SHIM__ = { native: true };")
+
+    dev = {"name": "HC-05", "address": "98:D3:31:F0:12:34",
+           "paired": False, "kind": "classic"}  # sin alsoBle
+
+    page.route("**/api/bt/devices", lambda r: r.fulfill(json=[]))
+    page.route("**/api/bt/discovery/start", lambda r: r.fulfill(json={"started": True}))
+    page.route("**/api/bt/discovery",
+               lambda r: r.fulfill(json={"devices": [dev], "finished": True}))
+    page.route("**/api/scale/detect",
+               lambda r: r.fulfill(status=502,
+                                   json={"detail": "SPP no conectó (read ret: -1)"}))
+
+    page.goto(server_url + "/#bascula")
+    page.locator("#bConnStart").click()
+    EXPECT(page.locator("#wizPane1")).to_have_class("wizpane active")
+    page.locator('#wizPane1 [data-method="bluetooth"]').click()
+    EXPECT(page.locator("#wizPane3")).to_have_class("wizpane active")
+
+    device = page.locator("#btList .bt-item", has_text="HC-05")
+    EXPECT(device).to_have_count(1, timeout=10_000)
+    device.click()
+
+    recover = page.locator("#btAutoStatus .bt-recover")
+    EXPECT(recover).to_be_visible(timeout=10_000)
+    # NO es dual-mode y AÚN así ofrece "Probar como BLE"
+    EXPECT(recover.get_by_text("Probar como BLE")).to_be_visible()
+
+
+# --------- 4quinquies) diagnóstico GATT copiable cuando el BLE no tiene UART
+
+def test_diagnostico_gatt_copiable_cuando_ble_sin_uart(page, server_url):
+    """🔎 Cuando el connect BLE no halla una característica UART usable, el
+    backend devuelve la lista de servicios/características del módulo y la UI la
+    muestra en un bloque COPIABLE ('Detalle técnico del módulo — envíaselo a
+    soporte') con botón Copiar — así se clava un perfil raro por su UUID."""
+    page.add_init_script("window.__PORCIPESO_SHIM__ = { native: true };")
+
+    dev = {"name": "RS232/485", "address": "48:87:2D:9D:D5:71",
+           "paired": False, "kind": "ble"}
+
+    page.route("**/api/bt/devices", lambda r: r.fulfill(json=[]))
+    page.route("**/api/bt/discovery/start", lambda r: r.fulfill(json={"started": True}))
+    page.route("**/api/bt/discovery",
+               lambda r: r.fulfill(json={"devices": [dev], "finished": True}))
+
+    def handle_detect(route):  # la escucha detecta parser OK (transporte BLE)
+        route.fulfill(json={
+            "ok": True, "parser_ok": True, "parser": "matrix",
+            "invert_bits": False, "reverse_frame": False, "kg": 126.35,
+            "message": "✓ La báscula responde: 126.35 kg", "hex": "3D 20 31 32 36",
+        })
+
+    def handle_connect(route):  # pero al conectar, el GATT no expone NOTIFY
+        route.fulfill(status=400, json={
+            "detail": "Ese dispositivo BLE no expone una característica de datos (NOTIFY).",
+            "gatt": [{
+                "uuid": "0000180a-0000-1000-8000-00805f9b34fb",
+                "characteristics": [
+                    {"uuid": "00002a29-0000-1000-8000-00805f9b34fb", "properties": ["read"]},
+                ],
+            }],
+            "gatt_text": ("Servicio 0000180a-0000-1000-8000-00805f9b34fb\n"
+                          "  · 00002a29-0000-1000-8000-00805f9b34fb [read]"),
+        })
+
+    page.route("**/api/scale/detect", handle_detect)
+    page.route("**/api/scale/connect", handle_connect)
+
+    page.goto(server_url + "/#bascula")
+    page.locator("#bConnStart").click()
+    EXPECT(page.locator("#wizPane1")).to_have_class("wizpane active")
+    page.locator('#wizPane1 [data-method="bluetooth"]').click()
+    EXPECT(page.locator("#wizPane3")).to_have_class("wizpane active")
+
+    device = page.locator("#btList .bt-item", has_text="RS232/485")
+    EXPECT(device).to_have_count(1, timeout=10_000)
+    device.click()
+
+    # el bloque de diagnóstico GATT copiable aparece con el UUID exacto
+    diag = page.locator("#btAutoStatus .gatt-diag")
+    EXPECT(diag).to_be_visible(timeout=10_000)
+    EXPECT(diag).to_contain_text("Detalle técnico del módulo")
+    EXPECT(diag).to_contain_text("00002a29-0000-1000-8000-00805f9b34fb")
+    EXPECT(diag.locator(".gatt-diag-copy")).to_be_visible()
+
+
 # ---------------------- 5) "Usar báscula simulada" deja tarjeta de estado
 
 def test_usar_simulada_guarda_config_y_tarjeta(page, server_url):

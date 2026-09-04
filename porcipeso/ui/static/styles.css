@@ -601,6 +601,17 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
 .bt-recover[hidden]{display:none !important}
 .bt-recover button{flex:1 1 auto}
 
+/* 🔎 diagnóstico GATT copiable: servicios/características del módulo BLE cuando
+   no se halla una característica UART usable (perfil raro → clávalo por su UUID) */
+.gatt-diag{flex:1 1 100%;margin-top:12px;padding:12px 14px;border-radius:12px;
+  border:1px dashed var(--panel-edge);background:var(--panel,transparent)}
+.gatt-diag-title{font-size:14px;font-weight:700;margin-bottom:8px}
+.gatt-diag-pre{margin:0;font-size:12px;line-height:1.5;color:var(--muted);
+  white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.gatt-diag-copy{margin-top:8px}
+.bletoggle small{display:block;font-weight:400;color:var(--muted)}
+
 /* ============ 🔁 números al revés (reverse_frame) ============ */
 .revtoggle{display:flex;align-items:flex-start;gap:10px;margin:12px 0 4px;
   font-size:15px;font-weight:600;cursor:pointer}

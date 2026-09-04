@@ -1,13 +1,16 @@
 /**
- * FALLBACK BLE dual-mode del connect CLÁSICO (bug de campo: el módulo
- * "RS232/485" aparece como clásico pero el SPP no conecta — "read ret: -1").
+ * AUTO-FALLBACK A BLE POR MAC del connect CLÁSICO (bug de campo: el módulo
+ * "RS232/485" aparece como clásico pero el SPP no conecta — "read ret: -1" /
+ * bond fallido — porque en realidad es BLE).
  *
- *   · mergeBtDevices marca `alsoBle:true` en un clásico cuya MISMA MAC también
- *     se anuncia por BLE (dual-mode) → habilita el fallback.
- *   · POST /api/scale/connect: si el transporte CLÁSICO falla y hay BLE para esa
- *     MAC (hint body.also_ble o el cache de MACs BLE del discovery), reintenta
- *     por BLE y responde con transport:'ble' + fell_back:true.
- *   · Sin BLE disponible, el connect clásico fallido responde 400 con su error.
+ *   · POST /api/scale/connect: si el transporte CLÁSICO falla POR LO QUE SEA,
+ *     SIEMPRE reintenta por BLE GATT a la MISMA MAC antes de rendirse — un
+ *     connect BLE funciona por MAC aunque el scan no lo etiquetara como BLE, así
+ *     que NO se exige hint `also_ble` ni que la MAC esté en el cache del scan.
+ *     Al lograrlo responde transport:'ble' + fell_back:true.
+ *   · Si BLE TAMBIÉN falla, responde 400 con AMBOS motivos (clásico + BLE) y,
+ *     si el módulo BLE no tenía UART usable, adjunta el diagnóstico GATT.
+ *   · mergeBtDevices sigue marcando `alsoBle` en dual-mode (informativo/UI).
  */
 import { describe, expect, it } from "vitest";
 import { LocalBackend } from "../src/apishim";
@@ -150,15 +153,19 @@ describe("scale/connect — fallback CLÁSICO→BLE dual-mode", () => {
     }
   });
 
-  it("clásico falla SIN BLE disponible → 400 con el error clásico (sin fallback)", async () => {
+  it("clásico falla SIN hint NI cache → cae a BLE IGUAL (por MAC)", async () => {
+    // NUEVO comportamiento: el fallback ya no depende de alsoBle ni del cache
+    // del scan — un módulo etiquetado "clásico" que en realidad es BLE conecta.
+    let seenKind: string | null = null;
     let bleTried = false;
     const bt = await makeBackend({
       createBtDriver: async () => {
         throw new Error("SPP no conectó (read ret: -1)");
       },
       serial: {
-        makeTransport: async () => {
+        makeTransport: async (kind) => {
           bleTried = true;
+          seenKind = kind;
           return makeFakeBle();
         },
       },
@@ -168,17 +175,20 @@ describe("scale/connect — fallback CLÁSICO→BLE dual-mode", () => {
         profile_id: "matrix-adr00",
         transport: "bluetooth",
         port: RS232,
+        // sin also_ble, sin discovery previo: NADA marca esta MAC como BLE
       });
-      expect(res.status).toBe(400);
-      expect(res.json.detail).toContain("read ret: -1");
-      expect(bleTried).toBe(false); // no dual-mode → no se intentó BLE
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({ transport: "ble", fell_back: true });
+      expect(res.json.classic_error).toContain("read ret: -1");
+      expect(bleTried).toBe(true); // SIEMPRE se intenta BLE
+      expect(seenKind).toBe("ble");
     } finally {
       await bt.stopDriver();
       await bt.repo.close();
     }
   });
 
-  it("clásico falla + also_ble pero BLE TAMBIÉN falla → 400 con el error clásico original", async () => {
+  it("clásico falla y BLE TAMBIÉN falla → 400 con AMBOS motivos (clásico + BLE)", async () => {
     const bt = await makeBackend({
       createBtDriver: async () => {
         throw new Error("SPP no conectó (read ret: -1)");
@@ -187,7 +197,7 @@ describe("scale/connect — fallback CLÁSICO→BLE dual-mode", () => {
         makeTransport: async () => ({
           label: "fake-ble",
           open: async () => {
-            throw new Error("no_uart: el dispositivo BLE no notifica");
+            throw new Error("bluetooth_off: el BLE está apagado");
           },
           read: async () => new Uint8Array(0),
           close: async () => {},
@@ -199,11 +209,105 @@ describe("scale/connect — fallback CLÁSICO→BLE dual-mode", () => {
         profile_id: "matrix-adr00",
         transport: "bluetooth",
         port: RS232,
-        also_ble: true,
       });
       expect(res.status).toBe(400);
-      // el error CLÁSICO original es el más informativo cuando ambos fallan
+      // dilo CLARO: ni clásico ni BLE, con ambos motivos
+      expect(res.json.detail).toContain("ni por Bluetooth clásico ni por BLE");
       expect(res.json.detail).toContain("read ret: -1");
+      expect(res.json.classic_error).toContain("read ret: -1");
+      expect(res.json.ble_error).toBeTruthy();
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
+  it("clásico falla y BLE no halla UART → 400 con el DIAGNÓSTICO GATT adjunto", async () => {
+    const { BleNoUartError } = await import("../src/serial");
+    // un módulo BLE que expone servicios pero ninguna característica NOTIFY
+    const exotic = [
+      {
+        uuid: "0000180a-0000-1000-8000-00805f9b34fb",
+        characteristics: [
+          { uuid: "00002a29-0000-1000-8000-00805f9b34fb", properties: { read: true } },
+        ],
+      },
+      {
+        uuid: "abcd0000-1234-5678-1234-56789abcdef0",
+        characteristics: [
+          { uuid: "abcd0001-1234-5678-1234-56789abcdef0", properties: { write: true } },
+        ],
+      },
+    ];
+    const bt = await makeBackend({
+      createBtDriver: async () => {
+        throw new Error("SPP no conectó (read ret: -1)");
+      },
+      serial: {
+        makeTransport: async () => ({
+          label: "fake-ble",
+          open: async () => {
+            throw new BleNoUartError(exotic);
+          },
+          read: async () => new Uint8Array(0),
+          close: async () => {},
+        }),
+      },
+    });
+    try {
+      const res = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "matrix-adr00",
+        transport: "bluetooth",
+        port: RS232,
+      });
+      expect(res.status).toBe(400);
+      // el diagnóstico GATT viaja para mostrarlo copiable en la UI
+      expect(Array.isArray(res.json.gatt)).toBe(true);
+      expect(res.json.gatt).toHaveLength(2);
+      expect(res.json.gatt_text).toContain("abcd0001-1234-5678-1234-56789abcdef0");
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+});
+
+// ---------------------------- diagnóstico GATT en connect BLE directo
+
+describe("scale/connect transport:'ble' — diagnóstico GATT cuando no hay UART", () => {
+  it("devuelve la lista de servicios/características (UUID + props) del módulo", async () => {
+    const { BleNoUartError } = await import("../src/serial");
+    const exotic = [
+      {
+        uuid: "aaaa0000-1111-2222-3333-444455556666",
+        characteristics: [
+          { uuid: "aaaa0001-1111-2222-3333-444455556666", properties: { read: true, write: true } },
+        ],
+      },
+    ];
+    const bt = await makeBackend({
+      serial: {
+        makeTransport: async () => ({
+          label: "fake-ble",
+          open: async () => {
+            throw new BleNoUartError(exotic);
+          },
+          read: async () => new Uint8Array(0),
+          close: async () => {},
+        }),
+      },
+    });
+    try {
+      const res = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "matrix-adr00",
+        transport: "ble",
+        port: RS232,
+      });
+      expect(res.status).toBe(400);
+      expect(res.json.gatt).toHaveLength(1);
+      expect(res.json.gatt[0].uuid).toBe("aaaa0000-1111-2222-3333-444455556666");
+      expect(res.json.gatt[0].characteristics[0].properties).toEqual(["read", "write"]);
+      expect(res.json.gatt_text).toContain("aaaa0001-1111-2222-3333-444455556666");
     } finally {
       await bt.stopDriver();
       await bt.repo.close();

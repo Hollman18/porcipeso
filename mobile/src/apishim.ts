@@ -250,9 +250,11 @@ export class LocalBackend {
   /** Emparejados cacheados para el merge del discovery en vivo. */
   private btPairedCache: Array<{ name: string; address: string; paired: boolean }> = [];
   /**
-   * MACs vistas por BLE durante el último discovery. Habilita el FALLBACK BLE
-   * dual-mode del connect clásico aunque la UI no mande el hint `also_ble`
-   * (p.ej. la reconexión directa por config guardada como 'classic').
+   * MACs vistas por BLE durante el último discovery. LEGADO/informativo: el
+   * connect clásico ahora cae a BLE SIEMPRE que el SPP falle (no solo si la MAC
+   * estaba en este cache o venía el hint `also_ble`), así que ya no gatea el
+   * fallback; se conserva por si algún flujo futuro quiere saber qué MACs se
+   * anunciaron por BLE.
    */
   private btBleAddrCache = new Set<string>();
   private lastReadingBroadcast = 0;
@@ -785,23 +787,38 @@ export class LocalBackend {
       this.driverProfile = profile;
     } catch (e) {
       const classicErr = String(e instanceof Error ? e.message : e);
-      // FALLBACK BLE dual-mode: si el enlace CLÁSICO (SPP) no conectó y la MISMA
-      // MAC se anuncia por BLE, reintenta por BLE ANTES de rendirse. El hint
-      // `also_ble` lo manda la UI (del merge, campo alsoBle); el cache de MACs
-      // BLE del discovery lo cubre en la reconexión directa por config guardada.
-      const alsoBle = Boolean(body["also_ble"]) || this.btBleAddrCache.has(address);
-      if (alsoBle) {
-        const bleRes = await this.bleConnect(profile, body);
-        if (bleRes.status === 200) {
-          // responde QUÉ transporte quedó: la UI guarda 'ble' para reconectar
-          // directo la próxima vez (fell_back marca que hubo caída del clásico).
-          const b = (bleRes.body ?? {}) as Record<string, unknown>;
-          return ok({ ...b, fell_back: true, classic_error: classicErr });
-        }
-        // BLE tampoco: el error CLÁSICO original es el más informativo.
+      // AUTO-FALLBACK A BLE POR MAC — SIEMPRE. El enlace CLÁSICO (SPP) falló por
+      // lo que sea (bond fallido / cancelado, "read ret: -1", SDP pobre, o el
+      // módulo es en realidad BLE-only aunque el scan lo etiquetara "clásico"/
+      // "cercano"). Un connect BLE GATT funciona POR MAC aunque el scan nunca lo
+      // marcara como BLE, así que reintentamos SIEMPRE por BLE a la MISMA MAC
+      // antes de rendirnos — sin depender del hint `also_ble` ni del cache.
+      const bleRes = await this.bleConnect(profile, body);
+      if (bleRes.status === 200) {
+        // responde QUÉ transporte quedó: la UI guarda 'ble' para reconectar
+        // directo la próxima vez (fell_back marca que hubo caída del clásico).
+        const b = (bleRes.body ?? {}) as Record<string, unknown>;
+        return ok({ ...b, fell_back: true, classic_error: classicErr });
       }
+      // NI clásico NI BLE conectaron: dilo CLARO, con ambos motivos, y adjunta
+      // el diagnóstico GATT si el intento BLE produjo uno (perfil raro).
       this.driverError = classicErr;
-      return err(400, this.driverError);
+      const bleBody = (bleRes.body ?? {}) as Record<string, unknown>;
+      const bleErr = bleBody["detail"] != null ? String(bleBody["detail"]) : null;
+      const detail =
+        "No pude conectar el módulo — ni por Bluetooth clásico ni por BLE. " +
+        `Detalle clásico: ${classicErr}` +
+        (bleErr ? ` · Detalle BLE: ${bleErr}` : "");
+      const respBody: Record<string, unknown> = {
+        detail,
+        classic_error: classicErr,
+        ble_error: bleErr,
+      };
+      if (bleBody["gatt"]) {
+        respBody["gatt"] = bleBody["gatt"];
+        respBody["gatt_text"] = bleBody["gatt_text"] ?? null;
+      }
+      return { status: 400, body: respBody };
     }
     return ok({ connected: true, profile_id: profile.id, transport: "bluetooth" });
   }
@@ -868,7 +885,17 @@ export class LocalBackend {
     } catch (e) {
       const { humanizeSerialError } = await import("./serial");
       this.driverError = humanizeSerialError(e);
-      return err(400, this.driverError);
+      const body: Record<string, unknown> = { detail: this.driverError };
+      // DIAGNÓSTICO GATT: si el módulo BLE no exponía una característica UART
+      // usable, el BleTransport lanza un BleNoUartError con el volcado de
+      // servicios/características. Lo devolvemos para mostrarlo copiable en la UI
+      // y clavar perfiles exóticos sin tener el hardware a mano.
+      const gatt = (e as { gatt?: unknown })?.gatt;
+      if (gatt) {
+        body.gatt = gatt;
+        body.gatt_text = (e as { gattText?: unknown }).gattText ?? null;
+      }
+      return { status: 400, body };
     }
     return ok({ connected: true, profile_id: profile.id, transport: "ble" });
   }

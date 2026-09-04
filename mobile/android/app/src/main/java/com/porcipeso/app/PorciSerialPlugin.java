@@ -87,8 +87,15 @@ public class PorciSerialPlugin extends Plugin {
         UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String ACTION_USB_PERMISSION = "com.porcipeso.app.USB_PERMISSION";
     private static final int MAX_BUFFER = 64 * 1024;
-    /** Espera máxima al emparejado (Android muestra su diálogo de PIN mientras). */
-    private static final long BOND_TIMEOUT_MS = 25_000L;
+    /**
+     * Espera máxima al emparejado (Android muestra su diálogo de PIN mientras).
+     * BAJA a propósito (~12 s, no 25): un módulo "RS232/485" que en realidad es
+     * BLE (o dual-mode cuyo SPP no sirve) NUNCA completa el bond clásico, así que
+     * cuanto antes venza este latch, antes cae el flujo al FALLBACK BLE por MAC
+     * del apishim. Un módulo NO bondable ni siquiera llega aquí: createBond()
+     * devuelve false y rechazamos de inmediato (no bloquea).
+     */
+    private static final long BOND_TIMEOUT_MS = 12_000L;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 

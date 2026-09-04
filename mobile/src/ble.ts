@@ -29,9 +29,19 @@ import type { ByteTransport, LinkStatus } from "./serial";
 export const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 export const NUS_TX_NOTIFY = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 export const NUS_RX_WRITE = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-/** HM-10 / CC2541: una sola característica notify+write. */
+/** HM-10 / CC2541 / CC41-A (TI CC254x): una sola característica notify+write. */
 export const HM10_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb";
 export const HM10_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb";
+/**
+ * Microchip / ISSC "Transparent UART" (RN4870/71, BM70/71) — EL PERFIL MÁS
+ * PROBABLE en adaptadores RS232-BLE de campo. TX = notify (báscula→app),
+ * RX = write (con respuesta) o su variante write-sin-respuesta.
+ */
+export const MICROCHIP_SERVICE = "49535343-fe7d-4ae5-8fa9-9fafd205e455";
+export const MICROCHIP_TX_NOTIFY = "49535343-1e4d-4bd9-ba61-23c647249616";
+export const MICROCHIP_RX_WRITE = "49535343-8841-43f4-a8d4-ecbe34729bb3";
+/** Variante write-sin-respuesta del RX de Microchip/ISSC (algunos firmwares). */
+export const MICROCHIP_RX_WRITE_NR = "49535343-4c8a-39b3-2f49-511cff073b7e";
 
 // --------------------------------------------- contrato GATT (inyectable)
 
@@ -95,18 +105,26 @@ function canWrite(c: BleCharacteristicInfo): boolean {
 }
 
 /**
- * Elige la característica tipo UART-serial probando EN ORDEN:
- *   (a) Nordic UART Service (NUS): TX notify + RX write.
- *   (b) HM-10/CC2541: FFE0/FFE1 (notify+write).
- *   (c) fallback: la PRIMERA característica con NOTIFY (o INDICATE) de
- *       cualquier servicio (y una con WRITE del mismo servicio para TX si
- *       hiciera falta). Puro → testeable por los 3 caminos.
+ * Elige la característica tipo UART-serial probando EN ORDEN los perfiles
+ * "vendor GATT / transparent UART" que soporta la app de referencia (Serial
+ * Bluetooth Terminal):
+ *   (1) Nordic UART Service (NUS): TX notify + RX write.
+ *   (2) TI CC254x / HM-10 / CC41-A: FFE0/FFE1 (notify+write).
+ *   (3) Microchip / ISSC "Transparent UART" (RN4870/71, BM70/71): TX notify +
+ *       RX write (con respuesta) o su variante write-sin-respuesta. EL MÁS
+ *       PROBABLE para adaptadores RS232-BLE.
+ *   (4) Telit Bluemod y perfiles definidos por el usuario: cubiertos por (5).
+ *   (5) FALLBACK GENÉRICO ROBUSTO: la PRIMERA característica con NOTIFY (o
+ *       INDICATE) de CUALQUIER servicio (para RX del peso) y, si existe, una
+ *       con WRITE/WRITE_NO_RESPONSE del mismo servicio (para TX). Las
+ *       notificaciones/indicaciones se habilitan según la propiedad real.
+ * Puro → testeable por los 5 caminos.
  */
 export function pickUartCharacteristic(services: BleServiceInfo[]): DiscoveredUart | null {
   const byUuid = new Map<string, BleServiceInfo>();
   for (const s of services ?? []) byUuid.set(normalizeUuid(s.uuid), s);
 
-  // (a) Nordic UART Service
+  // (1) Nordic UART Service
   const nus = byUuid.get(NUS_SERVICE);
   if (nus) {
     const tx = nus.characteristics.find(
@@ -120,7 +138,7 @@ export function pickUartCharacteristic(services: BleServiceInfo[]): DiscoveredUa
     }
   }
 
-  // (b) HM-10 / CC2541
+  // (2) TI CC254x / HM-10 / CC41-A
   const hm = byUuid.get(HM10_SERVICE);
   if (hm) {
     const c = hm.characteristics.find((x) => normalizeUuid(x.uuid) === HM10_CHAR && canNotify(x));
@@ -129,7 +147,27 @@ export function pickUartCharacteristic(services: BleServiceInfo[]): DiscoveredUa
     }
   }
 
-  // (c) fallback: primera NOTIFY de cualquier servicio
+  // (3) Microchip / ISSC "Transparent UART" (RN4870/71, BM70/71)
+  const mc = byUuid.get(MICROCHIP_SERVICE);
+  if (mc) {
+    const tx = mc.characteristics.find(
+      (c) => normalizeUuid(c.uuid) === MICROCHIP_TX_NOTIFY && canNotify(c),
+    );
+    if (tx) {
+      // RX preferido: write CON respuesta; si no, la variante write-sin-respuesta.
+      const rx =
+        mc.characteristics.find(
+          (c) => normalizeUuid(c.uuid) === MICROCHIP_RX_WRITE && canWrite(c),
+        ) ??
+        mc.characteristics.find(
+          (c) => normalizeUuid(c.uuid) === MICROCHIP_RX_WRITE_NR && canWrite(c),
+        );
+      return { service: mc.uuid, notifyChar: tx.uuid, writeChar: rx?.uuid };
+    }
+  }
+
+  // (4)+(5) fallback genérico: primera NOTIFY/INDICATE de cualquier servicio
+  //  (Telit Bluemod y perfiles a medida caen aquí). WRITE del mismo servicio.
   for (const s of services ?? []) {
     const notif = s.characteristics.find(canNotify);
     if (notif) {
@@ -138,6 +176,81 @@ export function pickUartCharacteristic(services: BleServiceInfo[]): DiscoveredUa
     }
   }
   return null;
+}
+
+// ------------------------------------------------ diagnóstico GATT (soporte)
+
+/** Propiedades legibles de una característica GATT (para el volcado). */
+export interface GattCharDump {
+  uuid: string;
+  properties: string[];
+}
+export interface GattServiceDump {
+  uuid: string;
+  characteristics: GattCharDump[];
+}
+
+function charPropList(c: BleCharacteristicInfo): string[] {
+  const p = c.properties ?? {};
+  const out: string[] = [];
+  if (p.read) out.push("read");
+  if (p.write) out.push("write");
+  if (p.writeWithoutResponse) out.push("writeNoResp");
+  if (p.notify) out.push("notify");
+  if (p.indicate) out.push("indicate");
+  return out;
+}
+
+/**
+ * Vuelca los servicios/características GATT (UUID normalizado + propiedades)
+ * para DIAGNÓSTICO: cuando ningún perfil UART matchea, esto revela el UUID
+ * EXACTO que expone el módulo — así se puede clavar un perfil exótico sin
+ * tener el hardware a mano. Puro → testeable.
+ */
+export function describeGatt(services: BleServiceInfo[]): GattServiceDump[] {
+  return (services ?? []).map((s) => ({
+    uuid: normalizeUuid(s.uuid),
+    characteristics: (s.characteristics ?? []).map((c) => ({
+      uuid: normalizeUuid(c.uuid),
+      properties: charPropList(c),
+    })),
+  }));
+}
+
+/** Texto COPIABLE del volcado GATT ("Detalle técnico del módulo" para soporte). */
+export function formatGattDump(services: BleServiceInfo[]): string {
+  const dump = describeGatt(services);
+  if (!dump.length) return "(el módulo no expuso ningún servicio GATT)";
+  const lines: string[] = [];
+  for (const s of dump) {
+    lines.push(`Servicio ${s.uuid}`);
+    if (!s.characteristics.length) lines.push("  (sin características)");
+    for (const c of s.characteristics) {
+      lines.push(`  · ${c.uuid} [${c.properties.join(", ") || "sin propiedades"}]`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Error de "sin característica UART usable" que ADEMÁS carga el volcado GATT
+ * (estructurado + texto) para diagnóstico en la UI y en los logs. El apishim
+ * lo detecta y devuelve `gatt`/`gatt_text` en la respuesta del connect.
+ */
+export class BleNoUartError extends Error {
+  readonly gatt: GattServiceDump[];
+  readonly gattText: string;
+  constructor(services: BleServiceInfo[]) {
+    const text = formatGattDump(services);
+    super(
+      "no_uart: el dispositivo BLE no expone una característica de notificación " +
+        "usable (¿es realmente una báscula serial-BLE?). Servicios GATT:\n" +
+        text,
+    );
+    this.name = "BleNoUartError";
+    this.gatt = describeGatt(services);
+    this.gattText = text;
+  }
 }
 
 // --------------------------------------------------------------- transporte
@@ -240,10 +353,17 @@ export class BleTransport implements ByteTransport {
       } catch {
         /* ya caído */
       }
-      throw new Error(
-        "no_uart: el dispositivo BLE no expone una característica de notificación " +
-          "(¿es realmente una báscula serial-BLE?)",
-      );
+      // DIAGNÓSTICO GATT: en vez de solo fallar, recopila la lista de servicios
+      // y características (UUID + propiedades) que el módulo expone. Se loguea y
+      // viaja con el error para mostrarla copiable en la UI ("envíaselo a
+      // soporte") — así se clava el UUID exacto de un perfil raro sin hardware.
+      const e = new BleNoUartError(services);
+      try {
+        console.warn("[PorciPeso BLE] " + e.message);
+      } catch {
+        /* consola ausente */
+      }
+      throw e;
     }
     this.uart = uart;
     await this.client.startNotifications(
