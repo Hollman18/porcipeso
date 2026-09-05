@@ -138,6 +138,11 @@ class MotivoBody(BaseModel):
     motivo: str
 
 
+class MinKgBody(BaseModel):
+    """Peso mínimo (kg) para contar un cerdo/escalón (default 5)."""
+    kg: float
+
+
 class ReturnedBody(BaseModel):
     """Devueltos MANUAL: cerdos que se subieron, se devolvieron por miedo y se
     re-pesarán. Descuenta n×promedio del conteo y total (corrige el doble
@@ -252,6 +257,10 @@ def create_app(
     st.engine = None
     st.engine_factory = engine_factory or _default_engine_factory
     st.engine_lock = threading.Lock()
+    # Peso mínimo (kg) para contar un cerdo/escalón. 5 kg por defecto para que
+    # cerdos pequeños (10 kg) se cuenten (antes 40 kg los ignoraba). Ajustable
+    # vía POST /api/config/min-kg.
+    st.min_kg = 5.0
     st.current_session_id = None
     st.driver_thread = None
     st.driver_stop = None
@@ -294,7 +303,8 @@ def create_app(
         with st.engine_lock:
             if st.engine is None:
                 st.engine = st.engine_factory(
-                    EngineConfig(), on_engine_event, on_engine_state
+                    EngineConfig(min_delta_kg=st.min_kg),
+                    on_engine_event, on_engine_state
                 )
             return st.engine
 
@@ -425,6 +435,22 @@ def create_app(
         stop_driver()
         st.driver_error = None
         return {"connected": False, "disconnected": was_connected}
+
+    @app.get("/api/config/min-kg")
+    def get_min_kg() -> dict[str, Any]:
+        return {"kg": st.min_kg}
+
+    @app.post("/api/config/min-kg")
+    def set_min_kg(body: MinKgBody) -> dict[str, Any]:
+        """Peso mínimo por cerdo. Reconstruye el motor si no hay sesión abierta
+        (EngineConfig es inmutable tras crear el motor)."""
+        if not body.kg > 0:
+            raise HTTPException(status_code=400, detail="kg debe ser mayor a 0")
+        st.min_kg = float(body.kg)
+        if st.current_session_id is None:
+            with st.engine_lock:
+                st.engine = None
+        return {"kg": st.min_kg}
 
     @app.get("/api/scale/status")
     def scale_status() -> dict[str, Any]:

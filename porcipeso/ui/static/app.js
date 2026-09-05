@@ -821,6 +821,7 @@ function onReading(m) {
   const kg = Number(m?.kg ?? 0);
   APP.lastReadingAt = Date.now();
   connCardLive(kg); // chip vivo de la tarjeta ⚙ Báscula (si está a la vista)
+  rmLiveReading(m, kg); // LED crudo del monitor de datos (si está abierto)
   if (m?.fase) { APP.faseSupported = true; if (APP.session) applyFase(m.fase, m); }
   setLed(ledText(m, kg));
   $('led').classList.add('pulse');
@@ -1410,7 +1411,30 @@ function visibleMethods() {
   return out;
 }
 
-function initBascula() { showBasculaHome(); renderDbDiag(); initSecUI(); }
+function initBascula() { showBasculaHome(); renderDbDiag(); initSecUI(); initMinKg(); }
+
+/* ⚖ Peso mínimo por cerdo: carga el valor actual y permite ajustarlo. */
+function initMinKg() {
+  const inp = $('minKgInput'), btn = $('bMinKgSave'), res = $('minKgResult');
+  if (!inp || !btn || inp.dataset.wired) return;
+  inp.dataset.wired = '1';
+  apiJson('/api/config/min-kg').then((r) => {
+    if (r && r.kg != null && !inp.value) inp.value = r.kg;
+  }).catch(() => {});
+  btn.onclick = async () => {
+    const kg = Number(inp.value);
+    if (!(kg > 0)) { if (res) res.textContent = 'Escribe un peso mayor a 0.'; return; }
+    btn.disabled = true;
+    try {
+      const r = await apiJson('/api/config/min-kg', { method: 'POST', body: { kg } });
+      if (res) res.textContent = '✓ Listo: se contarán cerdos desde ' + (r?.kg ?? kg) + ' kg.';
+    } catch (e) {
+      if (res) res.textContent = 'No se pudo guardar. Intenta de nuevo.';
+    } finally {
+      btn.disabled = false;
+    }
+  };
+}
 
 /* msg opcional {cls,text} → se muestra en el resultado de la tarjeta */
 function showBasculaHome(msg) {
@@ -1473,6 +1497,9 @@ function renderConnChip(st) {
   }
   $('bccDisconnect').hidden = !connected;
   $('bccConnect').hidden = connected;
+  // "Ver datos crudos" solo tiene sentido con la báscula conectada
+  const mon = $('bccMonitor');
+  if (mon) mon.hidden = !connected;
 }
 
 /* latido en vivo: cada lectura del WS refresca el chip sin esperar el poll */
@@ -1503,6 +1530,7 @@ $('bccDisconnect').onclick = async () => {
     APP.scaleConnected = false;
     APP.simActive = false;
     APP.lastReadingAt = 0;
+    closeRawMon(); // el monitor de datos crudos ya no aplica sin enlace
     refreshSimUi();
     showBasculaHome({ cls: '', text: 'Báscula desconectada. Tu configuración queda guardada — reconectas con un toque.' });
   } catch (e) {
@@ -2334,11 +2362,16 @@ async function btAutoConnect(dev) {
     showBasculaHome({ cls: 'ok', text: `✓ Conectada — ${kgTxt}${fixes.length ? ` (${fixes.join(' y ')})` : ''}. ¡Ya puedes ir a Pesaje!` });
   } else {
     if (status) status.textContent = '';
-    const msg = (r?.ok && !r?.parser_ok)
-      ? 'Recibo datos pero no los entiendo — puede ser la velocidad del módulo (se cambia con comandos AT) o un modelo que aún no conozco.'
-      : (r?.message ?? 'No reconocí la báscula.');
-    wizResult('fail', msg);
-    btAutoRetry(dev);
+    // ¿Llegaron bytes aunque el detector no clasifique? → deja de adivinar:
+    // ofrece VER los datos crudos y conectar igual (RS232/485 de campo).
+    const hasBytes = (r?.bytes_recibidos ?? 0) > 0 || !!(r?.hex && r.hex.length);
+    const msg = hasBytes
+      ? 'Recibo datos del módulo pero no reconozco la marca. Puedes verlos y conectar igual — luego ajustas 🔁 / ⚡ o la marca.'
+      : (r?.ok && !r?.parser_ok)
+        ? 'Recibo datos pero no los entiendo — puede ser la velocidad del módulo (se cambia con comandos AT) o un modelo que aún no conozco.'
+        : (r?.message ?? 'No reconocí la báscula.');
+    wizResult(hasBytes ? '' : 'fail', msg);
+    btAutoRetry(dev, null, { canConnectAnyway: hasBytes });
   }
 }
 
@@ -2351,12 +2384,22 @@ async function btAutoConnect(dev) {
      forzarse por el transporte BLE (GATT-notify) a la misma MAC.
    - Si el intento BLE devolvió el diagnóstico GATT, se muestra copiable.
    "Ajustes avanzados" ya está en pantalla para forzar marca/señal a mano. */
-function btAutoRetry(dev, gattText) {
+function btAutoRetry(dev, gattText, opts) {
   const status = $('btAutoStatus');
   if (!status || !status.isConnected) return;
   status.innerHTML = '';
   const wrap = document.createElement('div');
   wrap.className = 'bt-recover';
+
+  // 👁 acción PRIMARIA cuando llegan bytes pero el detector no clasifica:
+  // conecta igual, muestra el dato crudo y deja voltear/ajustar en vivo.
+  if (opts?.canConnectAnyway) {
+    const bSee = document.createElement('button');
+    bSee.className = 'btn-primary bt-connect-anyway';
+    bSee.textContent = '👁 Ver datos y conectar igual';
+    bSee.onclick = () => { btAutoConnectAnyway(dev).catch(() => {}); };
+    wrap.appendChild(bSee);
+  }
 
   const bPair = document.createElement('button');
   bPair.className = 'btn-primary';
@@ -2377,6 +2420,50 @@ function btAutoRetry(dev, gattText) {
 
   status.appendChild(wrap);
   renderGattDiag(status, gattText);
+}
+
+/* 👁 "Ver datos y conectar igual" (Bluetooth): el detector no clasificó la
+   trama pero llegan bytes. Conecta en MODO MANUAL con el parser de mejor
+   esfuerzo (el backend elige matrix → generic_regex), aterriza en el monitor
+   de datos crudos y va a la pantalla de Pesaje. Ahí el usuario ve el dato,
+   lo voltea (🔁), invierte la señal (⚡) o cambia la marca — todo EN VIVO. */
+async function btAutoConnectAnyway(dev) {
+  const status = $('btAutoStatus');
+  const transport = dev.kind === 'ble' ? 'ble' : 'bluetooth';
+  if (status && status.isConnected) { status.innerHTML = ''; status.textContent = 'Conectando para ver los datos…'; }
+  let cr = null;
+  try {
+    cr = await apiJson('/api/scale/connect', {
+      method: 'POST',
+      body: {
+        profile_id: 'auto', manual: true, transport, port: dev.address,
+        also_ble: !!dev.alsoBle, reverse_frame: false, invert_bits: false,
+      },
+    });
+  } catch (e) {
+    if (status && status.isConnected) status.textContent = '';
+    wizResult('fail', e?.message || 'No pude conectar para ver los datos.');
+    btAutoRetry(dev, gattTextFrom(e));
+    return;
+  }
+  APP.scaleConnected = true;
+  APP.simActive = false;
+  const finalTransport = cr?.transport === 'ble' ? 'ble' : (cr?.transport === 'usb' ? 'usb' : transport);
+  const finalKind = finalTransport === 'ble' ? 'ble' : 'classic';
+  const parser = cr?.parser || 'matrix';
+  // arranque manual guardado (se refina solo al ver el valor con los toggles)
+  saveCfg({
+    method: 'bluetooth', transport: finalTransport, kind: finalKind, alsoBle: !!dev.alsoBle,
+    profile_id: 'auto', parser, reverse_frame: false, invert_bits: false,
+    port: dev.address, signal: 'auto', manual: true,
+    name: `Báscula ${finalTransport === 'ble' ? 'BLE' : 'Bluetooth'} (${dev.name || dev.address})`,
+  });
+  if (status && status.isConnected) status.textContent = '';
+  openRawMon({
+    transport: finalTransport, kind: finalKind, port: dev.address, alsoBle: !!dev.alsoBle,
+    parser, reverse: false, invert: false,
+  });
+  setModule('pesaje'); // "va a la pantalla de pesaje"
 }
 
 /* ---- OTG AUTOMÁTICO (camino principal en la app, igual que BT) ----
@@ -2502,25 +2589,76 @@ async function otgAutoConnect(dev) {
     showBasculaHome({ cls: 'ok', text: `✓ Conectada — ${kgTxt}${fixes.length ? ` (${fixes.join(' y ')})` : ''}. ¡Ya puedes ir a Pesaje!` });
   } else {
     if (status) status.textContent = '';
-    const msg = (r?.ok && !r?.parser_ok)
-      ? 'Recibo datos pero no los entiendo — puede ser un modelo que aún no conozco. En «Ajustes avanzados» puedes elegir la marca a mano.'
-      : (r?.message ?? 'No reconocí la báscula.');
-    wizResult('fail', msg);
-    otgAutoRetry(dev);
+    const hasBytes = (r?.bytes_recibidos ?? 0) > 0 || !!(r?.hex && r.hex.length);
+    const msg = hasBytes
+      ? 'Recibo datos del adaptador pero no reconozco la marca. Puedes verlos y conectar igual — luego ajustas 🔁 / ⚡ o la marca.'
+      : (r?.ok && !r?.parser_ok)
+        ? 'Recibo datos pero no los entiendo — puede ser un modelo que aún no conozco. En «Ajustes avanzados» puedes elegir la marca a mano.'
+        : (r?.message ?? 'No reconocí la báscula.');
+    wizResult(hasBytes ? '' : 'fail', msg);
+    otgAutoRetry(dev, { canConnectAnyway: hasBytes, baud: r?.baudrate ?? null });
   }
 }
 
 /* tras un fallo: botón Reintentar (mismo dispositivo); "Ajustes avanzados"
-   ya está en pantalla para forzar marca/velocidad a mano */
-function otgAutoRetry(dev) {
+   ya está en pantalla para forzar marca/velocidad a mano. Si llegaron bytes,
+   ofrece además "👁 Ver datos y conectar igual" como acción primaria. */
+function otgAutoRetry(dev, opts) {
   const status = $('otgAutoStatus');
   if (!status || !status.isConnected) return;
   status.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'bt-recover';
+  if (opts?.canConnectAnyway) {
+    const bSee = document.createElement('button');
+    bSee.className = 'btn-primary bt-connect-anyway';
+    bSee.textContent = '👁 Ver datos y conectar igual';
+    bSee.onclick = () => { otgAutoConnectAnyway(dev, opts.baud).catch(() => {}); };
+    wrap.appendChild(bSee);
+  }
   const b = document.createElement('button');
   b.className = 'btn-primary';
   b.textContent = `↻ Reintentar con ${dev.name || 'el adaptador USB'}`;
   b.onclick = () => { otgAutoConnect(dev).catch(() => {}); };
-  status.appendChild(b);
+  wrap.appendChild(b);
+  status.appendChild(wrap);
+}
+
+/* 👁 "Ver datos y conectar igual" (OTG): igual que en Bluetooth pero por USB. */
+async function otgAutoConnectAnyway(dev, baud) {
+  const status = $('otgAutoStatus');
+  if (dev?.deviceId == null) return;
+  if (status && status.isConnected) { status.innerHTML = ''; status.textContent = 'Conectando para ver los datos…'; }
+  const baudrate = baud || 9600;
+  let cr = null;
+  try {
+    cr = await apiJson('/api/scale/connect', {
+      method: 'POST',
+      body: {
+        profile_id: 'auto', manual: true, transport: 'usb',
+        device_id: dev.deviceId, baudrate, reverse_frame: false, invert_bits: false,
+      },
+    });
+  } catch (e) {
+    if (status && status.isConnected) status.textContent = '';
+    wizResult('fail', e?.message || 'No pude conectar para ver los datos.');
+    otgAutoRetry(dev, { canConnectAnyway: true, baud: baudrate });
+    return;
+  }
+  APP.scaleConnected = true;
+  APP.simActive = false;
+  const parser = cr?.parser || 'matrix';
+  saveCfg({
+    method: 'otg', profile_id: 'auto', parser, reverse_frame: false, invert_bits: false,
+    usb: { vid: dev.vid, pid: dev.pid, name: dev.name ?? '' }, baudrate, signal: 'auto', manual: true,
+    name: `Báscula USB (${dev.name || 'OTG'})`,
+  });
+  if (status && status.isConnected) status.textContent = '';
+  openRawMon({
+    transport: 'usb', kind: 'usb', usb: { vid: dev.vid, pid: dev.pid, name: dev.name ?? '' },
+    deviceId: dev.deviceId, baudrate, parser, reverse: false, invert: false,
+  });
+  setModule('pesaje');
 }
 
 /* ---- buscador USB/OTG (app móvil, modo AVANZADO) ---- */
@@ -2907,6 +3045,184 @@ function onDetectHex(m) {
   const baud = m?.baud != null ? `@${m.baud} baudios · ` : '';
   el.textContent = baud + String(m?.hex ?? '');
 }
+
+/* ============================================================
+   👁 MONITOR DE DATOS CRUDOS — deja de adivinar: muestra el stream tal cual
+   llega y permite conectar/ajustar aunque el detector no clasifique. Fuente:
+   GET /api/scale/raw (hex+texto+bytes_recibidos+muestra_frames). Los toggles
+   🔁/⚡ y el selector de marca se aplican EN VIVO reconectando: el usuario ve
+   el valor corregirse en el LED de mejor esfuerzo.
+   ============================================================ */
+const RM = {
+  transport: 'bluetooth', kind: 'classic', port: '', alsoBle: false,
+  usb: null, deviceId: null, baudrate: null,
+  parser: 'matrix', reverse: false, invert: false, poll: null,
+};
+
+function openRawMon(opts) {
+  Object.assign(RM, opts || {});
+  const box = $('rawMon');
+  if (!box) return;
+  box.hidden = false;
+  $('rmReverse').checked = !!RM.reverse;
+  $('rmInvert').checked = !!RM.invert;
+  $('rmParser').value = RM.parser || 'matrix';
+  const led = $('rmLed'); if (led) led.textContent = '—';
+  const st = $('rmStatus'); if (st) { st.className = 'rm-status'; st.textContent = 'Escuchando el módulo…'; }
+  rmTick().catch(() => {});
+  if (RM.poll) clearInterval(RM.poll);
+  RM.poll = setInterval(() => { rmTick().catch(() => {}); }, 600);
+}
+
+function closeRawMon() {
+  const box = $('rawMon');
+  if (box) box.hidden = true;
+  if (RM.poll) { clearInterval(RM.poll); RM.poll = null; }
+}
+
+async function rmTick() {
+  if ($('rawMon').hidden) { if (RM.poll) { clearInterval(RM.poll); RM.poll = null; } return; }
+  let raw = null, st = null;
+  try { raw = await apiJson('/api/scale/raw'); } catch { /* sin backend */ }
+  try { st = await api('/api/scale/status'); } catch { /* sin backend */ }
+  renderRawMon(raw, st);
+}
+
+function renderRawMon(raw, st) {
+  const bytes = raw?.bytes_recibidos ?? 0;
+  $('rmBytes').textContent = String(bytes);
+  $('rmText').textContent = (raw?.text && raw.text.length) ? raw.text : '—';
+  $('rmHex').textContent = (raw?.hex && raw.hex.length) ? raw.hex : '—';
+  const frames = Array.isArray(raw?.muestra_frames) ? raw.muestra_frames : [];
+  $('rmFrames').textContent = frames.length ? frames.join('   ·   ') : '—';
+  const kg = st?.last_kg;
+  // LED de mejor esfuerzo: si acaba de llegar una lectura por WS, esa manda
+  // (trae el string crudo); si no, pinto el último kg del estado.
+  const wsFresh = APP.lastReadingAt && Date.now() - APP.lastReadingAt < 1500;
+  if (kg != null && !wsFresh) rmSetLed(fmt(kg));
+  else if (kg == null && !wsFresh) rmSetLed('—');
+  rmUpdateStatus(bytes, kg);
+}
+
+function rmSetLed(text) {
+  const led = $('rmLed');
+  if (!led) return;
+  led.textContent = (text == null || text === '') ? '—' : String(text);
+  const s = document.createElement('small');
+  s.textContent = 'kg';
+  led.appendChild(s);
+}
+
+function rmUpdateStatus(bytes, kg) {
+  const s = $('rmStatus');
+  if (!s) return;
+  if (!bytes) {
+    // enlace vivo pero SIN datos: distinto de "no reconozco la trama"
+    s.className = 'rm-status warn';
+    s.textContent = '⚠ Conecté al módulo pero no está enviando datos — enciende el indicador o revisa el cable RS232 del módulo.';
+    return;
+  }
+  if (kg == null) {
+    s.className = 'rm-status';
+    s.textContent = '📡 Llegan datos, pero el modelo no los entiende todavía — prueba 🔁, ⚡ o cambia la marca abajo.';
+    return;
+  }
+  s.className = 'rm-status ok';
+  s.textContent = `✓ Leo: ${fmt(kg)} kg — ¿se ve bien? Si está al revés o cambia raro, usa 🔁 / ⚡. Se guarda solo.`;
+  rmSaveWorking();
+}
+
+/* lectura por WS mientras el monitor está abierto: LED crudo instantáneo */
+function rmLiveReading(m, kg) {
+  if ($('rawMon').hidden) return;
+  rmSetLed(ledText(m, kg));
+}
+
+/* aplica 🔁 / ⚡ / marca EN VIVO: reconecta en modo manual con lo elegido */
+async function rmReconnect() {
+  RM.reverse = $('rmReverse').checked;
+  RM.invert = $('rmInvert').checked;
+  RM.parser = $('rmParser').value || 'matrix';
+  const s = $('rmStatus');
+  if (s) { s.className = 'rm-status'; s.textContent = 'Aplicando…'; }
+  const body = {
+    profile_id: 'auto', parser: RM.parser, manual: true, transport: RM.transport,
+    reverse_frame: RM.reverse, invert_bits: RM.invert,
+  };
+  if (RM.transport === 'usb') {
+    let deviceId = RM.deviceId;
+    if (deviceId == null && RM.usb) {
+      try {
+        const devs = await apiJson('/api/usb/devices');
+        const arr = Array.isArray(devs) ? devs : (devs?.devices ?? []);
+        const match = arr.find(d => d?.vid === RM.usb.vid && d?.pid === RM.usb.pid) ?? arr[0];
+        deviceId = match?.deviceId;
+      } catch { /* se reporta abajo */ }
+    }
+    RM.deviceId = deviceId;
+    body.device_id = deviceId;
+    if (RM.baudrate) body.baudrate = RM.baudrate;
+  } else {
+    body.port = RM.port;
+    if (RM.alsoBle) body.also_ble = true;
+  }
+  try {
+    const cr = await apiJson('/api/scale/connect', { method: 'POST', body });
+    APP.scaleConnected = true;
+    // el backend pudo caer a BLE: recuerda el transporte que quedó
+    if (cr?.transport) RM.transport = cr.transport === 'ble' ? 'ble' : (cr.transport === 'usb' ? 'usb' : 'bluetooth');
+    if (cr?.transport === 'ble') RM.kind = 'ble';
+    rmTick().catch(() => {});
+  } catch (e) {
+    if (s) { s.className = 'rm-status fail'; s.textContent = e?.message || 'No pude aplicar el cambio — revisa el módulo.'; }
+  }
+}
+
+/* guarda lo que quedó FUNCIONANDO (parser + reverse + invert + transporte)
+   para reconectar directo la próxima vez, sin volver a detectar. */
+function rmSaveWorking() {
+  const base = loadCfg() || {};
+  const cfg = {
+    ...base,
+    profile_id: 'auto', parser: RM.parser,
+    reverse_frame: RM.reverse, invert_bits: RM.invert,
+    signal: RM.invert ? 'inverted' : 'direct', manual: true,
+  };
+  if (RM.transport === 'usb') {
+    cfg.method = 'otg';
+    if (RM.usb) cfg.usb = RM.usb;
+    if (RM.baudrate) cfg.baudrate = RM.baudrate;
+  } else {
+    cfg.method = 'bluetooth';
+    cfg.transport = RM.transport;
+    cfg.kind = RM.transport === 'ble' ? 'ble' : 'classic';
+    cfg.port = RM.port;
+    cfg.alsoBle = !!RM.alsoBle;
+  }
+  cfg.name = base.name || (RM.transport === 'usb' ? 'Báscula USB' : 'Báscula Bluetooth');
+  saveCfg(cfg);
+}
+
+if ($('rmClose')) $('rmClose').onclick = () => closeRawMon();
+if ($('rmGoPesaje')) $('rmGoPesaje').onclick = () => { closeRawMon(); setModule('pesaje'); };
+if ($('rmReverse')) $('rmReverse').onchange = () => { rmReconnect().catch(() => {}); };
+if ($('rmInvert')) $('rmInvert').onchange = () => { rmReconnect().catch(() => {}); };
+if ($('rmParser')) $('rmParser').onchange = () => { rmReconnect().catch(() => {}); };
+
+/* ⚙ Báscula → "👁 Ver datos crudos del Bluetooth": abre el monitor para
+   diagnosticar CUALQUIER módulo ya conectado (con lo guardado en cfg). */
+if ($('bccMonitor')) $('bccMonitor').onclick = () => {
+  const cfg = loadCfg() || {};
+  const method = migrateMethod(cfg.method);
+  const isUsb = method === 'otg' || method === 'cable';
+  openRawMon({
+    transport: isUsb ? 'usb' : (cfg.transport === 'ble' ? 'ble' : 'bluetooth'),
+    kind: cfg.kind || (cfg.transport === 'ble' ? 'ble' : 'classic'),
+    port: cfg.port || '', alsoBle: !!cfg.alsoBle,
+    usb: cfg.usb || null, deviceId: null, baudrate: cfg.baudrate || null,
+    parser: cfg.parser || 'matrix', reverse: !!cfg.reverse_frame, invert: !!cfg.invert_bits,
+  });
+};
 
 /* ---------------- curva bajo el peso ---------------- */
 const cv = $('spark'), cx = cv.getContext('2d');

@@ -173,6 +173,12 @@ export interface ByteTransport {
 
 const EMPTY_BYTES = new Uint8Array(0);
 
+// Monitor de bytes CRUDOS: vive en rawmon.ts (sin dependencias de Capacitor,
+// para que apishim lo importe estático) y se re-exporta aquí por cohesión con
+// el resto de transportes.
+export { RawMonitor, tapTransport } from "./rawmon";
+export type { RawSnapshot } from "./rawmon";
+
 /** Backoff de reconexión (ms): 0.5→1→2→5 s; el último se repite indefinido. */
 export const DEFAULT_BACKOFF_MS = [500, 1000, 2000, 5000];
 /** Sin un solo byte por más de esto aunque "conectado" → enlace zombi. */

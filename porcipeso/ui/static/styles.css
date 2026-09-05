@@ -612,6 +612,49 @@ details.collap[hidden]{display:none !important} /* ej. ☁️ Nube tras el flag 
 .gatt-diag-copy{margin-top:8px}
 .bletoggle small{display:block;font-weight:400;color:var(--muted)}
 
+/* 👁 "Ver datos y conectar igual": acción PRIMARIA de recuperación cuando el
+   detector no clasifica pero llegan bytes — ocupa toda la fila, arriba. */
+.bt-recover .bt-connect-anyway{flex:1 1 100%;order:-1}
+.cc-monitor{align-self:flex-start;margin-top:4px;font-size:14px}
+.cc-monitor[hidden]{display:none !important}
+
+/* ============ 👁 monitor de datos CRUDOS del módulo ============ */
+.rawmon{position:fixed;inset:0;z-index:120;display:flex;align-items:center;
+  justify-content:center;padding:16px;background:rgba(10,14,11,.6);overflow:auto}
+.rawmon[hidden]{display:none !important}
+.rm-card{background:var(--card);color:var(--ink);border:1px solid var(--border);
+  border-radius:18px;padding:18px;width:min(520px,100%);max-height:92vh;overflow:auto;
+  display:flex;flex-direction:column;gap:12px;box-shadow:0 18px 50px rgba(10,14,11,.35)}
+.rm-head{display:flex;align-items:center;gap:10px}
+.rm-title{font-size:18px;font-weight:700;flex:1}
+.rm-close{min-height:auto;padding:6px 12px;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;font-size:16px;color:var(--muted);cursor:pointer}
+.rm-ledbox{background:#0A0E0B;border:1px solid var(--panel-edge);border-radius:14px;
+  padding:14px 10px;display:flex;justify-content:center;overflow:hidden}
+.rm-led{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;
+  font-weight:700;font-size:clamp(48px,12vw,92px);line-height:1;letter-spacing:.04em;
+  color:var(--led);text-shadow:0 0 18px rgba(255,74,46,.4);white-space:nowrap}
+.rm-led small{font-size:.3em;opacity:.85;margin-left:.15em}
+.rm-status{padding:10px 12px;border-radius:12px;border:1px solid var(--border);
+  background:var(--surface);color:var(--muted);font-size:14.5px;font-weight:600;line-height:1.45}
+.rm-status.ok{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
+.rm-status.warn{background:var(--amber-soft);color:var(--amber);border-color:var(--amber)}
+.rm-status.fail{color:var(--red);border-color:var(--red);background:transparent}
+.rm-controls{display:flex;flex-direction:column;gap:12px}
+.rm-toggle{display:flex;align-items:flex-start;gap:10px;font-size:15px;font-weight:600;cursor:pointer}
+.rm-toggle input{width:22px;height:22px;flex:none;accent-color:var(--accent);cursor:pointer}
+.rm-toggle small{display:block;font-weight:400;color:var(--muted)}
+.rm-sel{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--muted)}
+.rm-sel select{font-size:16px;color:var(--ink)}
+.rm-details{border:1px dashed var(--panel-edge);border-radius:12px}
+.rm-details summary{cursor:pointer;padding:10px 12px;font-weight:600;color:var(--muted);font-size:14px}
+.rm-mono{padding:0 12px 12px;display:flex;flex-direction:column;gap:6px}
+.rm-row{font-size:12.5px;line-height:1.5;color:var(--muted);word-break:break-all}
+.rm-row .mono{color:var(--ink)}
+.rm-frames .mono{display:block;margin-top:2px}
+.rm-actions{display:flex;gap:10px}
+.rm-actions button{flex:1 1 auto}
+
 /* ============ 🔁 números al revés (reverse_frame) ============ */
 .revtoggle{display:flex;align-items:flex-start;gap:10px;margin:12px 0 4px;
   font-size:15px;font-weight:600;cursor:pointer}

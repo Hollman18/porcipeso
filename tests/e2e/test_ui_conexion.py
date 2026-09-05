@@ -672,3 +672,147 @@ def test_volver_a_bascula_real_restaura_config_real(page, server_url):
     # y la sim quedó desconectada en el backend
     st = page.evaluate("fetch('/api/scale/status').then(r => r.json())")
     assert st["connected"] is False
+
+
+# ----- 4sexies) detector no clasifica pero HAY bytes → "Ver datos y conectar igual"
+
+def test_bt_ver_datos_y_conectar_igual_monitor_toggle_reverse(page, server_url):
+    """Bug de campo RS232/485: el módulo YA CONECTA y transmite, pero el
+    detector no reconoce la trama. En vez de caer a seco, la UI ofrece
+    '👁 Ver datos y conectar igual' → conecta en modo MANUAL, abre el MONITOR
+    de datos crudos (hex+texto+bytes) y muestra el peso de mejor esfuerzo en el
+    LED; el toggle 🔁 lo corrige EN VIVO. Endpoints nativos mockeados con
+    page.route (como el APK)."""
+    page.add_init_script("window.__PORCIPESO_SHIM__ = { native: true };")
+
+    dev = {"name": "RS232/485", "address": "48:87:2D:9D:D5:71",
+           "paired": False, "kind": "classic", "alsoBle": True}
+
+    # el "módulo" transmite el peso al revés hasta que se activa reverse_frame
+    state = {"reverse": False}
+
+    def kg_now():
+        return 6.0 if state["reverse"] else -6.0
+
+    page.route("**/api/bt/devices", lambda r: r.fulfill(json=[]))
+    page.route("**/api/bt/discovery/start", lambda r: r.fulfill(json={"started": True}))
+    page.route("**/api/bt/discovery",
+               lambda r: r.fulfill(json={"devices": [dev], "finished": True}))
+
+    def handle_detect(route):  # llegan bytes pero NINGÚN parser clasifica
+        route.fulfill(json={
+            "ok": False, "verdict": "sin_peso", "kg": None, "baudrate": None,
+            "invert_bits": False, "reverse_frame": False, "parser_ok": False,
+            "parser": None, "message": "no reconozco la trama",
+            "hex": "36 2D 36 2D 36 2D", "bytes_recibidos": 120,
+        })
+
+    def handle_connect(route):
+        body = route.request.post_data_json or {}
+        state["reverse"] = bool(body.get("reverse_frame"))
+        route.fulfill(json={"connected": True, "profile_id": "auto",
+                            "transport": "bluetooth", "parser": "matrix", "manual": True})
+
+    def handle_raw(route):
+        route.fulfill(json={"hex": "36 2D 36 2D 36 2D", "text": "6-6-6-",
+                            "bytes_recibidos": 120, "muestra_frames": ["6-", "6-", "6-"]})
+
+    def handle_status(route):
+        route.fulfill(json={"connected": True, "reconnecting": False,
+                            "profile_id": "auto", "last_kg": kg_now(),
+                            "last_ts_ms": None, "state": "idle", "error": None})
+
+    page.route("**/api/scale/detect", handle_detect)
+    page.route("**/api/scale/connect", handle_connect)
+    page.route("**/api/scale/raw", handle_raw)
+    page.route("**/api/scale/status", handle_status)
+
+    page.goto(server_url + "/#bascula")
+    page.locator("#bConnStart").click()
+    EXPECT(page.locator("#wizPane1")).to_have_class("wizpane active")
+    page.locator('#wizPane1 [data-method="bluetooth"]').click()
+    EXPECT(page.locator("#wizPane3")).to_have_class("wizpane active")
+
+    device = page.locator("#btList .bt-item", has_text="RS232/485")
+    EXPECT(device).to_have_count(1, timeout=10_000)
+    device.click()
+
+    # el detector no clasifica pero hay bytes → acción PRIMARIA accionable
+    anyway = page.locator("#btAutoStatus").get_by_text("Ver datos y conectar igual")
+    EXPECT(anyway).to_be_visible(timeout=10_000)
+    anyway.click()
+
+    # abre el MONITOR de datos crudos, con el stream crudo y el peso de mejor esfuerzo
+    EXPECT(page.locator("#rawMon")).to_be_visible(timeout=10_000)
+    EXPECT(page.locator("#rmBytes")).to_have_text("120")
+    EXPECT(page.locator("#rmText")).to_contain_text("6-6-6-")
+    # peso de mejor esfuerzo (al revés): negativo
+    EXPECT(page.locator("#rmLed")).to_contain_text("-6", timeout=10_000)
+
+    # 🔁 voltear "Números al revés" → reconecta EN VIVO → el valor se corrige
+    connect_bodies: list[dict] = []
+
+    def handle_connect2(route):
+        body = route.request.post_data_json or {}
+        connect_bodies.append(body)
+        state["reverse"] = bool(body.get("reverse_frame"))
+        route.fulfill(json={"connected": True, "profile_id": "auto",
+                            "transport": "bluetooth", "parser": "matrix", "manual": True})
+
+    page.unroute("**/api/scale/connect")
+    page.route("**/api/scale/connect", handle_connect2)
+
+    page.locator("#rmReverse").check()
+    led = page.locator("#rmLed")
+    EXPECT(led).to_contain_text("6", timeout=10_000)
+    EXPECT(led).not_to_contain_text("-6", timeout=10_000)  # ya no sale al revés
+
+    # la reconexión en vivo mandó reverse_frame=true en MODO MANUAL
+    assert connect_bodies and connect_bodies[-1]["reverse_frame"] is True
+    assert connect_bodies[-1]["manual"] is True
+
+
+# ----- 4septies) conecté pero el módulo NO envía datos → mensaje claro y distinto
+
+def test_bt_monitor_sin_datos_mensaje_claro(page, server_url):
+    """Distinto de 'no reconozco la trama': si el enlace vive pero NO llegan
+    bytes (bytes_recibidos==0), el monitor lo dice claro ('no está enviando
+    datos — enciende el indicador / revisa el cable RS232')."""
+    page.add_init_script("window.__PORCIPESO_SHIM__ = { native: true };")
+
+    dev = {"name": "RS232/485", "address": "48:87:2D:9D:D5:71",
+           "paired": False, "kind": "classic", "alsoBle": True}
+
+    page.route("**/api/bt/devices", lambda r: r.fulfill(json=[]))
+    page.route("**/api/bt/discovery/start", lambda r: r.fulfill(json={"started": True}))
+    page.route("**/api/bt/discovery",
+               lambda r: r.fulfill(json={"devices": [dev], "finished": True}))
+    page.route("**/api/scale/detect", lambda r: r.fulfill(json={
+        "ok": False, "verdict": "sin_peso", "kg": None, "baudrate": None,
+        "invert_bits": False, "reverse_frame": False, "parser_ok": False,
+        "parser": None, "message": "no reconozco la trama",
+        "hex": "3D 20", "bytes_recibidos": 8}))
+    page.route("**/api/scale/connect", lambda r: r.fulfill(json={
+        "connected": True, "profile_id": "auto", "transport": "bluetooth",
+        "parser": "matrix", "manual": True}))
+    # tras conectar, el módulo NO envía nada: bytes_recibidos 0
+    page.route("**/api/scale/raw", lambda r: r.fulfill(json={
+        "hex": "", "text": "", "bytes_recibidos": 0, "muestra_frames": []}))
+    page.route("**/api/scale/status", lambda r: r.fulfill(json={
+        "connected": True, "reconnecting": False, "profile_id": "auto",
+        "last_kg": None, "last_ts_ms": None, "state": "idle", "error": None}))
+
+    page.goto(server_url + "/#bascula")
+    page.locator("#bConnStart").click()
+    page.locator('#wizPane1 [data-method="bluetooth"]').click()
+    device = page.locator("#btList .bt-item", has_text="RS232/485")
+    EXPECT(device).to_have_count(1, timeout=10_000)
+    device.click()
+
+    anyway = page.locator("#btAutoStatus").get_by_text("Ver datos y conectar igual")
+    EXPECT(anyway).to_be_visible(timeout=10_000)
+    anyway.click()
+
+    EXPECT(page.locator("#rawMon")).to_be_visible(timeout=10_000)
+    EXPECT(page.locator("#rmStatus")).to_contain_text("no está enviando datos", timeout=10_000)
+    EXPECT(page.locator("#rmStatus")).to_contain_text("RS232")

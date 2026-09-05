@@ -433,6 +433,9 @@
             <button class="btn-danger cc-btn" id="bccDisconnect" hidden>🔌 Desconectar</button>
             <button class="cc-btn" id="bccChange">Cambiar de báscula</button>
           </div>
+          <!-- Diagnóstico de campo: ver los bytes crudos que llegan del módulo
+               (para cualquier báscula). Solo visible con la báscula conectada. -->
+          <button class="btn-link cc-monitor" id="bccMonitor" hidden>👁 Ver datos crudos del Bluetooth</button>
           <div class="test-result" id="ccResult"></div>
           <!-- botones de recuperación tras un fallo de conexión (emparejar / BLE) -->
           <div class="bt-recover" id="ccRecover" hidden></div>
@@ -524,6 +527,22 @@
           </div>
           <div class="test-result" id="nubeResult"></div>
           <p class="nube-estado" id="nubeEstado" hidden></p>
+        </div>
+      </details>
+
+      <!-- ⚖ PESO MÍNIMO POR CERDO: umbral para contar un animal/escalón -->
+      <details class="collap nube" id="minKgBox">
+        <summary><span class="ct">⚖ Peso mínimo por cerdo</span><span class="caret" aria-hidden="true">▸</span></summary>
+        <div class="nube-body">
+          <p class="wizhelp">Solo se cuentan los cerdos que pesen MÁS de este valor.
+            Bájalo para lechones/cerdos pequeños; súbelo si hay ruido o vibración.</p>
+          <label class="addrlbl">Contar desde (kg)
+            <input id="minKgInput" type="number" min="1" step="0.5" inputmode="decimal" placeholder="5">
+          </label>
+          <div class="config-actions">
+            <button id="bMinKgSave">Guardar</button>
+          </div>
+          <div class="test-result" id="minKgResult"></div>
         </div>
       </details>
 
@@ -776,6 +795,58 @@
       aquí y se suben solos al volver la conexión.</p>
   </div>
 </dialog>
+
+<!-- 👁 MONITOR DE DATOS CRUDOS — fuente de verdad para "ver qué llega".
+     Se abre tras "Ver datos y conectar igual" (detector no clasifica pero hay
+     bytes) y desde ⚙ Báscula. Muestra el peso de mejor esfuerzo en el LED, el
+     stream crudo (hex+texto) en vivo, y los toggles/selector que se aplican EN
+     VIVO reconectando: el usuario ve el valor corregirse. -->
+<div class="rawmon" id="rawMon" hidden>
+  <div class="rm-card" role="dialog" aria-label="Datos del módulo">
+    <div class="rm-head">
+      <span class="rm-title">👁 Datos que llegan del módulo</span>
+      <button class="rm-close" id="rmClose" type="button" aria-label="Cerrar">✕</button>
+    </div>
+
+    <div class="rm-ledbox">
+      <div class="rm-led" id="rmLed">—<small>kg</small></div>
+    </div>
+    <div class="rm-status" id="rmStatus"></div>
+
+    <div class="rm-controls">
+      <label class="rm-toggle">
+        <input type="checkbox" id="rmReverse">
+        <span>🔁 Números al revés <small>(ves 001 cuando marca 100)</small></span>
+      </label>
+      <label class="rm-toggle">
+        <input type="checkbox" id="rmInvert">
+        <span>⚡ Señal invertida <small>(símbolos raros / bytes al revés)</small></span>
+      </label>
+      <label class="rm-sel">Marca / protocolo
+        <select id="rmParser">
+          <option value="matrix">Matrix (Lexus / Trumax / RS232-485)</option>
+          <option value="xk3190_a12e">XK3190 / Yaohua</option>
+          <option value="generic_regex">Genérico (líneas de texto)</option>
+          <option value="sics">Mettler-Toledo (MT-SICS)</option>
+        </select>
+      </label>
+    </div>
+
+    <details class="rm-details" id="rmDetails">
+      <summary>Ver datos que llegan (avanzado)</summary>
+      <div class="rm-mono">
+        <div class="rm-row"><b>Bytes recibidos:</b> <span id="rmBytes">0</span></div>
+        <div class="rm-row"><b>Texto:</b> <span class="mono" id="rmText"></span></div>
+        <div class="rm-row"><b>HEX:</b> <span class="mono" id="rmHex"></span></div>
+        <div class="rm-row rm-frames"><b>Tramas:</b> <span class="mono" id="rmFrames"></span></div>
+      </div>
+    </details>
+
+    <div class="rm-actions">
+      <button class="btn-primary" id="rmGoPesaje" type="button">✓ Se ve bien — ir a Pesaje ▸</button>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 <script src="auth.js"></script>

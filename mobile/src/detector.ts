@@ -46,6 +46,10 @@ export interface DetectResult {
   parser: string | null;
   message: string;
   hex: string; // últimos bytes crudos capturados
+  /** Bytes recibidos en la ventana de escucha (0 = el módulo no envía nada).
+   *  La UI lo usa para ofrecer "Ver datos y conectar igual" cuando hay bytes
+   *  pero ninguna combinación clasifica, y para distinguir "no envía datos". */
+  bytes_recibidos: number;
 }
 
 export interface DetectOptions {
@@ -146,7 +150,12 @@ export function analyzeCombos(
 
   for (const invert of [false, true]) {
     const bytes = invert ? invertBytes(data) : data;
-    const looksLikeWeight = weightPattern(bytes).looksLikeWeight;
+    const wp = weightPattern(bytes);
+    const looksLikeWeight = wp.looksLikeWeight;
+    // Trama ASCII de peso corta/variable (módulos RS232/485 de campo): no
+    // llega al umbral estricto de looksLikeWeight pero es claramente numérica.
+    // Amplía la aceptación del genérico SIN dejar pasar ruido binario.
+    const weightyIsh = looksLikeWeight || (wp.weightyRatio >= 0.6 && wp.digitRatio >= 0.25);
     if (looksLikeWeight && weightLikeInvert === null) weightLikeInvert = invert;
     const tokens = numericTokens(asciiDecode(bytes));
 
@@ -154,8 +163,8 @@ export function analyzeCombos(
       for (const key of ordered) {
         // El regex genérico acepta cualquier "línea" con un dígito: sobre
         // ruido binario da falsos positivos, así que solo cuenta si la
-        // captura además pasa la heurística de trama ASCII de peso.
-        if (key === "generic_regex" && !looksLikeWeight) continue;
+        // captura además parece una trama ASCII de peso (estricta o corta).
+        if (key === "generic_regex" && !weightyIsh) continue;
         const variant: ScaleProfile = {
           ...profile,
           parser: key,
@@ -193,6 +202,35 @@ export function analyzeCombos(
   return { best, weightLikeInvert };
 }
 
+/**
+ * Elige el parser de MEJOR ESFUERZO para el connect "de todos modos": prueba
+ * matrix sobre los bytes capturados (con la reversa/polaridad del usuario) y,
+ * si no saca ningún número, cae a generic_regex. Sin captura → matrix (el
+ * usuario lo ajusta luego con el selector y los toggles en vivo). Determinista.
+ */
+export function bestEffortParser(
+  data: Uint8Array,
+  opts: { invert?: boolean; reverse?: boolean } = {},
+): "matrix" | "generic_regex" {
+  if (!data || data.length === 0) return "matrix";
+  const bytes = opts.invert ? invertBytes(data) : data;
+  const base: ScaleProfile = {
+    id: "auto", name: "auto", brand: "auto", parser: "matrix", transport: "serial",
+    extra: { reverse_frame: !!opts.reverse },
+  };
+  for (const key of ["matrix", "generic_regex"] as const) {
+    try {
+      const readings = new PARSER_REGISTRY[key]({ ...base, parser: key })
+        .push(bytes)
+        .filter((r) => Number.isFinite(r.kg));
+      if (readings.length >= 1) return key;
+    } catch {
+      /* el parser que no aplica no descarta el mejor esfuerzo */
+    }
+  }
+  return "matrix";
+}
+
 /** Mensaje en humano según las correcciones aplicadas. */
 function buildMessage(c: Candidate, baudTxt: string): string {
   const kg = fmtKg(c.kg);
@@ -213,6 +251,7 @@ function candidateResult(
   baud: number | null,
   sweep: boolean,
   hex: string,
+  bytes: number,
 ): DetectResult {
   const baudTxt = sweep && baud != null ? ` a ${baud} baudios` : "";
   return {
@@ -226,6 +265,7 @@ function candidateResult(
     parser: c.parser,
     message: buildMessage(c, baudTxt),
     hex,
+    bytes_recibidos: bytes,
   };
 }
 
@@ -234,6 +274,7 @@ function weightLikeResult(
   baud: number | null,
   sweep: boolean,
   hex: string,
+  bytes: number,
 ): DetectResult {
   const baudTxt = sweep && baud != null ? ` a ${baud} baudios` : "";
   return {
@@ -247,8 +288,9 @@ function weightLikeResult(
     parser: null,
     message:
       `✓ Llegan datos de peso (señal ${invert ? "invertida" : "directa"}${baudTxt}), ` +
-      "pero el modelo elegido no entiende la trama — revisa la marca y el modelo en el paso 2.",
+      "pero el modelo elegido no entiende la trama — puedes tocar «👁 Ver datos y conectar igual».",
     hex,
+    bytes_recibidos: bytes,
   };
 }
 
@@ -314,19 +356,19 @@ export async function detectSignal(opts: DetectOptions): Promise<DetectResult> {
       result = {
         ok: false, verdict: "sin_datos", kg: null, baudrate: baud,
         invert_bits: false, reverse_frame: false, parser_ok: false,
-        parser: null, message: DETECT_MESSAGES.sin_datos, hex,
+        parser: null, message: DETECT_MESSAGES.sin_datos, hex, bytes_recibidos: 0,
       };
     } else {
       const { best: candidate, weightLikeInvert } = analyzeCombos(opts.profile, data);
       if (candidate !== null) {
-        result = candidateResult(candidate, baud, sweep, hex);
+        result = candidateResult(candidate, baud, sweep, hex, data.length);
       } else if (weightLikeInvert !== null) {
-        result = weightLikeResult(weightLikeInvert, baud, sweep, hex);
+        result = weightLikeResult(weightLikeInvert, baud, sweep, hex, data.length);
       } else {
         result = {
           ok: false, verdict: "sin_peso", kg: null, baudrate: baud,
           invert_bits: false, reverse_frame: false, parser_ok: false,
-          parser: null, message: DETECT_MESSAGES.sin_peso, hex,
+          parser: null, message: DETECT_MESSAGES.sin_peso, hex, bytes_recibidos: data.length,
         };
       }
     }

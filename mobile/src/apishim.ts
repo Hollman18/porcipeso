@@ -24,6 +24,9 @@ import { TIPO_HUMANO } from "./reportview";
 import { SimLiveScale, SimLiveOptions } from "./simlive";
 import { downloadAndInstallApk, fetchUpdateStatus } from "./update";
 import type { ByteTransport, UsbDeviceInfo } from "./serial";
+// Monitor de bytes crudos: import ESTÁTICO (es un campo del backend) pero sin
+// arrastrar el plugin nativo — vive en rawmon.ts, libre de Capacitor.
+import { RawMonitor, tapTransport } from "./rawmon";
 
 /** Velocidades del barrido automático del detector (método Cable/OTG). */
 export const DETECT_BAUDRATES = [1200, 2400, 4800, 9600, 19200] as const;
@@ -247,6 +250,14 @@ export class LocalBackend {
   driverProfile: ScaleProfile | null = null;
   driverError: string | null = null;
   lastReading: Reading | null = null;
+  /**
+   * Monitor de los últimos bytes crudos del transporte ACTIVO (fuente de verdad
+   * para "ver qué llega"). Todo transporte creado por makeTransport se envuelve
+   * con tapTransport → esto se llena solo, tanto en detect como en connect. Se
+   * resetea en cada stopDriver (nuevo enlace = cuenta desde cero). Lo sirve
+   * GET /api/scale/raw y lo consulta el connect "de todos modos" para el parser.
+   */
+  readonly raw = new RawMonitor();
   /** Emparejados cacheados para el merge del discovery en vivo. */
   private btPairedCache: Array<{ name: string; address: string; paired: boolean }> = [];
   /**
@@ -321,15 +332,28 @@ export class LocalBackend {
     this.broadcastSnapshot();
   };
 
+  /** Peso mínimo (kg) para CONTAR un cerdo / escalón. Por defecto 5 kg para
+   *  que cerdos pequeños (10 kg) se cuenten (antes 40 kg los ignoraba).
+   *  Ajustable por el usuario vía POST /api/config/min-kg. */
+  minKg = 5.0;
+
   ensureEngine(): WeighingEngine {
     if (this.engine === null) {
       this.engine = new WeighingEngine(
-        { ...DEFAULT_ENGINE_CONFIG },
+        { ...DEFAULT_ENGINE_CONFIG, min_delta_kg: this.minKg },
         this.onEngineEvent,
         this.onEngineState,
       );
     }
     return this.engine;
+  }
+
+  /** Cambia el peso mínimo por cerdo. Reconstruye el motor si no hay sesión
+   *  abierta (la config es de solo-lectura tras crear el motor). */
+  setMinKg(kg: number): void {
+    if (!(kg > 0)) return;
+    this.minKg = kg;
+    if (this.currentSessionId === null) this.engine = null;
   }
 
   // ---------------------------------------------------------- lecturas
@@ -403,6 +427,9 @@ export class LocalBackend {
   }
 
   async stopDriver(): Promise<void> {
+    // Nuevo enlace = el monitor cuenta desde cero (detect y connect llaman aquí
+    // primero): bytes_recibidos refleja SOLO lo que llega en esta sesión.
+    this.raw.reset();
     if (this.sim !== null) {
       this.sim.stop();
       this.sim = null;
@@ -479,6 +506,14 @@ export class LocalBackend {
     if (method === "GET" && path === "/api/scale/status") return this.scaleStatus();
     if (method === "POST" && path === "/api/scale/disconnect") return this.scaleDisconnect();
     if (method === "POST" && path === "/api/scale/detect") return this.scaleDetect(body);
+    if (method === "GET" && path === "/api/scale/raw") return ok(this.raw.snapshot());
+    if (method === "GET" && path === "/api/config/min-kg") return ok({ kg: this.minKg });
+    if (method === "POST" && path === "/api/config/min-kg") {
+      const kg = Number((body as Record<string, unknown>)?.kg);
+      if (!(kg > 0)) return err(400, "kg debe ser mayor a 0");
+      this.setMinKg(kg);
+      return ok({ kg: this.minKg });
+    }
     if (method === "GET" && path === "/api/bt/devices") return this.btDevices();
     if (method === "POST" && path === "/api/bt/discovery/start") return this.btDiscoveryStart();
     if (method === "GET" && path === "/api/bt/discovery") return this.btDiscoveryPoll();
@@ -689,8 +724,21 @@ export class LocalBackend {
     }
   }
 
-  /** Fábrica de transportes de bytes (BT SPP crudo / BLE GATT-notify / USB OTG). */
+  /**
+   * Fábrica de transportes de bytes (BT SPP crudo / BLE GATT-notify / USB OTG)
+   * ENVUELTA en el tap del monitor: CUALQUIER transporte que salga de aquí
+   * copia sus bytes a this.raw (detect y connect por igual). Es el punto único
+   * por donde el monitor de datos crudos se llena.
+   */
   private async makeTransport(
+    kind: "bluetooth" | "ble" | "usb",
+    opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
+  ): Promise<ByteTransport> {
+    return tapTransport(await this.makeRawTransport(kind, opts), this.raw);
+  }
+
+  /** Transporte SIN tap (inyectable en tests, o el nativo por tipo de enlace). */
+  private async makeRawTransport(
     kind: "bluetooth" | "ble" | "usb",
     opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
   ): Promise<ByteTransport> {
@@ -725,18 +773,36 @@ export class LocalBackend {
     const profileId = String(body["profile_id"] ?? "");
     if (profileId === "sim" || profileId === "simulador") return this.simStart();
 
+    // "Conectar de todos modos": el detector no clasificó pero llegan bytes.
+    // Conecta en MODO MANUAL con un parser de mejor esfuerzo (matrix; si matrix
+    // no saca número sobre lo ya escuchado, generic_regex) y deja que el usuario
+    // lo ajuste EN VIVO con los toggles y el selector de la pantalla de pesaje.
+    const manual = Boolean(body["manual"]);
+
     let profile: ScaleProfile;
     if (profileId === "auto") {
-      // Flujo Bluetooth automático: el parser lo decidió el detector.
+      // Flujo Bluetooth automático: el parser lo decidió el detector…
       const parserKey = String(body["parser"] ?? "");
-      if (!isParserSupported(parserKey)) {
+      if (isParserSupported(parserKey)) {
+        profile = { ...AUTO_PROFILE, parser: parserKey, extra: {} };
+      } else if (manual) {
+        // …o "conectar igual": elige por mejor esfuerzo sobre los bytes que el
+        // detector alcanzó a escuchar (this.raw aún los tiene: stopDriver los
+        // limpia DESPUÉS, más abajo). Sin bytes previos → matrix por defecto.
+        const { bestEffortParser } = await import("./detector");
+        const chosen = bestEffortParser(this.raw.bytes(), {
+          invert: Boolean(body["invert_bits"]),
+          reverse: Boolean(body["reverse_frame"]),
+        });
+        profile = { ...AUTO_PROFILE, parser: chosen, extra: {} };
+      } else {
         return err(
           400,
           "el perfil 'auto' necesita el parser detectado (body.parser): " +
-            "corre primero la detección (POST /api/scale/detect)",
+            "corre primero la detección (POST /api/scale/detect), " +
+            "o pasa manual:true para conectar de todos modos",
         );
       }
-      profile = { ...AUTO_PROFILE, parser: parserKey, extra: {} };
     } else {
       const found = this.profiles.find((p) => p.id === profileId);
       if (!found) return err(404, `perfil desconocido: ${profileId}`);
@@ -774,15 +840,7 @@ export class LocalBackend {
     this.ensureEngine();
     this.driverError = null;
     try {
-      const factory = this.createBtDriver ?? (await defaultBtFactory());
-      const driver = await factory(
-        profile,
-        address,
-        this.onReading,
-        (msg) => {
-          this.driverError = msg;
-        },
-      );
+      const driver = await this.openBtDriver(profile, address);
       this.btDriver = driver;
       this.driverProfile = profile;
     } catch (e) {
@@ -798,7 +856,7 @@ export class LocalBackend {
         // responde QUÉ transporte quedó: la UI guarda 'ble' para reconectar
         // directo la próxima vez (fell_back marca que hubo caída del clásico).
         const b = (bleRes.body ?? {}) as Record<string, unknown>;
-        return ok({ ...b, fell_back: true, classic_error: classicErr });
+        return ok({ ...b, parser: profile.parser, manual, fell_back: true, classic_error: classicErr });
       }
       // NI clásico NI BLE conectaron: dilo CLARO, con ambos motivos, y adjunta
       // el diagnóstico GATT si el intento BLE produjo uno (perfil raro).
@@ -820,7 +878,37 @@ export class LocalBackend {
       }
       return { status: 400, body: respBody };
     }
-    return ok({ connected: true, profile_id: profile.id, transport: "bluetooth" });
+    // parser + manual: la UI guarda lo que quedó funcionando (parser + reverse +
+    // invert) para reconectar directo, y sabe que fue un connect de mejor esfuerzo.
+    return ok({ connected: true, profile_id: profile.id, transport: "bluetooth", parser: profile.parser, manual });
+  }
+
+  /**
+   * Abre el driver del SPP clásico. Con createBtDriver inyectado (tests) usa ese;
+   * si no, construye el transporte por makeTransport (ENVUELTO en el tap del
+   * monitor) + SerialScaleDriver cuando hay serial nativo o makeTransport
+   * inyectado; en web/APK viejo cae al driver @e-is basado en texto.
+   */
+  private async openBtDriver(profile: ScaleProfile, address: string): Promise<ScaleDriverLike> {
+    const onErr = (msg: string): void => {
+      this.driverError = msg;
+    };
+    if (this.createBtDriver) {
+      return this.createBtDriver(profile, address, this.onReading, onErr);
+    }
+    const serial = await import("./serial");
+    if (serial.nativeSerialAvailable() || this.serialDeps?.makeTransport) {
+      const transport = await this.makeTransport("bluetooth", { profile, address, baud: null });
+      const { SerialScaleDriver } = await import("./serialdriver");
+      const driver = new SerialScaleDriver(profile, transport, this.onReading, onErr);
+      await driver.connect();
+      return driver;
+    }
+    // Fallback (web / APK viejo): plugin @e-is basado en texto (sin tap crudo).
+    const { BluetoothScaleDriver } = await import("./bluetooth");
+    const driver = new BluetoothScaleDriver(profile, address, this.onReading, onErr);
+    await driver.connect();
+    return driver;
   }
 
   /** Conexión por cable USB/OTG: mismo pipeline de parsers que Bluetooth. */
@@ -853,7 +941,10 @@ export class LocalBackend {
       this.driverError = humanizeSerialError(e);
       return err(400, this.driverError);
     }
-    return ok({ connected: true, profile_id: profile.id, transport: "usb" });
+    return ok({
+      connected: true, profile_id: profile.id, transport: "usb",
+      parser: profile.parser, manual: Boolean(body["manual"]),
+    });
   }
 
   /**
@@ -897,7 +988,10 @@ export class LocalBackend {
       }
       return { status: 400, body };
     }
-    return ok({ connected: true, profile_id: profile.id, transport: "ble" });
+    return ok({
+      connected: true, profile_id: profile.id, transport: "ble",
+      parser: profile.parser, manual: Boolean(body["manual"]),
+    });
   }
 
   /**
@@ -1362,33 +1456,6 @@ export class LocalBackend {
     }
     return false;
   }
-}
-
-async function defaultBtFactory(): Promise<NonNullable<BackendDeps["createBtDriver"]>> {
-  // Con el plugin local (APK): canal SPP CRUDO — los bytes llegan intactos,
-  // así que extra.invert_bits funciona y no hay pérdida por decodificación
-  // UTF-8 (el plugin @e-is convierte los bytes >= 0x80 en U+FFFD).
-  const serial = await import("./serial");
-  if (serial.nativeSerialAvailable()) {
-    const { SerialScaleDriver } = await import("./serialdriver");
-    return async (profile, address, onReading, onError) => {
-      const driver = new SerialScaleDriver(
-        profile,
-        new serial.RawBtTransport(address),
-        onReading,
-        onError,
-      );
-      await driver.connect();
-      return driver;
-    };
-  }
-  // Fallback (web / APK viejo): plugin @e-is basado en texto.
-  const { BluetoothScaleDriver } = await import("./bluetooth");
-  return async (profile, address, onReading, onError) => {
-    const driver = new BluetoothScaleDriver(profile, address, onReading, onError);
-    await driver.connect();
-    return driver;
-  };
 }
 
 // ------------------------------------------------------------------- CSV

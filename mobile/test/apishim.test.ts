@@ -732,6 +732,113 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     }
   });
 
+  // ---- monitor de bytes CRUDOS + "conectar de todos modos" (RS232/485) ----
+
+  const framesTransport = (bytes: Uint8Array) => ({
+    label: "fake-bt",
+    open: async () => {},
+    read: async () => bytes,
+    close: async () => {},
+  });
+
+  it("GET /api/scale/raw expone hex/text/bytes_recibidos/muestra_frames del transporte activo", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    const FRAMES = stringToBytes("= 126.35= 126.35= 126.35");
+    const bt = await makeBackend({
+      serial: { makeTransport: async () => framesTransport(FRAMES) },
+    });
+    try {
+      // sin transporte todavía: monitor en cero
+      const empty = await call(bt, "GET", "/api/scale/raw");
+      expect(empty.json).toMatchObject({ hex: "", text: "", bytes_recibidos: 0, muestra_frames: [] });
+
+      const res = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "matrix-adr00", transport: "bluetooth", port: "48:87:2D:9D:D5:71",
+      });
+      expect(res.status).toBe(200);
+      await run(bt, 200); // deja que el SerialScaleDriver lea unos ciclos
+
+      const raw = await call(bt, "GET", "/api/scale/raw");
+      expect(raw.status).toBe(200);
+      expect(raw.json.bytes_recibidos).toBeGreaterThan(0);
+      expect(raw.json.hex).toMatch(/^[0-9A-F]{2}( [0-9A-F]{2})*$/);
+      expect(raw.json.hex).toContain("3D"); // '='
+      expect(raw.json.text).toContain("= 126.35");
+      expect(Array.isArray(raw.json.muestra_frames)).toBe(true);
+      expect(raw.json.muestra_frames.join(" ")).toContain("126.35");
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
+  it("conectar de todos modos (manual): frames reversed '=53.621' → conecta matrix y el toggle 🔁 reverse corrige el valor EN VIVO", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    // El módulo transmite el peso al revés: "=53.621 " es 126.35 leído en orden.
+    const FRAMES = stringToBytes("=53.621 =53.621 =53.621 ");
+    const bt = await makeBackend({
+      serial: { makeTransport: async () => framesTransport(FRAMES) },
+    });
+    try {
+      // "👁 Ver datos y conectar igual": perfil auto + manual, SIN parser elegido.
+      const res = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "auto", manual: true, transport: "bluetooth", port: "48:87:2D:9D:D5:71",
+      });
+      expect(res.status).toBe(200);
+      // conecta en MODO MANUAL con el parser de mejor esfuerzo (matrix)
+      expect(res.json).toMatchObject({ connected: true, transport: "bluetooth", manual: true, parser: "matrix" });
+      await run(bt, 200);
+
+      // sin corregir, matrix lee el valor tal cual llega (al revés)
+      let status = await call(bt, "GET", "/api/scale/status");
+      expect(status.json.connected).toBe(true);
+      expect(status.json.last_kg).toBeCloseTo(53.621, 2);
+
+      // y el monitor muestra el stream crudo
+      const raw = await call(bt, "GET", "/api/scale/raw");
+      expect(raw.json.bytes_recibidos).toBeGreaterThan(0);
+      expect(raw.json.text).toContain("=53.621");
+
+      // 🔁 el usuario voltea "Números al revés": reconecta EN VIVO con reverse_frame
+      const flip = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "auto", parser: "matrix", transport: "bluetooth",
+        port: "48:87:2D:9D:D5:71", reverse_frame: true,
+      });
+      expect(flip.status).toBe(200);
+      await run(bt, 200);
+
+      // ahora el valor sale corregido: 126.35
+      status = await call(bt, "GET", "/api/scale/status");
+      expect(status.json.last_kg).toBeCloseTo(126.35, 2);
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
+  it("conecté pero el módulo no envía: /api/scale/raw reporta bytes_recibidos 0 (la UI dice 'no envía datos')", async () => {
+    const bt = await makeBackend({
+      serial: { makeTransport: async () => framesTransport(new Uint8Array(0)) },
+    });
+    try {
+      const res = await call(bt, "POST", "/api/scale/connect", {
+        profile_id: "auto", manual: true, transport: "bluetooth", port: "48:87:2D:9D:D5:71",
+      });
+      expect(res.status).toBe(200);
+      expect(res.json.connected).toBe(true);
+      await run(bt, 300);
+
+      const raw = await call(bt, "GET", "/api/scale/raw");
+      expect(raw.json.bytes_recibidos).toBe(0); // enlace vivo pero SIN datos
+      expect(raw.json.hex).toBe("");
+      const status = await call(bt, "GET", "/api/scale/status");
+      expect(status.json.last_kg).toBeNull();
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
   it("scale/connect USB sin device_id responde 400 con instrucción clara", async () => {
     const res = await call(backend, "POST", "/api/scale/connect", {
       profile_id: "matrix-adr00",
