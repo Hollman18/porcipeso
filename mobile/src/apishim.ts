@@ -332,15 +332,19 @@ export class LocalBackend {
     this.broadcastSnapshot();
   };
 
-  /** Peso mínimo (kg) para CONTAR un cerdo / escalón. Por defecto 5 kg para
-   *  que cerdos pequeños (10 kg) se cuenten (antes 40 kg los ignoraba).
+  /** Peso mínimo (kg) para CONTAR un cerdo / escalón. Por defecto 2 kg: a
+   *  partir de 2 kg la báscula empieza a buscar el peak-hold del animal
+   *  (lechones incluidos; antes 40 kg / 5 kg los ignoraba).
    *  Ajustable por el usuario vía POST /api/config/min-kg. */
-  minKg = 5.0;
+  minKg = 2.0;
 
   ensureEngine(): WeighingEngine {
     if (this.engine === null) {
       this.engine = new WeighingEngine(
-        { ...DEFAULT_ENGINE_CONFIG, min_delta_kg: this.minKg },
+        // El mismo "peso mínimo" gobierna el conteo (min_delta_kg) y el piso de
+        // captura de referencia en calibración/lote (min_ref_kg): a partir de
+        // this.minKg la báscula empieza a buscar el peak-hold.
+        { ...DEFAULT_ENGINE_CONFIG, min_delta_kg: this.minKg, min_ref_kg: this.minKg },
         this.onEngineEvent,
         this.onEngineState,
       );

@@ -257,10 +257,11 @@ def create_app(
     st.engine = None
     st.engine_factory = engine_factory or _default_engine_factory
     st.engine_lock = threading.Lock()
-    # Peso mínimo (kg) para contar un cerdo/escalón. 5 kg por defecto para que
-    # cerdos pequeños (10 kg) se cuenten (antes 40 kg los ignoraba). Ajustable
-    # vía POST /api/config/min-kg.
-    st.min_kg = 5.0
+    # Peso mínimo (kg) para contar un cerdo/escalón. 2 kg por defecto: a partir
+    # de 2 kg la báscula empieza a buscar el peak-hold del animal (lechones
+    # incluidos; antes 40 kg / 5 kg los ignoraba). Ajustable vía POST
+    # /api/config/min-kg.
+    st.min_kg = 2.0
     st.current_session_id = None
     st.driver_thread = None
     st.driver_stop = None
@@ -302,8 +303,11 @@ def create_app(
     def ensure_engine() -> Engine:
         with st.engine_lock:
             if st.engine is None:
+                # El mismo "peso mínimo" gobierna el conteo (min_delta_kg) y el
+                # piso de captura de referencia en calibración/lote (min_ref_kg):
+                # a partir de st.min_kg la báscula empieza a buscar el peak-hold.
                 st.engine = st.engine_factory(
-                    EngineConfig(min_delta_kg=st.min_kg),
+                    EngineConfig(min_delta_kg=st.min_kg, min_ref_kg=st.min_kg),
                     on_engine_event, on_engine_state
                 )
             return st.engine
