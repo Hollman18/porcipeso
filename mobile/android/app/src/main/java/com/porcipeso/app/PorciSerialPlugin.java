@@ -15,6 +15,7 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.location.LocationManager;
+import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
 import android.util.Base64;
@@ -692,6 +693,61 @@ public class PorciSerialPlugin extends Plugin {
         } catch (Exception e) {
             call.reject("No pude abrir los ajustes de ubicación: " + e.getMessage());
         }
+    }
+
+    /** Abre la pantalla de PERMISOS de ESTA app (para conceder "Dispositivos
+     *  cercanos" cuando Android ya no vuelve a preguntar — negado permanente). */
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.fromParts("package", getContext().getPackageName(), null));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("No pude abrir los ajustes de la app: " + e.getMessage());
+        }
+    }
+
+    /** Abre los ajustes de Bluetooth del sistema (encender / emparejar módulo). */
+    @PluginMethod
+    public void openBluetoothSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("No pude abrir los ajustes de Bluetooth: " + e.getMessage());
+        }
+    }
+
+    /** Diagnóstico de un toque: ¿BT encendido? ¿permiso concedido? ¿módulo
+     *  emparejado? Devuelve el estado para que la UI diga qué falta. */
+    @SuppressLint("MissingPermission")
+    @PluginMethod
+    public void btDiagnose(PluginCall call) {
+        JSObject res = new JSObject();
+        boolean api31 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S;
+        res.put("android_sdk", Build.VERSION.SDK_INT);
+        res.put("needs_nearby_permission", api31);
+        boolean granted = !api31 || getPermissionState(BT_ALIAS) == PermissionState.GRANTED;
+        res.put("permission_granted", granted);
+        BluetoothAdapter adapter = getAdapter();
+        res.put("has_bluetooth", adapter != null);
+        boolean on = adapter != null && adapter.isEnabled();
+        res.put("bluetooth_on", on);
+        int paired = 0;
+        if (granted && on) {
+            try {
+                java.util.Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+                paired = bonded != null ? bonded.size() : 0;
+            } catch (SecurityException ignored) {
+            }
+        }
+        res.put("paired_count", paired);
+        call.resolve(res);
     }
 
     // ================================================================= USB

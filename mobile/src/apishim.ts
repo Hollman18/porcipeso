@@ -604,6 +604,9 @@ export class LocalBackend {
     if (method === "POST" && path === "/api/bt/discovery/start") return this.btDiscoveryStart();
     if (method === "GET" && path === "/api/bt/discovery") return this.btDiscoveryPoll();
     if (method === "POST" && path === "/api/bt/location/open") return this.btLocationOpen();
+    if (method === "POST" && path === "/api/bt/app-settings/open") return this.btAppSettingsOpen();
+    if (method === "POST" && path === "/api/bt/settings/open") return this.btSettingsOpen();
+    if (method === "GET" && path === "/api/bt/diagnose") return this.btDiagnoseRoute();
     if (method === "GET" && path === "/api/usb/devices") return this.usbDevices();
 
     // Auto-actualización: mismo contrato que porcipeso/api/updatecheck.py
@@ -797,6 +800,34 @@ export class LocalBackend {
       const { humanizeSerialError } = await import("./serial");
       return err(503, humanizeSerialError(e));
     }
+  }
+
+  /** Abre la pantalla de permisos de la app (permiso «Dispositivos cercanos»). */
+  private async btAppSettingsOpen(): Promise<JsonResponse> {
+    try {
+      await (await import("./serial")).openAppSettings();
+      return ok({ ok: true });
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      return err(503, humanizeSerialError(e));
+    }
+  }
+
+  /** Abre los ajustes de Bluetooth del sistema (encender / emparejar). */
+  private async btSettingsOpen(): Promise<JsonResponse> {
+    try {
+      await (await import("./serial")).openBluetoothSettings();
+      return ok({ ok: true });
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      return err(503, humanizeSerialError(e));
+    }
+  }
+
+  /** Diagnóstico Bluetooth: BT on, permiso «Dispositivos cercanos», emparejados. */
+  private async btDiagnoseRoute(): Promise<JsonResponse> {
+    const diag = await (await import("./serial")).btDiagnose();
+    return ok({ diagnosis: diag });
   }
 
   /** {deviceId, vid, pid, name, driver}: dispositivos serial por OTG. */

@@ -27,6 +27,16 @@ export interface PairedDevice {
   address: string;
 }
 
+/** Estado del subsistema Bluetooth para el diagnóstico de un toque. */
+export interface BtDiagnosis {
+  android_sdk: number;
+  needs_nearby_permission: boolean; // Android 12+ exige "Dispositivos cercanos"
+  permission_granted: boolean;
+  has_bluetooth: boolean;
+  bluetooth_on: boolean;
+  paired_count: number;
+}
+
 export interface UsbDeviceInfo {
   deviceId: number;
   vid: number;
@@ -51,6 +61,13 @@ export interface PorciSerialPlugin {
   cancelDiscovery(): Promise<void>;
   /** Aviso accionable: abre los ajustes de Ubicación del sistema. */
   openLocationSettings(): Promise<void>;
+  /** Abre la pantalla de PERMISOS de esta app (permiso negado permanente). */
+  openAppSettings(): Promise<void>;
+  /** Abre los ajustes de Bluetooth del sistema (encender / emparejar). */
+  openBluetoothSettings(): Promise<void>;
+  /** Diagnóstico: {android_sdk, needs_nearby_permission, permission_granted,
+   *  has_bluetooth, bluetooth_on, paired_count}. */
+  btDiagnose(): Promise<BtDiagnosis>;
   /** Canal SPP crudo: bytes sin decodificar (base64). */
   btConnect(o: { address: string }): Promise<void>;
   /**
@@ -112,6 +129,15 @@ export const NO_PAIR_MSG =
   "No pude emparejar el módulo. Acepta el emparejamiento de Android (el PIN " +
   "suele ser 1234 o 0000) y toca «Emparejar e intentar de nuevo».";
 
+/** SPP encontrado pero el socket cierra al instante (read ret -1 en las 4
+ *  estrategias): módulo ocupado por otro teléfono, emparejado viejo, o MIUI. */
+export const SPP_DROPPED_MSG =
+  "El módulo se encontró pero cerró la conexión al instante. Casi siempre es una de estas:\n" +
+  "1) Sigue conectado a OTRO teléfono. El Bluetooth clásico solo admite un teléfono a la vez: apaga el Bluetooth del otro teléfono e intenta de nuevo.\n" +
+  "2) El emparejamiento quedó viejo: en Ajustes → Bluetooth «olvida» el módulo y vuelve a emparejarlo (PIN 1234).\n" +
+  "3) Reinicia el módulo (quítale la corriente 5 segundos).\n" +
+  "En Xiaomi/MIUI, además quita la optimización de batería de PorciPeso y activa el «autoarranque».";
+
 /** ¿El error del connect es un fallo de EMPAREJADO? (la UI ofrece re-emparejar) */
 export function isPairError(e: unknown): boolean {
   return /no_pair/i.test(String(e instanceof Error ? e.message : e));
@@ -149,6 +175,12 @@ export function humanizeSerialError(e: unknown): string {
   }
   if (/no_device|not found/i.test(raw)) {
     return "No encuentro el dispositivo. Revisa que siga conectado/emparejado.";
+  }
+  // SPP: el módulo se encontró pero el socket cierra al instante (read ret -1
+  // en todas las estrategias). Casi siempre: ocupado por otro teléfono,
+  // emparejado viejo, o MIUI matando el enlace.
+  if (/read ret|socket might closed|spp no conect|read failed/i.test(raw)) {
+    return SPP_DROPPED_MSG;
   }
   return raw;
 }
@@ -439,6 +471,27 @@ export async function cancelBtDiscovery(): Promise<void> {
 
 export async function openLocationSettings(): Promise<void> {
   await requireNative().openLocationSettings();
+}
+
+/** Abre la pantalla de permisos de la app (permiso «Dispositivos cercanos»
+ *  negado permanentemente: Android ya no vuelve a preguntar). */
+export async function openAppSettings(): Promise<void> {
+  await requireNative().openAppSettings();
+}
+
+/** Abre los ajustes de Bluetooth del sistema (encender / emparejar módulo). */
+export async function openBluetoothSettings(): Promise<void> {
+  await requireNative().openBluetoothSettings();
+}
+
+/** Diagnóstico Bluetooth de un toque (BT on, permiso, emparejados). En web /
+ *  sin plugin devuelve null para que la UI lo omita en vez de romper. */
+export async function btDiagnose(): Promise<BtDiagnosis | null> {
+  try {
+    return await requireNative().btDiagnose();
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -2400,7 +2400,7 @@ async function btAutoConnect(dev) {
   } catch (e) {
     showHexPanel(false);
     if (status) status.textContent = '';
-    wizResult('fail', e?.message ?? 'No pude escuchar la báscula.');
+    wizResult('fail', e?.message ?? 'No pude escuchar la báscula.', btFailActions());
     btAutoRetry(dev);
     return;
   }
@@ -2420,7 +2420,7 @@ async function btAutoConnect(dev) {
       });
     } catch (e) {
       if (status) status.textContent = '';
-      wizResult('fail', e?.message || 'La detecté pero no pude dejarla conectada — intenta de nuevo.');
+      wizResult('fail', e?.message || 'La detecté pero no pude dejarla conectada — intenta de nuevo.', btFailActions());
       btAutoRetry(dev, gattTextFrom(e));
       return;
     }
@@ -2876,10 +2876,64 @@ function wizAddress() {
   return { ok: true, body: { profile_id: WIZ.profileId, port }, cfgExtra: { port } };
 }
 
-function wizResult(cls, text) {
+function wizResult(cls, text, actions) {
   const res = $('testResult');
   res.className = 'test-result show' + (cls ? ' ' + cls : '');
-  res.textContent = text;
+  res.innerHTML = '';
+  const p = document.createElement('div');
+  p.style.whiteSpace = 'pre-line';   // respeta los saltos de línea de los avisos
+  p.textContent = text;              // texto plano (sin HTML): seguro
+  res.appendChild(p);
+  if (Array.isArray(actions) && actions.length) {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.flexWrap = 'wrap';
+    row.style.gap = '8px';
+    row.style.marginTop = '10px';
+    for (const a of actions) {
+      if (!a) continue;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn-link';
+      b.textContent = a.label;
+      b.onclick = a.onclick;
+      row.appendChild(b);
+    }
+    res.appendChild(row);
+  }
+}
+
+/* Acciones de un toque para fallos de Bluetooth (Android 12+): abrir permisos,
+   abrir ajustes de Bluetooth y diagnóstico. En desktop degradan sin romper. */
+function btFailActions() {
+  return [
+    { label: '📶 Abrir Bluetooth', onclick: () => openBtDeepLink('/api/bt/settings/open') },
+    { label: '⚙ Permisos de la app', onclick: () => openBtDeepLink('/api/bt/app-settings/open') },
+    { label: '🔍 Diagnóstico', onclick: runBtDiagnose },
+  ];
+}
+
+async function openBtDeepLink(path) {
+  try { await api(path, { method: 'POST', body: {} }); }
+  catch { say('Eso se abre desde la app del teléfono.', 'alert', 4000); }
+}
+
+async function runBtDiagnose() {
+  let d = null;
+  try { d = (await apiJson('/api/bt/diagnose'))?.diagnosis; }
+  catch { /* sin plugin (desktop/web) */ }
+  if (!d) { say('El diagnóstico solo está en la app del teléfono.', 'calm', 4000); return; }
+  const problems = [];
+  if (d.needs_nearby_permission && !d.permission_granted) {
+    problems.push('❌ Falta el permiso «Dispositivos cercanos» (tócalo abajo).');
+  }
+  if (!d.bluetooth_on) problems.push('❌ El Bluetooth está apagado.');
+  if (d.paired_count === 0) problems.push('⚠ No hay ningún módulo emparejado — empareja con PIN 1234.');
+  const msg = problems.length
+    ? 'Diagnóstico Bluetooth:\n' + problems.join('\n')
+    : `✓ Bluetooth OK (Android ${d.android_sdk}, permiso concedido, ${d.paired_count} emparejado(s)).\n` +
+      'Si aún no conecta, el módulo puede estar TOMADO por otro teléfono: apágale el Bluetooth a ese teléfono, o reinicia el módulo (quítale la corriente 5 s).';
+  wizResult(problems.length ? 'fail' : 'ok', msg, btFailActions());
 }
 
 let lastKg = null;
