@@ -159,9 +159,14 @@ class EngineTuningBody(BaseModel):
 
 class ReturnedBody(BaseModel):
     """Devueltos MANUAL: cerdos que se subieron, se devolvieron por miedo y se
-    re-pesarán. Descuenta n×promedio del conteo y total (corrige el doble
-    conteo). Es la única vía de descuento — la báscula de paso no adivina."""
+    re-pesarán. Corrige el doble conteo. Es la única vía de descuento — la
+    báscula de paso no adivina.
+      - kg=None (lote): descuenta n×promedio (peso individual desconocido).
+      - kg=peso real (unidades): descuenta el PESO REAL de los cerdos elegidos
+        (kg = suma de sus pesos); cuadra exacto cuando re-pasen.
+    """
     n: int
+    kg: Optional[float] = None
 
 
 class ReferenceBody(BaseModel):
@@ -764,13 +769,17 @@ def create_app(
 
     @app.post("/api/session/returned")
     def session_returned(body: ReturnedBody) -> dict[str, Any]:
-        """Registra n cerdos devueltos (rebote) en la sesión activa. El evento
-        AJUSTE lo persiste y difunde el wiring on_engine_event."""
+        """Registra n cerdos devueltos (rebote) en la sesión activa. Con `kg`
+        descuenta el PESO REAL de los cerdos elegidos (unidades); sin `kg` usa
+        el promedio (lote). El evento AJUSTE lo persiste y difunde el wiring
+        on_engine_event."""
         if body.n < 1:
             raise HTTPException(400, "n debe ser ≥ 1")
+        if body.kg is not None and body.kg < 0:
+            raise HTTPException(400, "kg no puede ser negativo")
         if st.engine is None or st.current_session_id is None:
             raise HTTPException(409, "no hay un pesaje activo")
-        ev = st.engine.register_returned(body.n)
+        ev = st.engine.register_returned(body.n, body.kg)
         if ev is None:
             raise HTTPException(409, "no hay cerdos que descontar")
         snap = _snapshot_dict(st.engine.snapshot())

@@ -621,6 +621,13 @@ function startWeighing(nombre) {
     say('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
     showManualRef(true);  // peso a mano disponible durante la calibración
   }
+  // Descuento de devueltos: unidades = por peso real (elige el cerdo);
+  // lote = por cantidad (promedio, peso individual desconocido).
+  const uni = APP.mode === 'unidades';
+  if ($('returnedUnidades')) $('returnedUnidades').hidden = !uni;
+  if ($('returnedUnidadesHint')) $('returnedUnidadesHint').hidden = !uni;
+  if ($('returnedLote')) $('returnedLote').hidden = uni;
+  refreshReturnedPigs();
   refreshSimUi();
   setSubview('modPesaje', 'pvWeigh');
 }
@@ -739,6 +746,7 @@ function askNext() {
         activeQuestion = null;
         say(q.delta > 0 ? `✓ Anotado: subieron ${o}` : `✓ Anotado: se bajaron ${o} — ya los desconté`, 'calm', 4000);
         if (q.delta > 0) for (let i = 0; i < o; i++) APP.weights.push(q.delta / o);
+        refreshReturnedPigs();
         askNext();
       } catch {
         b.disabled = false;
@@ -764,6 +772,7 @@ function askNext() {
       activeQuestion = null;
       say(`✓ Anotado: subieron ${o}`, 'calm', 4000);
       if (q.delta > 0) for (let i = 0; i < o; i++) APP.weights.push(q.delta / o);
+      refreshReturnedPigs();
       askNext();
     } catch { ok.disabled = false; }
   };
@@ -900,6 +909,7 @@ function onEvent(ev) {
       APP.unitCount = 1;
       say(`✓ Cerdo #1: ${fmt(delta)} kg — bájalo y sube el siguiente`, 'calm', 5000);
       addMove('up', '✓', `Cerdo #1: ${fmt(delta)} kg`);
+      refreshReturnedPigs();
     } else if (APP.faseSupported) {
       // motor con fases: la narración la llevan las fases (bajar_prueba → lote);
       // la referencia se emite al BAJAR el cerdo de prueba — aquí solo registro
@@ -934,6 +944,7 @@ function onEvent(ev) {
     say(`✓ Cerdo #${APP.unitCount}: ${fmt(each)} kg — bájalo y sube el siguiente`, 'calm', 5000);
     addMove('up', '✓', `Cerdo #${APP.unitCount}: ${fmt(each)} kg`);
     for (let i = 0; i < n; i++) APP.weights.push(each);
+    refreshReturnedPigs();
     return;
   }
   if (tipo === 'reingreso') {
@@ -1008,6 +1019,7 @@ for (const b of document.querySelectorAll('#dlgWhy [data-motivo]')) {
 }
 
 /* ---------------- devueltos manual ---------------- */
+/* LOTE: por cantidad (peso individual desconocido → promedio). */
 $('bReturned').onclick = async () => {
   const inp = $('inpReturned');
   const n = parseInt(inp.value, 10);
@@ -1023,6 +1035,46 @@ $('bReturned').onclick = async () => {
   } catch (e) {
     say('No pude descontar — ¿hay un pesaje activo con cerdos?', 'alert', 4000);
   } finally { $('bReturned').disabled = false; }
+};
+
+/* UNIDADES: elige el cerdo por su PESO REAL (ya pesado). Descuenta ese peso
+   exacto; cuando el cerdo re-pase por la báscula, el total cierra al gramo. */
+function refreshReturnedPigs() {
+  const sel = $('selReturnedPig');
+  if (!sel) return;
+  const ws = Array.isArray(APP.weights) ? APP.weights : [];
+  const prev = sel.value;
+  sel.innerHTML = '';
+  ws.forEach((kg, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = `Cerdo #${i + 1} — ${fmt(kg)} kg`;
+    sel.appendChild(o);
+  });
+  // por defecto sugiere el ÚLTIMO (el rebote más común); conserva la selección
+  if (ws.length) sel.value = (prev && Number(prev) < ws.length) ? prev : String(ws.length - 1);
+  const empty = ws.length === 0;
+  sel.disabled = empty;
+  const btn = $('bReturnedPig');
+  if (btn) btn.disabled = empty;
+}
+
+if ($('bReturnedPig')) $('bReturnedPig').onclick = async () => {
+  const sel = $('selReturnedPig');
+  const idx = sel ? parseInt(sel.value, 10) : -1;
+  const ws = Array.isArray(APP.weights) ? APP.weights : [];
+  if (!Number.isInteger(idx) || idx < 0 || idx >= ws.length) return;
+  const kg = ws[idx];
+  $('bReturnedPig').disabled = true;
+  try {
+    await api('/api/session/returned', { method: 'POST', body: { n: 1, kg } });
+    APP.weights.splice(idx, 1);          // ese cerdo sale del censo local
+    refreshReturnedPigs();
+    addMove('down', '↩', `Devuelto: cerdo de ${fmt(kg)} kg — descontado con su peso real`);
+    say(`↩ Descontado 1 devuelto (${fmt(kg)} kg)`, 'calm', 4000);
+  } catch (e) {
+    say('No pude descontar — ¿hay un pesaje activo con cerdos?', 'alert', 4000);
+  } finally { refreshReturnedPigs(); }
 };
 
 /* ---------------- referencia a mano (wiring) ---------------- */

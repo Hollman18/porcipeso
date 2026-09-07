@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { WeighingEngine } from "../src/engine";
-import { EngineConfig, EngineStateT, WeighEvent } from "../src/models";
+import { DEFAULT_ENGINE_CONFIG, EngineConfig, EngineStateT, Reading, WeighEvent } from "../src/models";
 import fixtures from "./fixtures/engine_cases.json";
 
 const TOL = 0.01;
@@ -138,4 +138,62 @@ describe("paridad engine.ts vs engine.py (fixtures del engine real)", () => {
       );
     });
   }
+});
+
+describe("registerReturned: promedio (lote) vs peso real (unidades)", () => {
+  function build() {
+    const events: WeighEvent[] = [];
+    let lastTs = 0;
+    const eng = new WeighingEngine(
+      DEFAULT_ENGINE_CONFIG,
+      (ev) => events.push(ev),
+      null,
+      () => lastTs,
+    );
+    // mete una meseta estable de kg durante ~2.5 s (supera min_stable_ms)
+    const feed = (ts0: number, kg: number, n = 25): number => {
+      for (let i = 0; i < n; i++) {
+        lastTs = ts0 + i * 100;
+        eng.feed({ ts_ms: lastTs, kg } as Reading);
+      }
+      return ts0 + n * 100;
+    };
+    return { eng, events, feed };
+  }
+
+  it("unidades: kg descuenta el PESO REAL y cuadra al re-pasar", () => {
+    const { eng, feed } = build();
+    eng.openSession(1, "unidades");
+    let ts = 1000;
+    ts = feed(ts, 0); ts = feed(ts, 60); ts = feed(ts, 0); ts = feed(ts, 55); ts = feed(ts, 0);
+    let snap = eng.snapshot();
+    expect(snap.count).toBe(2);
+    expect(snap.total_kg).toBeCloseTo(115, 5);
+
+    const ev = eng.registerReturned(1, 55); // peso real de B
+    expect(ev).not.toBeNull();
+    expect(ev!.delta_kg).toBeCloseTo(-55, 5);
+    snap = eng.snapshot();
+    expect(snap.count).toBe(1);
+    expect(snap.total_kg).toBeCloseTo(60, 5);
+    expect(snap.avg_kg!).toBeCloseTo(60, 5); // recalculado (solo A)
+
+    ts = feed(ts, 55); ts = feed(ts, 0); // B re-pasa
+    snap = eng.snapshot();
+    expect(snap.count).toBe(2);
+    expect(snap.total_kg).toBeCloseTo(115, 5); // EXACTO
+  });
+
+  it("sin kg descuenta por PROMEDIO y no cambia el promedio", () => {
+    const { eng, feed } = build();
+    eng.openSession(1, "unidades");
+    let ts = 1000;
+    ts = feed(ts, 0); ts = feed(ts, 60); ts = feed(ts, 0); ts = feed(ts, 55); ts = feed(ts, 0);
+    const ev = eng.registerReturned(1); // sin kg → promedio 57.5
+    expect(ev!.delta_kg).toBeCloseTo(-57.5, 5);
+    const snap = eng.snapshot();
+    expect(snap.count).toBe(1);
+    expect(snap.total_kg).toBeCloseTo(57.5, 5);
+    expect(snap.avg_kg!).toBeCloseTo(57.5, 5); // promedio intacto
+  });
 });

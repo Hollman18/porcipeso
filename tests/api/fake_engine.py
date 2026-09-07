@@ -59,17 +59,27 @@ class FakeEngine(Engine):
         self.confirmed.append((event_id, n))
         return None
 
-    def register_returned(self, n: int) -> Optional[WeighEvent]:
+    def register_returned(self, n: int,
+                          kg: Optional[float] = None) -> Optional[WeighEvent]:
         if self.session_id is None or n < 1 or self._snapshot.count < 1:
             return None
+        if kg is not None and kg < 0:
+            return None
         n = min(n, self._snapshot.count)
-        avg = self._snapshot.avg_kg or 0.0
         new_count = self._snapshot.count - n
-        new_total = max(0.0, self._snapshot.total_kg - avg * n)
-        self.set_snapshot(count=new_count, total_kg=new_total)
+        if kg is not None:
+            delta = -float(kg)  # peso real de los cerdos elegidos
+            new_total = max(0.0, self._snapshot.total_kg + delta)
+            new_avg = (new_total / new_count) if new_count > 0 else self._snapshot.avg_kg
+            self.set_snapshot(count=new_count, total_kg=new_total, avg_kg=new_avg)
+        else:
+            avg = self._snapshot.avg_kg or 0.0
+            delta = -avg * n    # promedio (peso individual desconocido)
+            new_total = max(0.0, self._snapshot.total_kg + delta)
+            self.set_snapshot(count=new_count, total_kg=new_total)
         ev = WeighEvent(
             id=None, session_id=self.session_id, ts_ms=1,
-            peso_antes=0.0, peso_despues=0.0, delta_kg=-avg * n,
+            peso_antes=0.0, peso_despues=0.0, delta_kg=delta,
             animales_estimados=n, tipo=EventType.AJUSTE,
             animales_confirmados=n, motivo_bajada="devuelto_manual",
         )

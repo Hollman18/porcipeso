@@ -289,10 +289,18 @@
              se re-pesa cuenta doble; el operario descuenta cuántos rebotaron -->
         <div class="returned-box">
           <span class="rb-lbl">↩ ¿Se devolvió algún cerdo? Descuéntalo para que no cuente doble:</span>
-          <div class="rb-row">
+          <!-- LOTE: subieron en grupo, no se sabe el peso individual → promedio -->
+          <div class="rb-row" id="returnedLote">
             <input type="number" id="inpReturned" min="1" inputmode="numeric" placeholder="¿cuántos?">
             <button id="bReturned">Descontar devueltos</button>
           </div>
+          <!-- UNIDADES: elige el cerdo por su PESO REAL (ya pesado) -->
+          <div class="rb-row" id="returnedUnidades" hidden>
+            <select id="selReturnedPig" aria-label="Cerdo que se devolvió"></select>
+            <button id="bReturnedPig">Descontar este</button>
+          </div>
+          <p class="rb-hint" id="returnedUnidadesHint" hidden>Se descuenta con su
+            peso real; cuando vuelva a pasar por la báscula queda contado bien.</p>
         </div>
 
         <details class="moves">

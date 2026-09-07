@@ -269,6 +269,51 @@ def test_devueltos_manual_corrige_doble_conteo():
     assert eng.register_returned(1) is None      # ya en 0 → no hace nada
 
 
+def test_devueltos_por_peso_real_cuadra_exacto_unidades():
+    """UNIDADES: descontar por PESO REAL del cerdo elegido (kg) cuadra al gramo
+    cuando ese cerdo re-pasa por la báscula. A=60, B=55: B rebota y se descuenta
+    su peso real; al re-pasar el total vuelve a 115 exacto."""
+    eng, events, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)     # base vacía
+    ts = feed_level(eng, ts, 60.0)    # A
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 55.0)    # B (se contó)
+    ts = feed_level(eng, ts, 0.0)     # B rebota y baja
+    assert eng.snapshot().count == 2
+    assert eng.snapshot().total_kg == pytest.approx(115.0)
+
+    ev = eng.register_returned(1, kg=55.0)   # descuento el PESO REAL de B
+    assert ev is not None and ev.tipo == EventType.AJUSTE
+    assert ev.delta_kg == pytest.approx(-55.0)
+    snap = eng.snapshot()
+    assert snap.count == 1
+    assert snap.total_kg == pytest.approx(60.0)   # queda solo A
+    assert snap.avg_kg == pytest.approx(60.0)     # promedio recalculado (solo A)
+
+    ts = feed_level(eng, ts, 55.0)    # B RE-PASA por la báscula
+    ts = feed_level(eng, ts, 0.0)
+    snap = eng.snapshot()
+    assert snap.count == 2
+    assert snap.total_kg == pytest.approx(115.0)  # EXACTO (60 + 55)
+
+
+def test_devueltos_promedio_sigue_disponible_sin_kg():
+    """Sin kg (lote), el descuento por promedio sigue intacto: promedio estable."""
+    eng, _, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = calibrar(eng, ts, 100.0)
+    ts = feed_level(eng, ts, 100.0)   # sube 1
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 100.0)   # doble
+    assert eng.snapshot().count == 2
+    ev = eng.register_returned(1)     # sin kg → promedio
+    assert ev.delta_kg == pytest.approx(-100.0)
+    assert eng.snapshot().avg_kg == pytest.approx(100.0)  # promedio no cambia
+
+
 def test_ambiguo_opciones_y_confirm():
     """+155 con avg 102.5 → residuo > 20% → ambiguo [1,2]; confirm aplica."""
     eng, events, _ = make_engine()

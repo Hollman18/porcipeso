@@ -95,6 +95,28 @@ def test_devueltos_manual_endpoint(ctx):
     assert len(aj) == 1 and aj[0]["motivo_bajada"] == "devuelto_manual"
 
 
+def test_devueltos_por_peso_real_endpoint(ctx):
+    """POST /api/session/returned con `kg` descuenta el PESO REAL del cerdo
+    elegido (unidades): resta ese kg exacto del total. kg negativo → 400."""
+    client, holder = ctx
+    session = _open_session(client)
+    engine = holder["engine"]
+    # 2 cerdos: A=60, B=55 (total 115, avg 57.5)
+    engine.set_snapshot(count=2, total_kg=115.0, avg_kg=57.5)
+    # kg negativo → 400
+    assert client.post("/api/session/returned",
+                       json={"n": 1, "kg": -3}).status_code == 400
+    # descuenta el peso real de B (55) — NO el promedio
+    r = client.post("/api/session/returned", json={"n": 1, "kg": 55.0})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    assert body["total_kg"] == pytest.approx(60.0)   # queda solo A, exacto
+    evs = client.get(f"/api/sessions/{session['id']}/events").json()
+    aj = [e for e in evs if e["tipo"] == "ajuste"]
+    assert len(aj) == 1 and aj[0]["delta_kg"] == pytest.approx(-55.0)
+
+
 def test_config_engine_endpoint(ctx):
     """GET/POST /api/config/engine lee y ajusta los parámetros finos de pesaje
     (tiempo estable, sin repesaje, banda de tolerancia) con validación."""

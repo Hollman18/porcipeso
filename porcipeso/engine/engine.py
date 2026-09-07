@@ -426,26 +426,45 @@ class WeighingEngine(Engine):
         if self._count > 0:
             self._avg_kg = self._total_kg / self._count
 
-    def register_returned(self, n: int) -> Optional[WeighEvent]:
+    def register_returned(self, n: int,
+                          kg: Optional[float] = None) -> Optional[WeighEvent]:
         """Descuento MANUAL de cerdos que se devolvieron (rebote por miedo).
 
-        El operario indica cuántos cerdos se subieron, se devolvieron y se
-        van a re-pesar; se descuenta n × promedio del conteo y del total para
-        corregir el doble conteo. Emite un evento AJUSTE auditado. Nunca deja
-        el conteo negativo. Es la ÚNICA vía de descuento (ya no hay bajada
-        automática): solo el humano sabe cuántos rebotaron.
+        El operario indica cuántos cerdos rebotaron y se van a re-pesar; se
+        descuenta del conteo y del total para corregir el doble conteo. Emite
+        un evento AJUSTE auditado. Nunca deja el conteo negativo. Es la ÚNICA
+        vía de descuento (ya no hay bajada automática): solo el humano sabe
+        cuántos rebotaron.
+
+        Dos formas de descontar:
+        - kg=None (LOTE): resta n × promedio. El peso individual del cerdo es
+          DESCONOCIDO (subió en grupo), así que el promedio es la mejor
+          estimación; el promedio por cerdo NO cambia.
+        - kg=peso real (UNIDADES): resta el PESO REAL de los cerdos elegidos
+          (kg = suma de sus pesos) y recalcula el promedio. Como esos cerdos
+          re-pasan por la báscula más tarde (solos o en otro grupo) y ahí queda
+          su peso real, el total cierra EXACTO.
         """
         if self._session_id is None or n < 1:
             return None
         n = min(n, self._count)
         if n == 0:
             return None
-        avg = self._avg_kg or 0.0
-        delta = -avg * n
+        if kg is not None:
+            if kg < 0:
+                return None
+            delta = -float(kg)  # descuento por PESO REAL de los cerdos elegidos
+        else:
+            avg = self._avg_kg or 0.0
+            delta = -avg * n     # descuento por PROMEDIO (peso individual N/D)
         peso_antes = self._total_kg
         self._count -= n
         self._total_kg = max(0.0, self._total_kg + delta)
-        # el promedio por cerdo no cambia (se resta n×avg): se mantiene estable
+        if kg is not None:
+            # al quitar pesos reales el promedio cambia: se recalcula
+            if self._count > 0:
+                self._avg_kg = self._total_kg / self._count
+        # con kg=None el promedio por cerdo se mantiene (se restó n×avg)
         ts = self._last_ts_ms or 0
         ev = self._new_event(ts, peso_antes, self._total_kg, delta, n,
                              EventType.AJUSTE, 0)

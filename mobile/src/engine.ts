@@ -427,19 +427,31 @@ export class WeighingEngine {
     }
   }
 
-  /** Descuento MANUAL de cerdos devueltos (rebote por miedo). Descuenta
-   *  n × promedio del conteo y del total; nunca deja el conteo negativo.
-   *  Es la única vía de descuento (ya no hay bajada automática). */
-  registerReturned(n: number): WeighEvent | null {
+  /** Descuento MANUAL de cerdos devueltos (rebote por miedo). Espejo de
+   *  engine.py:register_returned. kg=null (lote) resta n×promedio (peso
+   *  individual desconocido, promedio intacto); kg=peso real (unidades) resta
+   *  el peso real de los cerdos elegidos y recalcula el promedio (cuadra exacto
+   *  cuando re-pasen). Nunca deja el conteo negativo. */
+  registerReturned(n: number, kg: number | null = null): WeighEvent | null {
     if (this.sessionId === null || n < 1) return null;
     n = Math.min(n, this.count);
     if (n === 0) return null;
-    const avg = this.avgKg ?? 0;
-    const delta = -avg * n;
+    let delta: number;
+    if (kg !== null && kg !== undefined) {
+      if (kg < 0) return null;
+      delta = -kg; // descuento por PESO REAL de los cerdos elegidos
+    } else {
+      const avg = this.avgKg ?? 0;
+      delta = -avg * n; // descuento por PROMEDIO (peso individual N/D)
+    }
     const pesoAntes = this.totalKg;
     this.count -= n;
     this.totalKg = Math.max(0, this.totalKg + delta);
-    // el promedio por cerdo no cambia (se resta n×avg): se mantiene estable
+    if (kg !== null && kg !== undefined) {
+      // al quitar pesos reales el promedio cambia: se recalcula
+      if (this.count > 0) this.avgKg = this.totalKg / this.count;
+    }
+    // con kg=null el promedio por cerdo se mantiene (se restó n×avg)
     const ts = this.lastTsMs ?? 0;
     const ev = this.newEvent(ts, pesoAntes, this.totalKg, delta, n, "ajuste", 0);
     ev.animales_confirmados = n;

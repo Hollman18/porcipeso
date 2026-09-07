@@ -1357,10 +1357,17 @@ export class LocalBackend {
   private async sessionReturned(body: Record<string, unknown>): Promise<JsonResponse> {
     const n = Number(body["n"]);
     if (!Number.isInteger(n) || n < 1) return err(400, "n debe ser ≥ 1");
+    // kg opcional: descuento por PESO REAL de los cerdos elegidos (unidades);
+    // ausente = descuento por promedio (lote).
+    let kg: number | null = null;
+    if (body["kg"] !== undefined && body["kg"] !== null) {
+      kg = Number(body["kg"]);
+      if (!Number.isFinite(kg) || kg < 0) return err(400, "kg no puede ser negativo");
+    }
     if (this.engine === null || this.currentSessionId === null) {
       return err(409, "no hay un pesaje activo");
     }
-    const ev = this.engine.registerReturned(n);
+    const ev = this.engine.registerReturned(n, kg);
     if (ev === null) return err(409, "no hay cerdos que descontar");
     await this.flush(); // el evento AJUSTE se persiste vía onEvent
     const snap = this.snapshotDict(this.engine.snapshot());
