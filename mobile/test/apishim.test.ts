@@ -264,7 +264,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     ws.close();
   });
 
-  it("modo unidades: cada estable ≥ min_delta = SUBIDA n=1; vacío sin evento; dos sin vaciar", async () => {
+  it("modo unidades: SUBIDA n=1; vacío sin evento; SIN REPESAJE (montado sin vaciar no cuenta)", async () => {
     const ws = new ShimWebSocket(backend.hub, "/ws");
     const messages: any[] = [];
     ws.onmessage = (e) => messages.push(JSON.parse(e.data));
@@ -290,8 +290,16 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     // animal 2: sube 95 → SUBIDA
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 95 });
     await run(backend, 4000);
-    // animal 3 SIN vaciar (se monta encima): +110 → SUBIDA con la diferencia
+    // SIN REPESAJE: otro cerdo encima SIN vaciar (110) → NO cuenta
     await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 110 });
+    await run(backend, 4000);
+    // se bajan ambos hasta vaciar (pig_off saca el último de la pila)
+    await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
+    await run(backend, 2500);
+    await call(backend, "POST", "/api/sim/action", { action: "pig_off" });
+    await run(backend, 4000);
+    // animal 3: ya vació → sube 105 → SUBIDA
+    await call(backend, "POST", "/api/sim/action", { action: "pigs_on", n: 1, kg_each: 105 });
     await run(backend, 4000);
 
     const events = await call(backend, "GET", `/api/sessions/${sid}/events`);
@@ -300,7 +308,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     expect(events.json.every((e: any) => e.ambiguo === false)).toBe(true);
     expect(Math.abs(events.json[0].delta_kg - 100)).toBeLessThan(3);
     expect(Math.abs(events.json[1].delta_kg - 95)).toBeLessThan(3);
-    expect(Math.abs(events.json[2].delta_kg - 110)).toBeLessThan(4);
+    expect(Math.abs(events.json[2].delta_kg - 105)).toBeLessThan(4);
 
     // fase 'unidades' en readings y snapshots
     const fases = new Set(messages.filter((m) => m.type === "reading").map((m) => m.fase));
@@ -311,7 +319,7 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
 
     const closed = await call(backend, "POST", `/api/sessions/${sid}/close`, { conteo_fisico: 3 });
     expect(closed.json.total_animales).toBe(3);
-    expect(Math.abs(closed.json.total_kg - 305)).toBeLessThan(8);
+    expect(Math.abs(closed.json.total_kg - 300)).toBeLessThan(8);
 
     // stats v2: muestra COMPLETA (censo), desviación muestral n-1
     const stats = await call(backend, "GET", `/api/sessions/${sid}/stats`);

@@ -139,8 +139,22 @@ class MotivoBody(BaseModel):
 
 
 class MinKgBody(BaseModel):
-    """Peso mínimo (kg) para contar un cerdo/escalón (default 5)."""
+    """Peso mínimo (kg) para contar un cerdo/escalón (default 2)."""
     kg: float
+
+
+class EngineTuningBody(BaseModel):
+    """Ajustes finos de pesaje. Todos opcionales: solo se aplican los enviados.
+      - min_stable_ms: tiempo mínimo (ms) estable para registrar un peso.
+      - unit_return_to_zero: unidades, exigir vaciar entre cerdos (SIN REPESAJE).
+      - band_low / band_high: banda plausible [avg*low, avg*high] en unidades.
+      - min_animals_for_band: nº de cerdos antes de aplicar la banda.
+    """
+    min_stable_ms: Optional[float] = None
+    unit_return_to_zero: Optional[bool] = None
+    band_low: Optional[float] = None
+    band_high: Optional[float] = None
+    min_animals_for_band: Optional[int] = None
 
 
 class ReturnedBody(BaseModel):
@@ -262,6 +276,18 @@ def create_app(
     # incluidos; antes 40 kg / 5 kg los ignoraba). Ajustable vía POST
     # /api/config/min-kg.
     st.min_kg = 2.0
+    # Ajustes finos de pesaje (v2.9) — se inyectan en EngineConfig al crear el
+    # motor y se cambian vía POST /api/config/engine (rebuild si no hay sesión):
+    #  - min_stable_ms: tiempo mínimo estable para registrar (anti-rebote).
+    #  - unit_return_to_zero: unidades, exigir vaciar entre cerdos (SIN REPESAJE).
+    #  - band_low/band_high/min_animals_for_band: banda de plausibilidad unidades.
+    from porcipeso.core.models import EngineConfig as _EC  # defaults canónicos
+    _dc = _EC()
+    st.min_stable_ms = _dc.min_stable_ms
+    st.unit_return_to_zero = _dc.unit_return_to_zero
+    st.band_low = _dc.band_low
+    st.band_high = _dc.band_high
+    st.min_animals_for_band = _dc.min_animals_for_band
     st.current_session_id = None
     st.driver_thread = None
     st.driver_stop = None
@@ -306,8 +332,18 @@ def create_app(
                 # El mismo "peso mínimo" gobierna el conteo (min_delta_kg) y el
                 # piso de captura de referencia en calibración/lote (min_ref_kg):
                 # a partir de st.min_kg la báscula empieza a buscar el peak-hold.
+                # Los ajustes finos (tiempo estable, retorno-a-cero, banda) se
+                # inyectan aquí desde el estado editable de la app.
                 st.engine = st.engine_factory(
-                    EngineConfig(min_delta_kg=st.min_kg, min_ref_kg=st.min_kg),
+                    EngineConfig(
+                        min_delta_kg=st.min_kg,
+                        min_ref_kg=st.min_kg,
+                        min_stable_ms=st.min_stable_ms,
+                        unit_return_to_zero=st.unit_return_to_zero,
+                        band_low=st.band_low,
+                        band_high=st.band_high,
+                        min_animals_for_band=st.min_animals_for_band,
+                    ),
                     on_engine_event, on_engine_state
                 )
             return st.engine
@@ -455,6 +491,50 @@ def create_app(
             with st.engine_lock:
                 st.engine = None
         return {"kg": st.min_kg}
+
+    def _engine_tuning() -> dict[str, Any]:
+        return {
+            "min_stable_ms": st.min_stable_ms,
+            "unit_return_to_zero": st.unit_return_to_zero,
+            "band_low": st.band_low,
+            "band_high": st.band_high,
+            "min_animals_for_band": st.min_animals_for_band,
+        }
+
+    @app.get("/api/config/engine")
+    def get_engine_tuning() -> dict[str, Any]:
+        return _engine_tuning()
+
+    @app.post("/api/config/engine")
+    def set_engine_tuning(body: EngineTuningBody) -> dict[str, Any]:
+        """Ajustes finos de pesaje. Reconstruye el motor si no hay sesión
+        abierta (EngineConfig es inmutable tras crear el motor)."""
+        if body.min_stable_ms is not None:
+            if not body.min_stable_ms >= 0:
+                raise HTTPException(status_code=400,
+                                    detail="min_stable_ms debe ser >= 0")
+            st.min_stable_ms = float(body.min_stable_ms)
+        if body.unit_return_to_zero is not None:
+            st.unit_return_to_zero = bool(body.unit_return_to_zero)
+        if body.band_low is not None:
+            if not 0 < body.band_low <= 1:
+                raise HTTPException(status_code=400,
+                                    detail="band_low debe estar en (0, 1]")
+            st.band_low = float(body.band_low)
+        if body.band_high is not None:
+            if not body.band_high >= 1:
+                raise HTTPException(status_code=400,
+                                    detail="band_high debe ser >= 1")
+            st.band_high = float(body.band_high)
+        if body.min_animals_for_band is not None:
+            if not body.min_animals_for_band >= 1:
+                raise HTTPException(status_code=400,
+                                    detail="min_animals_for_band debe ser >= 1")
+            st.min_animals_for_band = int(body.min_animals_for_band)
+        if st.current_session_id is None:
+            with st.engine_lock:
+                st.engine = None
+        return _engine_tuning()
 
     @app.get("/api/scale/status")
     def scale_status() -> dict[str, Any]:

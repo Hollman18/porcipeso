@@ -546,6 +546,42 @@
         </div>
       </details>
 
+      <!-- ⚙ AJUSTES FINOS DE PESAJE (tiempo estable, sin repesaje, banda) -->
+      <details class="collap nube" id="tuningBox">
+        <summary><span class="ct">🎚 Ajustes finos de pesaje</span><span class="caret" aria-hidden="true">▸</span></summary>
+        <div class="nube-body">
+          <p class="wizhelp">Afinan CÓMO se captura cada cerdo. Los valores por
+            defecto ya funcionan bien; cámbialos solo si tu operación lo necesita.</p>
+
+          <label class="addrlbl">⏱ Tiempo mínimo quieto (segundos)
+            <input id="tuneStableS" type="number" min="0" step="0.5" inputmode="decimal" placeholder="2">
+          </label>
+          <p class="wizhelp">El cerdo debe quedarse quieto este tiempo para contar
+            (evita rebotes y cerdos que pasan de largo). Bájalo si tus cerdos pasan muy rápido.</p>
+
+          <label class="rb-check">
+            <input type="checkbox" id="tuneReturnZero">
+            <span>🚫 Sin repesaje (modo unidades): exigir que la plataforma vuelva
+              a vacío entre un cerdo y otro. Evita contar dos veces al mismo.</span>
+          </label>
+
+          <label class="addrlbl">📉 Peso mínimo aceptado (% del promedio)
+            <input id="tuneBandLow" type="number" min="1" max="100" step="5" inputmode="numeric" placeholder="65">
+          </label>
+          <label class="addrlbl">📈 Peso máximo antes de preguntar (% del promedio)
+            <input id="tuneBandHigh" type="number" min="100" max="400" step="10" inputmode="numeric" placeholder="150">
+          </label>
+          <p class="wizhelp">Un cerdo por debajo del mínimo NO cuenta (medio subido u
+            objeto); por encima del máximo la app pregunta si fueron 1 o 2. Aplica en
+            unidades tras los primeros cerdos que fijan el promedio.</p>
+
+          <div class="config-actions">
+            <button id="bTuneSave">Guardar</button>
+          </div>
+          <div class="test-result" id="tuneResult"></div>
+        </div>
+      </details>
+
       <!-- 🧹 LIBERAR ESPACIO: lecturas crudas y pesajes viejos (manual) -->
       <details class="collap nube" id="cleanBox">
         <summary><span class="ct">🧹 Liberar espacio</span><span class="caret" aria-hidden="true">▸</span></summary>

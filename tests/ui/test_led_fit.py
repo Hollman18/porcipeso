@@ -164,9 +164,9 @@ def test_fallback_sin_raw_numero_plano_sin_locale(page):
     sin separador de miles."""
     inject(page, -7143.0, None)
     m = led_metrics(page)
-    # ">= 100" -> 0 decimales; "-7143" prueba que no hay separador de miles
-    # (con locale es-CO habria sido "-7.143")
-    assert m["text"].startswith("-7143 "), m
+    # 1 decimal SIEMPRE (igual que la división de escala); "-7143.0" prueba que
+    # no hay separador de miles (con locale es-CO habria sido "-7.143")
+    assert m["text"].startswith("-7143.0 "), m
     assert "," not in m["text"], m
     inject(page, 52.5, None)
     m = led_metrics(page)

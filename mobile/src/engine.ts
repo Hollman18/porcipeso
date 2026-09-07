@@ -18,8 +18,10 @@
  *
  * MODO "unidades" (v2 — pesaje uno a uno): fase "unidades" siempre.
  * Cada nivel estable ≥ min_delta = SUBIDA n=1 con el peso del animal;
- * retorno a vacío SIN evento; otro animal sin vaciar = SUBIDA con la
- * diferencia; sin ambiguos.
+ * retorno a vacío SIN evento. SIN REPESAJE (unit_return_to_zero): con un
+ * cerdo arriba se ignora todo hasta volver a ~vacío. BANDA DE TOLERANCIA:
+ * tras min_animals_for_band cerdos, un nivel fuera de [avg*band_low,
+ * avg*band_high] no cuenta (bajo) o queda ambiguo (alto).
  *
  * PARIDAD: la aritmética replica a Python operación por operación
  * (misma media de ventana sum/len en el mismo orden, round() banquero
@@ -61,11 +63,19 @@ export class WeighingEngine {
   /** Reloj de pared en ms (inyectable en tests para determinismo). */
   nowMs: () => number;
 
-  // stream / ventana
+  // stream / estabilidad por TIEMPO (no por conteo de lecturas): una "meseta"
+  // es una racha de lecturas dentro de stability_range_kg; es ESTABLE cuando
+  // la racha lleva >= min_stable_ms sostenida (espejo de engine.py).
   private state: EngineStateT = "idle";
-  private window: number[] = [];
+  private runStartTs: number | null = null; // inicio de la racha en curso
+  private runLo = 0.0; // mínimo de la racha
+  private runHi = 0.0; // máximo de la racha
+  private runSum = 0.0; // suma (para la media)
+  private runN = 0; // nº de lecturas de la racha
   private lastTsMs: number | null = null;
   private kgNow = 0.0;
+  // inicio del MOVIMIENTO en curso (para estab_ms): se fija al ENTRAR en
+  // movimiento, no en cada racha nueva.
   private movementStartTs: number | null = null;
 
   // sesión
@@ -110,24 +120,24 @@ export class WeighingEngine {
       this.lastTsMs !== null &&
       reading.ts_ms - this.lastTsMs > cfg.no_signal_after_s * 1000.0
     ) {
-      this.window.length = 0; // lo anterior al apagón ya no es comparable
+      this.resetRun(); // lo anterior al apagón ya no es comparable
       this.movementStartTs = reading.ts_ms;
       if (this.sessionId !== null) this.setState("sin_senal");
     }
 
     this.lastTsMs = reading.ts_ms;
     this.kgNow = reading.kg;
-    this.window.push(reading.kg);
-    if (this.window.length > cfg.window_readings) this.window.shift();
+    this.updateRun(reading.ts_ms, reading.kg);
     if (this.movementStartTs === null) this.movementStartTs = reading.ts_ms;
 
     if (this.sessionId === null) return; // sin sesión: solo tracking
 
-    if (this.windowStable()) {
+    if (this.runStable(reading.ts_ms)) {
       if (this.state !== "estable") {
-        const estabMs = Math.max(0, reading.ts_ms - (this.movementStartTs ?? reading.ts_ms));
+        const start = this.movementStartTs ?? reading.ts_ms;
+        const estabMs = Math.max(0, reading.ts_ms - start);
         this.setState("estable");
-        this.handleStableLevel(this.windowMean(), reading.ts_ms, estabMs);
+        this.handleStableLevel(this.runMean(), reading.ts_ms, estabMs);
       }
     } else {
       if (this.state !== "movimiento") {
@@ -146,9 +156,9 @@ export class WeighingEngine {
     this.modo = modo as ModoT;
     this.fase = modo === "lote" ? FASE_CALIBRACION : FASE_UNIDADES;
     // La base de la sesión se fija SOLO con lecturas frescas: heredar la
-    // ventana de la conexión/sesión anterior daría una base falsa y la
+    // racha de la conexión/sesión anterior daría una base falsa y la
     // sesión quedaría muda (paridad con engine.py).
-    this.window.length = 0;
+    this.resetRun();
     this.movementStartTs = this.lastTsMs;
     this.setState("movimiento");
   }
@@ -236,21 +246,52 @@ export class WeighingEngine {
     this.unitLevel = null;
   }
 
-  private windowStable(): boolean {
-    if (this.window.length !== this.config.window_readings) return false;
-    let mx = -Infinity;
-    let mn = Infinity;
-    for (const v of this.window) {
-      if (v > mx) mx = v;
-      if (v < mn) mn = v;
-    }
-    return mx - mn <= this.config.stability_range_kg;
+  private resetRun(): void {
+    this.runStartTs = null;
+    this.runLo = 0.0;
+    this.runHi = 0.0;
+    this.runSum = 0.0;
+    this.runN = 0;
   }
 
-  private windowMean(): number {
-    let s = 0.0;
-    for (const v of this.window) s += v; // mismo orden que sum() en Python
-    return s / this.window.length;
+  private startRun(tsMs: number, kg: number): void {
+    this.runStartTs = tsMs;
+    this.runLo = kg;
+    this.runHi = kg;
+    this.runSum = kg;
+    this.runN = 1;
+  }
+
+  /** Extiende la racha si la lectura cabe en stability_range_kg; si la rompe,
+   *  arranca una racha nueva desde esta lectura (espejo de _update_run). */
+  private updateRun(tsMs: number, kg: number): void {
+    if (this.runStartTs === null) {
+      this.startRun(tsMs, kg);
+      return;
+    }
+    const lo = kg < this.runLo ? kg : this.runLo;
+    const hi = kg > this.runHi ? kg : this.runHi;
+    if (hi - lo <= this.config.stability_range_kg) {
+      this.runLo = lo;
+      this.runHi = hi;
+      this.runSum += kg;
+      this.runN += 1;
+    } else {
+      this.startRun(tsMs, kg);
+    }
+  }
+
+  /** Estable = la racha lleva >= min_stable_ms sostenida (>= 2 lecturas). */
+  private runStable(tsMs: number): boolean {
+    return (
+      this.runStartTs !== null &&
+      this.runN >= 2 &&
+      tsMs - this.runStartTs >= this.config.min_stable_ms
+    );
+  }
+
+  private runMean(): number {
+    return this.runN ? this.runSum / this.runN : 0.0;
   }
 
   private setState(newState: EngineStateT): void {
@@ -422,26 +463,66 @@ export class WeighingEngine {
     if (this.unitLevel === null) {
       // plataforma vacía: ¿subió un animal?
       if (rel >= cfg.min_delta_kg) {
-        this.unitLevel = level;
-        this.emitUnidad(this.unitBase, level, rel, tsMs, estabMs);
+        this.countOrFlagUnidad(this.unitBase, level, rel, tsMs, estabMs);
       }
       return;
     }
 
     // hay un animal arriba
     if (rel < cfg.min_delta_kg) {
-      // volvió a vacío: el animal salió — NO es evento
+      // volvió a vacío: el animal salió — listo para el siguiente
       this.unitLevel = null;
       return;
     }
-    const extra = level - this.unitLevel;
-    if (extra >= cfg.min_delta_kg) {
-      // se montó otro encima sin pasar por vacío: cuenta como otro
-      const pesoAntes = this.unitLevel;
-      this.unitLevel = level;
-      this.emitUnidad(pesoAntes, level, extra, tsMs, estabMs);
+    if (!cfg.unit_return_to_zero) {
+      // LEGADO (opción apagada): apilar cuenta la diferencia ≥ min_delta
+      const extra = level - this.unitLevel;
+      if (extra >= cfg.min_delta_kg) {
+        this.countOrFlagUnidad(this.unitLevel, level, extra, tsMs, estabMs);
+      }
     }
-    // bajada parcial extraña (o ajuste menor): se ignora hasta vaciar
+    // SIN REPESAJE (por defecto): con un cerdo arriba se ignora TODO hasta que
+    // la plataforma vuelva a ~vacío (no se cuenta dos veces el mismo cerdo que
+    // se reacomoda ni el que se monta encima sin bajar).
+  }
+
+  /** Aplica la banda de plausibilidad (una vez hay promedio confiable) y
+   *  cuenta / descarta / marca ambiguo (espejo de _count_or_flag_unidad). */
+  private countOrFlagUnidad(
+    pesoAntes: number,
+    level: number,
+    peso: number,
+    tsMs: number,
+    estabMs: number,
+  ): void {
+    const cfg = this.config;
+    const avg = this.avgKg;
+    if (avg && this.count >= cfg.min_animals_for_band) {
+      const lo = avg * cfg.band_low;
+      const hi = avg * cfg.band_high;
+      if (peso < lo) {
+        // demasiado liviano (medio subido u objeto): NO cuenta. No fija
+        // unitLevel: si termina de subir y entra en banda, se reevalúa.
+        return;
+      }
+      if (peso > hi) {
+        // demasiado pesado: posible doble → AMBIGUO (confirma 1 o 2).
+        this.unitLevel = level;
+        const r = peso / avg;
+        const candidatos = new Set<number>();
+        for (const c of [Math.floor(r), Math.ceil(r)]) {
+          if (c > 0) candidatos.add(c);
+        }
+        const opciones = Array.from(candidatos).sort((a, b) => a - b);
+        const ev = this.newEvent(tsMs, pesoAntes, level, peso, pyRound(r), "subida", estabMs, true, opciones);
+        this.pending.set(ev.id as number, ev);
+        this.onEvent(ev);
+        return;
+      }
+    }
+    // dentro de banda (o banda aún no aplica): cuenta 1
+    this.unitLevel = level;
+    this.emitUnidad(pesoAntes, level, peso, tsMs, estabMs);
   }
 
   private emitUnidad(

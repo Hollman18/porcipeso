@@ -475,30 +475,100 @@ def test_unidades_bajada_parcial_se_ignora_hasta_vaciar():
     assert snap.fase == "unidades"
 
 
-def test_unidades_dos_sin_vaciar_cuenta_la_diferencia():
-    """Se monta otro encima sin pasar por vacío: la diferencia ≥ min_delta
-    es otra SUBIDA n=1; cambios menores al min_delta se ignoran."""
+def test_unidades_sin_repesaje_exige_volver_a_vacio():
+    """SIN REPESAJE (unit_return_to_zero, por defecto): un cerdo montado encima
+    sin bajar el primero NO se cuenta; solo tras volver a ~vacío cuenta el
+    siguiente. Evita el doble pesaje del mismo cerdo que se reacomoda."""
     eng, events, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 100.0)   # animal 1 → SUBIDA
+    assert len(events) == 1
+    ts = feed_level(eng, ts, 195.0)   # otro encima SIN vaciar: NO cuenta
+    assert len(events) == 1
+    ts = feed_level(eng, ts, 210.0)   # sigue con carga: NO cuenta
+    assert len(events) == 1
+    ts = feed_level(eng, ts, 0.0)     # vacía: sin evento, listo para el próximo
+    ts = feed_level(eng, ts, 96.0)    # animal 2 → SUBIDA
+    assert len(events) == 2
+    assert events[-1].delta_kg == pytest.approx(96.0)
+
+    snap = eng.snapshot()
+    assert snap.count == 2
+    assert snap.total_kg == pytest.approx(196.0)
+
+
+def test_unidades_apilado_legado_cuando_return_to_zero_off():
+    """Con unit_return_to_zero=False vuelve el apilado: montar otro encima
+    cuenta la diferencia ≥ min_delta (comportamiento legado, opcional)."""
+    eng, events, _ = make_engine(unit_return_to_zero=False)
     eng.open_session(1, modo="unidades")
     ts = now_ms()
     ts = feed_level(eng, ts, 0.0)
     ts = feed_level(eng, ts, 100.0)   # animal 1
     ts = feed_level(eng, ts, 195.0)   # animal 2 encima: diferencia +95
     assert len(events) == 2
-    assert events[-1].tipo == EventType.SUBIDA
     assert events[-1].delta_kg == pytest.approx(95.0)
-    assert events[-1].peso_antes == pytest.approx(100.0)
-    assert events[-1].peso_despues == pytest.approx(195.0)
-
-    ts = feed_level(eng, ts, 210.0)   # +15 < min_delta: acomodo, se ignora
-    assert len(events) == 2
-
-    ts = feed_level(eng, ts, 0.0)     # salen ambos: sin evento
-    assert len(events) == 2
     snap = eng.snapshot()
     assert snap.count == 2
     assert snap.total_kg == pytest.approx(195.0)
-    assert snap.avg_kg == pytest.approx(97.5)
+
+
+def test_unidades_banda_descarta_muy_liviano():
+    """Con promedio establecido (≥3 cerdos), un peso < band_low*avg NO cuenta
+    (cerdo a medio subir / objeto)."""
+    eng, events, _ = make_engine()  # band_low 0.65, min_animals_for_band 3
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    for peso in (100.0, 100.0, 100.0):          # avg 100, count 3
+        ts = feed_level(eng, ts, peso)
+        ts = feed_level(eng, ts, 0.0)
+    assert eng.snapshot().count == 3
+    ts = feed_level(eng, ts, 55.0)              # 55 < 0.65*100 = 65 → descartado
+    ts = feed_level(eng, ts, 0.0)
+    assert eng.snapshot().count == 3            # no contó
+    ts = feed_level(eng, ts, 95.0)              # 95 en banda → cuenta
+    ts = feed_level(eng, ts, 0.0)
+    assert eng.snapshot().count == 4
+
+
+def test_unidades_banda_sobre_techo_marca_ambiguo():
+    """Un peso > band_high*avg se marca AMBIGUO con opciones; el operario
+    confirma 1 o 2 (posible doble)."""
+    eng, events, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    for _ in range(3):                          # avg 100, count 3
+        ts = feed_level(eng, ts, 100.0)
+        ts = feed_level(eng, ts, 0.0)
+    ts = feed_level(eng, ts, 170.0)             # 170 > 1.5*100 = 150 → ambiguo
+    ev = events[-1]
+    assert ev.ambiguo is True
+    assert ev.opciones == [1, 2]
+    assert eng.snapshot().pending == 1
+    assert eng.snapshot().count == 3            # aún sin aplicar
+    res = eng.confirm(ev.id, 2)
+    assert res is not None
+    assert eng.snapshot().count == 5
+    assert eng.snapshot().pending == 0
+
+
+def test_tiempo_minimo_estable_no_registra_pesaje_fugaz():
+    """Un peso que NO se sostiene min_stable_ms (cerdo que pasa de largo) no se
+    registra; el mismo peso sostenido ≥ 2 s sí."""
+    eng, events, _ = make_engine()
+    eng.open_session(1, modo="unidades")
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)               # base vacía (2.5 s → estable)
+    n_before = len(events)
+    ts = feed_level(eng, ts, 100.0, n=12)       # 1.2 s < 2 s → fugaz, no registra
+    assert len(events) == n_before
+    ts = feed_level(eng, ts, 0.0)               # vuelve a vacío
+    ts = feed_level(eng, ts, 100.0)             # 2.5 s sostenido → registra
+    assert len(events) == n_before + 1
 
 
 def test_modo_desconocido_lanza_valueerror():

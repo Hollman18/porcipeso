@@ -6,9 +6,11 @@ reloj de pared (time.time()) solo se consulta en snapshot() para el
 watchdog SIN_SENAL.
 
 Reglas centrales (SPEC §4):
-- Estable = ventana llena de `window_readings` lecturas con
-  (max - min) <= stability_range_kg.
-- En cada transición movimiento→estable: nivel = media de la ventana;
+- Estable = una RACHA de lecturas dentro de stability_range_kg (max-min)
+  sostenida >= min_stable_ms. Es por TIEMPO, no por conteo de lecturas:
+  así funciona igual a 3 Hz o a 20 Hz y filtra rebotes / cerdos que pasan
+  de largo sin quedarse en la plataforma.
+- En cada transición movimiento→estable: nivel = media de la racha;
   delta = nivel - último nivel estable relevante.
 
 MODO "lote" (v2 — calibración con cerdo de prueba que SE BAJA):
@@ -39,17 +41,21 @@ MODO "unidades" (v2 — pesaje uno a uno):
 - Ciclo: vacío → nivel estable ≥ min_delta_kg = SUBIDA n=1 con el peso
   del animal → el nivel vuelve a < min_delta_kg = salió (SIN evento) →
   listo para el siguiente.
-- Con animal arriba, si el nivel estable SUBE ≥ min_delta_kg sin pasar
-  por vacío (se montó otro encima) la diferencia es otra SUBIDA n=1.
-  Bajadas parciales extrañas (baja a medias sin vaciar) se ignoran
-  hasta vaciar. Sin eventos ambiguos en este modo.
+- SIN REPESAJE (unit_return_to_zero, por defecto): con un cerdo arriba se
+  ignora TODO hasta que la plataforma vuelva a ~vacío. Así no se cuenta
+  dos veces el mismo cerdo que se reacomoda ni el que se monta encima sin
+  bajar el primero. Con la opción apagada vuelve el apilado legado (la
+  diferencia ≥ min_delta cuenta como otro).
+- BANDA DE TOLERANCIA: una vez hay min_animals_for_band cerdos que fijan
+  un promedio confiable, un nivel cuenta como 1 cerdo solo si cae en
+  [avg*band_low, avg*band_high]. Por debajo → no cuenta (medio subido u
+  objeto); por encima → AMBIGUO (el operario confirma 1 o 2).
 """
 from __future__ import annotations
 
 import math
 import time
-from collections import deque
-from typing import Callable, Deque, Optional
+from typing import Callable, Optional
 
 from porcipeso.core.interfaces import Engine
 from porcipeso.core.models import (
@@ -87,11 +93,19 @@ class WeighingEngine(Engine):
         self._on_event = on_event
         self._on_state = on_state
 
-        # stream / ventana
+        # stream / estabilidad por TIEMPO (no por conteo de lecturas): una
+        # "meseta" es una racha de lecturas dentro de stability_range_kg; se
+        # considera ESTABLE cuando la racha lleva >= min_stable_ms sostenida.
         self._state: EngineState = EngineState.IDLE
-        self._window: Deque[float] = deque(maxlen=config.window_readings)
+        self._run_start_ts: Optional[int] = None  # inicio de la racha en curso
+        self._run_lo: float = 0.0                 # mínimo de la racha
+        self._run_hi: float = 0.0                 # máximo de la racha
+        self._run_sum: float = 0.0                # suma (para la media)
+        self._run_n: int = 0                      # nº de lecturas de la racha
         self._last_ts_ms: Optional[int] = None
         self._kg_now: float = 0.0
+        # inicio del MOVIMIENTO en curso (para estab_ms = cuánto se demoró en
+        # asentarse): se fija al ENTRAR en movimiento, no en cada racha nueva.
         self._movement_start_ts: Optional[int] = None
 
         # sesión
@@ -124,25 +138,26 @@ class WeighingEngine(Engine):
             self._last_ts_ms is not None
             and reading.ts_ms - self._last_ts_ms > cfg.no_signal_after_s * 1000.0
         ):
-            self._window.clear()  # lo anterior al apagón ya no es comparable
+            self._reset_run()  # lo anterior al apagón ya no es comparable
             self._movement_start_ts = reading.ts_ms
             if self._session_id is not None:
                 self._set_state(EngineState.SIN_SENAL)
 
         self._last_ts_ms = reading.ts_ms
         self._kg_now = reading.kg
-        self._window.append(reading.kg)
+        self._update_run(reading.ts_ms, reading.kg)
         if self._movement_start_ts is None:
             self._movement_start_ts = reading.ts_ms
 
         if self._session_id is None:
             return  # sin sesión: solo tracking de peso vivo (estado IDLE)
 
-        if self._window_stable():
+        if self._run_stable(reading.ts_ms):
             if self._state != EngineState.ESTABLE:
-                estab_ms = max(0, reading.ts_ms - self._movement_start_ts)
+                start = self._movement_start_ts or reading.ts_ms
+                estab_ms = max(0, reading.ts_ms - start)
                 self._set_state(EngineState.ESTABLE)
-                self._handle_stable_level(self._window_mean(), reading.ts_ms,
+                self._handle_stable_level(self._run_mean(), reading.ts_ms,
                                           estab_ms)
         else:
             if self._state != EngineState.MOVIMIENTO:
@@ -157,10 +172,10 @@ class WeighingEngine(Engine):
         self._modo = modo
         self._fase = FASE_CALIBRACION if modo == "lote" else FASE_UNIDADES
         # La base de la sesión se fija SOLO con lecturas frescas: heredar la
-        # ventana de la conexión/sesión anterior daría una base falsa (p.ej.
+        # racha de la conexión/sesión anterior daría una base falsa (p.ej.
         # 301 kg viejos) y la sesión quedaría muda, porque ningún delta real
         # superaría el umbral contra esa base fantasma.
-        self._window.clear()
+        self._reset_run()
         self._movement_start_ts = self._last_ts_ms
         self._set_state(EngineState.MOVIMIENTO)
 
@@ -244,15 +259,46 @@ class WeighingEngine(Engine):
         self._unit_base = None
         self._unit_level = None
 
-    def _window_stable(self) -> bool:
+    def _reset_run(self) -> None:
+        self._run_start_ts = None
+        self._run_lo = 0.0
+        self._run_hi = 0.0
+        self._run_sum = 0.0
+        self._run_n = 0
+
+    def _start_run(self, ts_ms: int, kg: float) -> None:
+        self._run_start_ts = ts_ms
+        self._run_lo = kg
+        self._run_hi = kg
+        self._run_sum = kg
+        self._run_n = 1
+
+    def _update_run(self, ts_ms: int, kg: float) -> None:
+        """Extiende la racha si la lectura cabe en stability_range_kg; si la
+        rompe, arranca una racha nueva desde esta lectura."""
+        if self._run_start_ts is None:
+            self._start_run(ts_ms, kg)
+            return
+        lo = kg if kg < self._run_lo else self._run_lo
+        hi = kg if kg > self._run_hi else self._run_hi
+        if hi - lo <= self.config.stability_range_kg:
+            self._run_lo, self._run_hi = lo, hi
+            self._run_sum += kg
+            self._run_n += 1
+        else:
+            self._start_run(ts_ms, kg)
+
+    def _run_stable(self, ts_ms: int) -> bool:
+        """Estable = la racha lleva >= min_stable_ms sostenida (>= 2 lecturas),
+        independiente de la frecuencia del indicador."""
         return (
-            len(self._window) == self.config.window_readings
-            and max(self._window) - min(self._window)
-            <= self.config.stability_range_kg
+            self._run_start_ts is not None
+            and self._run_n >= 2
+            and ts_ms - self._run_start_ts >= self.config.min_stable_ms
         )
 
-    def _window_mean(self) -> float:
-        return sum(self._window) / len(self._window)
+    def _run_mean(self) -> float:
+        return self._run_sum / self._run_n if self._run_n else 0.0
 
     def _set_state(self, new_state: EngineState) -> None:
         if new_state != self._state:
@@ -423,23 +469,58 @@ class WeighingEngine(Engine):
         if self._unit_level is None:
             # plataforma vacía: ¿subió un animal?
             if rel >= cfg.min_delta_kg:
-                self._unit_level = level
-                self._emit_unidad(self._unit_base, level, rel, ts_ms,
-                                  estab_ms)
+                self._count_or_flag_unidad(self._unit_base, level, rel,
+                                           ts_ms, estab_ms)
             return
 
         # hay un animal arriba
         if rel < cfg.min_delta_kg:
-            # volvió a vacío: el animal salió — NO es evento
+            # volvió a vacío: el animal salió — listo para el siguiente
             self._unit_level = None
             return
-        extra = level - self._unit_level
-        if extra >= cfg.min_delta_kg:
-            # se montó otro encima sin pasar por vacío: cuenta como otro
-            peso_antes = self._unit_level
-            self._unit_level = level
-            self._emit_unidad(peso_antes, level, extra, ts_ms, estab_ms)
-        # bajada parcial extraña (o ajuste menor): se ignora hasta vaciar
+        if not cfg.unit_return_to_zero:
+            # LEGADO (opción apagada): apilar cuenta la diferencia ≥ min_delta
+            extra = level - self._unit_level
+            if extra >= cfg.min_delta_kg:
+                self._count_or_flag_unidad(self._unit_level, level, extra,
+                                           ts_ms, estab_ms)
+        # SIN REPESAJE (por defecto): con un cerdo arriba se ignora TODO hasta
+        # que la plataforma vuelva a ~vacío. Así no se cuenta dos veces el
+        # mismo cerdo que se reacomoda ni el que se monta encima sin bajar.
+
+    def _count_or_flag_unidad(self, peso_antes: float, level: float,
+                              peso: float, ts_ms: int, estab_ms: int) -> None:
+        """Aplica la banda de plausibilidad (una vez hay promedio confiable) y
+        cuenta / descarta / marca ambiguo. Fija _unit_level cuando el peso se
+        acepta o se marca ambiguo (para exigir retorno a vacío antes del
+        siguiente cerdo)."""
+        cfg = self.config
+        avg = self._avg_kg
+        if avg and self._count >= cfg.min_animals_for_band:
+            lo = avg * cfg.band_low
+            hi = avg * cfg.band_high
+            if peso < lo:
+                # demasiado liviano para ser un cerdo del lote (medio subido u
+                # objeto): NO cuenta. No fija _unit_level: si termina de subir
+                # y entra en banda, se reevalúa en la próxima meseta estable.
+                return
+            if peso > hi:
+                # demasiado pesado: posible doble → AMBIGUO (el operario
+                # confirma 1 o 2, como en lote). Exige vaciar antes del próximo.
+                self._unit_level = level
+                r = peso / avg
+                opciones = sorted({
+                    c for c in (math.floor(r), math.ceil(r)) if c > 0
+                })
+                ev = self._new_event(ts_ms, peso_antes, level, peso, round(r),
+                                     EventType.SUBIDA, estab_ms,
+                                     ambiguo=True, opciones=opciones)
+                self._pending[ev.id] = ev  # type: ignore[index]
+                self._on_event(ev)
+                return
+        # dentro de banda (o banda aún no aplica): cuenta 1
+        self._unit_level = level
+        self._emit_unidad(peso_antes, level, peso, ts_ms, estab_ms)
 
     def _emit_unidad(self, peso_antes: float, level: float, peso: float,
                      ts_ms: int, estab_ms: int) -> None:

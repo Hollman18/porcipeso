@@ -597,7 +597,7 @@ $('formSetup').addEventListener('submit', async (e) => {
 function setGuide(html) { $('stepGuide').innerHTML = html; }
 function setStep(n, ref) {
   if (n === 1) setGuide('<b>PASO 1</b> · Sube UN cerdo de prueba, solo');
-  else setGuide(`<b>PASO 2</b> · Sube los demás como quieras (de a 1, 2, 3…); yo cuento${ref ? ` — cerdo de prueba: ${fmt(ref, 0)} kg` : ''}`);
+  else setGuide(`<b>PASO 2</b> · Sube los demás como quieras (de a 1, 2, 3…); yo cuento${ref ? ` — cerdo de prueba: ${fmt(ref)} kg` : ''}`);
 }
 
 function startWeighing(nombre) {
@@ -646,8 +646,8 @@ function applyFase(fase, src) {
     say('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
     showManualRef(true);
   } else if (fase === 'bajar_prueba') {
-    setGuide(`✓ Cerdo de prueba: <b>${fmt(ref, 0)} kg</b> — ahora bájalo de la báscula`);
-    say(`✓ Cerdo de prueba: ${fmt(ref, 0)} kg — ahora bájalo de la báscula`, 'calm', 4000);
+    setGuide(`✓ Cerdo de prueba: <b>${fmt(ref)} kg</b> — ahora bájalo de la báscula`);
+    say(`✓ Cerdo de prueba: ${fmt(ref)} kg — ahora bájalo de la báscula`, 'calm', 4000);
     showManualRef(true);
   } else if (fase === 'lote') {
     setStep(2, ref);
@@ -779,7 +779,7 @@ function askNext() {
 function ledText(m, kg) {
   const raw = typeof m?.raw === 'string' ? m.raw.trim() : '';
   if (raw) return raw;
-  return kg.toFixed(Math.abs(kg) >= 100 ? 0 : 1); // plano, sin locale
+  return kg.toFixed(1); // 1 decimal SIEMPRE (igual que la división de escala)
 }
 
 /* Fit-to-width: mide el ancho renderizado al tamaño natural (CSS) y, si se
@@ -833,7 +833,7 @@ function onReading(m) {
   else if (st === 'estable') {
     if (!APP.session) return;
     if (APP.fase === 'bajar_prueba') {
-      ambient(`✓ Cerdo de prueba: ${fmt(APP.refKg ?? APP.candKg, 0)} kg — ahora bájalo de la báscula`, 'calm');
+      ambient(`✓ Cerdo de prueba: ${fmt(APP.refKg ?? APP.candKg)} kg — ahora bájalo de la báscula`, 'calm');
     } else if (APP.mode === 'unidades') {
       ambient(APP.unitCount
         ? 'Yo llevo la cuenta — bájalo y sube el siguiente cuando quieras'
@@ -843,8 +843,8 @@ function onReading(m) {
       // estable considerable durante la calibración, ES el cerdo de prueba
       if (APP.fase === 'calibracion' && kg >= 40) {
         APP.candKg = kg;
-        setGuide(`✓ Cerdo de prueba: <b>${fmt(kg, 0)} kg</b> — ahora bájalo de la báscula`);
-        ambient(`✓ Cerdo de prueba: ${fmt(kg, 0)} kg — ahora bájalo de la báscula`, 'calm');
+        setGuide(`✓ Cerdo de prueba: <b>${fmt(kg)} kg</b> — ahora bájalo de la báscula`);
+        ambient(`✓ Cerdo de prueba: ${fmt(kg)} kg — ahora bájalo de la báscula`, 'calm');
       } else {
         ambient('Esperando el cerdo de prueba… súbelo solo, sin compañía', 'calm');
       }
@@ -881,8 +881,8 @@ function onSnapshot(s) {
   }
   applyFase(s.fase, s);
   $('nCerdos').textContent = s.count ?? 0;
-  $('nTotal').innerHTML = `${fmt(s.total_kg ?? 0, 0)} <em>kg</em>`;
-  $('nProm').innerHTML = `${s.avg_kg != null ? fmt(s.avg_kg, 0) : '—'} <em>kg</em>`;
+  $('nTotal').innerHTML = `${fmt(s.total_kg ?? 0)} <em>kg</em>`;
+  $('nProm').innerHTML = `${s.avg_kg != null ? fmt(s.avg_kg) : '—'} <em>kg</em>`;
 }
 
 /* ---------------- eventos (WS) ---------------- */
@@ -898,7 +898,7 @@ function onEvent(ev) {
     APP.weights.push(delta);
     if (APP.mode === 'unidades') {
       APP.unitCount = 1;
-      say(`✓ Cerdo #1: ${fmt(delta, 0)} kg — bájalo y sube el siguiente`, 'calm', 5000);
+      say(`✓ Cerdo #1: ${fmt(delta)} kg — bájalo y sube el siguiente`, 'calm', 5000);
       addMove('up', '✓', `Cerdo #1: ${fmt(delta)} kg`);
     } else if (APP.faseSupported) {
       // motor con fases: la narración la llevan las fases (bajar_prueba → lote);
@@ -906,7 +906,7 @@ function onEvent(ev) {
       addMove('up', '✓', `Cerdo de prueba: ${fmt(delta)} kg — quedé calibrado`);
     } else {
       setStep(2, delta);
-      say(`Calibrado: el cerdo de prueba pesa ${fmt(delta, 0)} kg. Ya puedes subir los demás`, 'calm', 6000);
+      say(`Calibrado: el cerdo de prueba pesa ${fmt(delta)} kg. Ya puedes subir los demás`, 'calm', 6000);
       addMove('up', '✓', `Cerdo de prueba: ${fmt(delta)} kg — quedé calibrado`);
     }
     return;
@@ -931,7 +931,7 @@ function onEvent(ev) {
   if (APP.mode === 'unidades') {
     APP.unitCount += n;
     const each = delta / (n || 1);
-    say(`✓ Cerdo #${APP.unitCount}: ${fmt(each, 0)} kg — bájalo y sube el siguiente`, 'calm', 5000);
+    say(`✓ Cerdo #${APP.unitCount}: ${fmt(each)} kg — bájalo y sube el siguiente`, 'calm', 5000);
     addMove('up', '✓', `Cerdo #${APP.unitCount}: ${fmt(each)} kg`);
     for (let i = 0; i < n; i++) APP.weights.push(each);
     return;
@@ -1076,8 +1076,8 @@ function showResults(r) {
   $('doneDemoNote').hidden = !esDemo;
   $('rCards').innerHTML = `
     <div class="rcard"><div class="rv">${Number(count) || 0}</div><div class="rk">cerdos</div></div>
-    <div class="rcard"><div class="rv">${fmt(total, 0)}</div><div class="rk">kg en total</div></div>
-    <div class="rcard"><div class="rv">${fmt(avg, 0)}</div><div class="rk">kg de promedio</div></div>`;
+    <div class="rcard"><div class="rv">${fmt(total)}</div><div class="rk">kg en total</div></div>
+    <div class="rcard"><div class="rv">${fmt(avg)}</div><div class="rk">kg de promedio</div></div>`;
 
   renderVerdict($('verdict'), uniformity(APP.weights));
   $('inpConteo').value = '';
@@ -1158,8 +1158,8 @@ async function loadGlobalStats() {
     const cards = [
       ['Pesajes', s?.sesiones ?? s?.pesajes ?? 0, ''],
       ['Cerdos totales', s?.total_animales ?? 0, ''],
-      ['Kg totales', fmt(Number(s?.total_kg ?? 0), 0), 'kg'],
-      ['Promedio global', s?.promedio_global != null ? fmt(Number(s.promedio_global), 0) : '—', 'kg'],
+      ['Kg totales', fmt(Number(s?.total_kg ?? 0)), 'kg'],
+      ['Promedio global', s?.promedio_global != null ? fmt(Number(s.promedio_global)) : '—', 'kg'],
     ];
     box.innerHTML = cards.map(([k, v, u]) =>
       `<div class="gstat"><div class="k">${k}</div><div class="v">${escapeHtml(v)}${u ? ` <em>${u}</em>` : ''}</div></div>`).join('');
@@ -1177,9 +1177,9 @@ async function loadGlobalStats() {
         const an = l?.total_animales ?? l?.cerdos ?? l?.animales;
         if (an != null) parts.push(`<b>${Number(an) || 0}</b> cerdos`);
         const kg = l?.total_kg ?? l?.kg;
-        if (kg != null) parts.push(`<b>${fmt(Number(kg), 0)}</b> kg`);
+        if (kg != null) parts.push(`<b>${fmt(Number(kg))}</b> kg`);
         const pr = l?.promedio ?? l?.promedio_final ?? l?.promedio_global;
-        if (pr != null) parts.push(`<b>${fmt(Number(pr), 0)}</b> kg prom.`);
+        if (pr != null) parts.push(`<b>${fmt(Number(pr))}</b> kg prom.`);
         return `<div class="lotecard"><div class="ln">${escapeHtml(nombre)}</div><div class="lm">${parts.join(' · ') || 'sin totales'}</div></div>`;
       }).join('');
     }
@@ -1214,8 +1214,8 @@ async function loadSessionsTable() {
       <td class="mono">${escapeHtml(fechaCorta(s?.hora_entrada ?? s?.created_at))}</td>
       <td><b>${escapeHtml(s?.lote ?? `Pesaje ${s?.id ?? ''}`)}</b>${s?.es_demo ? '<span class="chip demo">DEMO</span>' : ''}</td>
       <td class="mono">${escapeHtml(s?.total_animales ?? '—')}</td>
-      <td class="mono">${s?.total_kg != null ? fmt(Number(s.total_kg), 0) : '—'}</td>
-      <td class="mono">${s?.promedio_final != null ? fmt(Number(s.promedio_final), 0) : '—'}</td>
+      <td class="mono">${s?.total_kg != null ? fmt(Number(s.total_kg)) : '—'}</td>
+      <td class="mono">${s?.promedio_final != null ? fmt(Number(s.promedio_final)) : '—'}</td>
       <td data-uni>—</td>
       <td><span class="pill ${escapeHtml(estado)}">${escapeHtml(estado === 'abierta' ? 'en curso' : estado)}</span></td>`;
     tr.onclick = () => { openDatosDetail(s?.id).catch(() => {}); };
@@ -1289,8 +1289,8 @@ async function openDatosDetail(id) {
   const total = s?.total_kg, count = s?.total_animales, avg = s?.promedio_final;
   $('dCards').innerHTML = `
     <div class="rcard"><div class="rv">${count != null ? Number(count) || 0 : '—'}</div><div class="rk">cerdos</div></div>
-    <div class="rcard"><div class="rv">${total != null ? fmt(Number(total), 0) : '—'}</div><div class="rk">kg en total</div></div>
-    <div class="rcard"><div class="rv">${avg != null ? fmt(Number(avg), 0) : '—'}</div><div class="rk">kg de promedio</div></div>`;
+    <div class="rcard"><div class="rv">${total != null ? fmt(Number(total)) : '—'}</div><div class="rk">kg en total</div></div>
+    <div class="rcard"><div class="rv">${avg != null ? fmt(Number(avg)) : '—'}</div><div class="rk">kg de promedio</div></div>`;
 
   renderVerdict($('dVerdict'), await uniformityFor(id).catch(() => null));
 
@@ -1411,7 +1411,7 @@ function visibleMethods() {
   return out;
 }
 
-function initBascula() { showBasculaHome(); renderDbDiag(); initSecUI(); initMinKg(); }
+function initBascula() { showBasculaHome(); renderDbDiag(); initSecUI(); initMinKg(); initTuning(); }
 
 /* ⚖ Peso mínimo por cerdo: carga el valor actual y permite ajustarlo. */
 function initMinKg() {
@@ -1430,6 +1430,43 @@ function initMinKg() {
       if (res) res.textContent = '✓ Listo: se contarán cerdos desde ' + (r?.kg ?? kg) + ' kg.';
     } catch (e) {
       if (res) res.textContent = 'No se pudo guardar. Intenta de nuevo.';
+    } finally {
+      btn.disabled = false;
+    }
+  };
+}
+
+/* 🎚 Ajustes finos de pesaje: tiempo estable, sin repesaje, banda de tolerancia.
+   El motor guarda min_stable_ms (ms) y la banda como fracción; la UI la muestra
+   en segundos y en porcentaje para que sea fácil de entender. */
+function initTuning() {
+  const stableS = $('tuneStableS'), retZero = $('tuneReturnZero');
+  const bLow = $('tuneBandLow'), bHigh = $('tuneBandHigh');
+  const btn = $('bTuneSave'), res = $('tuneResult');
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  apiJson('/api/config/engine').then((r) => {
+    if (!r) return;
+    if (stableS && r.min_stable_ms != null) stableS.value = (r.min_stable_ms / 1000);
+    if (retZero && r.unit_return_to_zero != null) retZero.checked = !!r.unit_return_to_zero;
+    if (bLow && r.band_low != null) bLow.value = Math.round(r.band_low * 100);
+    if (bHigh && r.band_high != null) bHigh.value = Math.round(r.band_high * 100);
+  }).catch(() => {});
+  btn.onclick = async () => {
+    const body = {};
+    const s = Number(stableS?.value);
+    if (isFinite(s) && s >= 0) body.min_stable_ms = Math.round(s * 1000);
+    if (retZero) body.unit_return_to_zero = !!retZero.checked;
+    const lo = Number(bLow?.value);
+    if (isFinite(lo) && lo > 0 && lo <= 100) body.band_low = lo / 100;
+    const hi = Number(bHigh?.value);
+    if (isFinite(hi) && hi >= 100) body.band_high = hi / 100;
+    btn.disabled = true;
+    try {
+      await apiJson('/api/config/engine', { method: 'POST', body });
+      if (res) res.textContent = '✓ Ajustes guardados.';
+    } catch (e) {
+      if (res) res.textContent = 'No se pudo guardar. Revisa los valores.';
     } finally {
       btn.disabled = false;
     }

@@ -49,8 +49,8 @@ export interface WeighEvent {
 }
 
 export interface EngineConfig {
-  window_readings: number; // 2 s @ 10 Hz
-  stability_range_kg: number; // max-min dentro de la ventana
+  window_readings: number; // legado: informativo; la estabilidad la gobierna min_stable_ms
+  stability_range_kg: number; // max-min tolerado dentro de una meseta
   min_delta_kg: number; // escalón mínimo para ser evento
   // peso mínimo (kg) para CAPTURAR la referencia del cerdo de prueba —
   // antes se exigían 40 kg (min_delta) y no tomaba pesos pequeños; ahora
@@ -58,6 +58,18 @@ export interface EngineConfig {
   min_ref_kg: number;
   tolerance: number; // residuo máximo antes de marcar ambiguo
   no_signal_after_s: number; // watchdog SIN_SENAL
+  // TIEMPO mínimo (ms) que un peso debe sostenerse ESTABLE para registrarse.
+  // Independiente de la velocidad del indicador; filtra rebotes y cerdos que
+  // pasan de largo sin quedarse en la plataforma.
+  min_stable_ms: number;
+  // MODO UNIDADES — exigir retorno a ~vacío entre cerdos (evita doble pesaje
+  // del mismo cerdo que se reacomoda). False = apilado legado.
+  unit_return_to_zero: boolean;
+  // MODO UNIDADES — banda de plausibilidad [avg*band_low, avg*band_high] tras
+  // min_animals_for_band cerdos. Debajo → no cuenta; encima → ambiguo (1 o 2).
+  band_low: number;
+  band_high: number;
+  min_animals_for_band: number;
 }
 
 export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
@@ -67,6 +79,11 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   min_ref_kg: 1.0,
   tolerance: 0.2,
   no_signal_after_s: 3.0,
+  min_stable_ms: 2000.0,
+  unit_return_to_zero: true,
+  band_low: 0.65,
+  band_high: 1.5,
+  min_animals_for_band: 3,
 };
 
 /** Fases del pesaje (motor v2). */

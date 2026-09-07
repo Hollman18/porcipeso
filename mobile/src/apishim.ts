@@ -337,14 +337,31 @@ export class LocalBackend {
    *  (lechones incluidos; antes 40 kg / 5 kg los ignoraba).
    *  Ajustable por el usuario vía POST /api/config/min-kg. */
   minKg = 2.0;
+  /** Ajustes finos de pesaje (v2.9), espejo de app.py. Se inyectan en la
+   *  EngineConfig al crear el motor; cambian vía POST /api/config/engine. */
+  minStableMs = DEFAULT_ENGINE_CONFIG.min_stable_ms;
+  unitReturnToZero = DEFAULT_ENGINE_CONFIG.unit_return_to_zero;
+  bandLow = DEFAULT_ENGINE_CONFIG.band_low;
+  bandHigh = DEFAULT_ENGINE_CONFIG.band_high;
+  minAnimalsForBand = DEFAULT_ENGINE_CONFIG.min_animals_for_band;
 
   ensureEngine(): WeighingEngine {
     if (this.engine === null) {
       this.engine = new WeighingEngine(
         // El mismo "peso mínimo" gobierna el conteo (min_delta_kg) y el piso de
         // captura de referencia en calibración/lote (min_ref_kg): a partir de
-        // this.minKg la báscula empieza a buscar el peak-hold.
-        { ...DEFAULT_ENGINE_CONFIG, min_delta_kg: this.minKg, min_ref_kg: this.minKg },
+        // this.minKg la báscula empieza a buscar el peak-hold. Los ajustes finos
+        // (tiempo estable, retorno-a-cero, banda) se inyectan aquí.
+        {
+          ...DEFAULT_ENGINE_CONFIG,
+          min_delta_kg: this.minKg,
+          min_ref_kg: this.minKg,
+          min_stable_ms: this.minStableMs,
+          unit_return_to_zero: this.unitReturnToZero,
+          band_low: this.bandLow,
+          band_high: this.bandHigh,
+          min_animals_for_band: this.minAnimalsForBand,
+        },
         this.onEngineEvent,
         this.onEngineState,
       );
@@ -358,6 +375,44 @@ export class LocalBackend {
     if (!(kg > 0)) return;
     this.minKg = kg;
     if (this.currentSessionId === null) this.engine = null;
+  }
+
+  /** Ajustes finos de pesaje; solo aplica los campos presentes. Reconstruye el
+   *  motor si no hay sesión abierta. Devuelve el estado resultante. */
+  setEngineTuning(t: {
+    min_stable_ms?: number;
+    unit_return_to_zero?: boolean;
+    band_low?: number;
+    band_high?: number;
+    min_animals_for_band?: number;
+  }): Record<string, unknown> {
+    if (t.min_stable_ms !== undefined && t.min_stable_ms >= 0) {
+      this.minStableMs = t.min_stable_ms;
+    }
+    if (t.unit_return_to_zero !== undefined) {
+      this.unitReturnToZero = !!t.unit_return_to_zero;
+    }
+    if (t.band_low !== undefined && t.band_low > 0 && t.band_low <= 1) {
+      this.bandLow = t.band_low;
+    }
+    if (t.band_high !== undefined && t.band_high >= 1) {
+      this.bandHigh = t.band_high;
+    }
+    if (t.min_animals_for_band !== undefined && t.min_animals_for_band >= 1) {
+      this.minAnimalsForBand = Math.floor(t.min_animals_for_band);
+    }
+    if (this.currentSessionId === null) this.engine = null;
+    return this.engineTuning();
+  }
+
+  engineTuning(): Record<string, unknown> {
+    return {
+      min_stable_ms: this.minStableMs,
+      unit_return_to_zero: this.unitReturnToZero,
+      band_low: this.bandLow,
+      band_high: this.bandHigh,
+      min_animals_for_band: this.minAnimalsForBand,
+    };
   }
 
   // ---------------------------------------------------------- lecturas
@@ -517,6 +572,33 @@ export class LocalBackend {
       if (!(kg > 0)) return err(400, "kg debe ser mayor a 0");
       this.setMinKg(kg);
       return ok({ kg: this.minKg });
+    }
+    if (method === "GET" && path === "/api/config/engine") return ok(this.engineTuning());
+    if (method === "POST" && path === "/api/config/engine") {
+      const b = (body ?? {}) as Record<string, unknown>;
+      const t: Parameters<LocalBackend["setEngineTuning"]>[0] = {};
+      if (b.min_stable_ms !== undefined) {
+        const v = Number(b.min_stable_ms);
+        if (!(v >= 0)) return err(400, "min_stable_ms debe ser >= 0");
+        t.min_stable_ms = v;
+      }
+      if (b.unit_return_to_zero !== undefined) t.unit_return_to_zero = !!b.unit_return_to_zero;
+      if (b.band_low !== undefined) {
+        const v = Number(b.band_low);
+        if (!(v > 0 && v <= 1)) return err(400, "band_low debe estar en (0, 1]");
+        t.band_low = v;
+      }
+      if (b.band_high !== undefined) {
+        const v = Number(b.band_high);
+        if (!(v >= 1)) return err(400, "band_high debe ser >= 1");
+        t.band_high = v;
+      }
+      if (b.min_animals_for_band !== undefined) {
+        const v = Number(b.min_animals_for_band);
+        if (!(v >= 1)) return err(400, "min_animals_for_band debe ser >= 1");
+        t.min_animals_for_band = v;
+      }
+      return ok(this.setEngineTuning(t));
     }
     if (method === "GET" && path === "/api/bt/devices") return this.btDevices();
     if (method === "POST" && path === "/api/bt/discovery/start") return this.btDiscoveryStart();

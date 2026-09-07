@@ -278,26 +278,36 @@ def build_cases() -> list[Script]:
 
     # -------------------------------------------- modo unidades (v2)
 
-    s = Script("unidades_5_animales",
-               "uno a uno: 100/98/105, dos-sin-vaciar (+110), bajada parcial ignorada, y 102")
-    (s.plateau(0.0).open_session(1, modo="unidades")
+    s = Script("unidades_sin_repesaje",
+               "SIN REPESAJE: montado sin vaciar NO cuenta; solo tras volver a vacío")
+    (s.open_session(1, modo="unidades").plateau(0.0)   # base vacía = 0
       .ramp(0, 100).plateau(100.0)          # SUBIDA n=1 (100)
       .ramp(100, 0).plateau(0.0)            # salió: SIN evento
       .ramp(0, 98).plateau(98.0)            # SUBIDA n=1 (98)
-      .ramp(98, 0).plateau(0.0)
-      .ramp(0, 105).plateau(105.0)          # SUBIDA n=1 (105)
-      .ramp(105, 215).plateau(215.0)        # otro encima sin vaciar: SUBIDA n=1 (110)
-      .ramp(215, 160).plateau(160.0)        # bajada parcial extraña: se ignora
-      .ramp(160, 0).plateau(0.0)            # vacío: SIN evento
+      .ramp(98, 215).plateau(215.0)         # otro encima SIN vaciar: NO cuenta (retorno a cero)
+      .ramp(215, 160).plateau(160.0)        # sigue con carga: NO cuenta
+      .ramp(160, 0).plateau(0.0)            # vacío: SIN evento, listo para el próximo
       .ramp(0, 102).plateau(102.0))         # SUBIDA n=1 (102)
     cases.append(s)
 
     s = Script("unidades_retorno_vacio",
                "un animal sube y baja; vibraciones < min_delta no son eventos")
-    (s.plateau(0.0).open_session(1, modo="unidades")
+    (s.open_session(1, modo="unidades").plateau(0.0)   # base vacía = 0
       .ramp(0, 90).plateau(90.0)            # SUBIDA n=1 (90)
       .ramp(90, 30).plateau(30.0)           # < min_delta: salió, SIN evento
       .ramp(30, 0).plateau(0.0))            # vacío, nada
+    cases.append(s)
+
+    s = Script("unidades_banda_tolerancia",
+               "tras 3 cerdos (avg 100): 170 = AMBIGUO [1,2] (confirmado 2); 55 descartado; 95 cuenta")
+    (s.open_session(1, modo="unidades").plateau(0.0)             # base vacía = 0
+      .ramp(0, 100).plateau(100.0).ramp(100, 0).plateau(0.0)    # cerdo 1 (100)
+      .ramp(0, 100).plateau(100.0).ramp(100, 0).plateau(0.0)    # cerdo 2 (100)
+      .ramp(0, 100).plateau(100.0).ramp(100, 0).plateau(0.0)    # cerdo 3 (100) -> avg 100
+      .ramp(0, 170).plateau(170.0).ramp(170, 0).plateau(0.0))   # 170 > 1.5*avg -> AMBIGUO idx3
+    s.confirm(3, 2)                                              # el operario confirma 2
+    (s.ramp(0, 55).plateau(55.0).ramp(55, 0).plateau(0.0)       # 55 < 0.65*avg -> DESCARTADO
+      .ramp(0, 95).plateau(95.0).ramp(95, 0).plateau(0.0))      # 95 en banda -> cuenta
     cases.append(s)
 
     return cases

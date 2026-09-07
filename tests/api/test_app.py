@@ -95,6 +95,41 @@ def test_devueltos_manual_endpoint(ctx):
     assert len(aj) == 1 and aj[0]["motivo_bajada"] == "devuelto_manual"
 
 
+def test_config_engine_endpoint(ctx):
+    """GET/POST /api/config/engine lee y ajusta los parámetros finos de pesaje
+    (tiempo estable, sin repesaje, banda de tolerancia) con validación."""
+    client, _ = ctx
+    base = client.get("/api/config/engine").json()
+    assert base["min_stable_ms"] == 2000.0
+    assert base["unit_return_to_zero"] is True
+    assert base["band_low"] == 0.65
+    assert base["band_high"] == 1.5
+    assert base["min_animals_for_band"] == 3
+
+    got = client.post("/api/config/engine", json={
+        "min_stable_ms": 1500, "unit_return_to_zero": False,
+        "band_low": 0.7, "band_high": 1.4, "min_animals_for_band": 5,
+    }).json()
+    assert got["min_stable_ms"] == 1500
+    assert got["unit_return_to_zero"] is False
+    assert got["band_low"] == pytest.approx(0.7)
+    assert got["band_high"] == pytest.approx(1.4)
+    assert got["min_animals_for_band"] == 5
+    # persistió (siguiente GET lo refleja)
+    assert client.get("/api/config/engine").json()["min_stable_ms"] == 1500
+
+    # validaciones: fuera de rango → 400
+    assert client.post("/api/config/engine", json={"band_low": 0}).status_code == 400
+    assert client.post("/api/config/engine", json={"band_high": 0.5}).status_code == 400
+    assert client.post("/api/config/engine", json={"min_stable_ms": -1}).status_code == 400
+    assert client.post("/api/config/engine",
+                       json={"min_animals_for_band": 0}).status_code == 400
+
+    # /api/config/min-kg sigue vivo
+    assert client.post("/api/config/min-kg", json={"kg": 3}).json()["kg"] == 3
+    assert client.post("/api/config/min-kg", json={"kg": 0}).status_code == 400
+
+
 def test_referencia_manual_endpoint(ctx):
     """POST /api/session/reference fija a mano la referencia del cerdo de
     prueba (ref=avg=kg, fase→lote) y persiste un evento REFERENCIA manual;
