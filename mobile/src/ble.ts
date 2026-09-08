@@ -68,7 +68,11 @@ export interface BleServiceInfo {
  */
 export interface BleClientLike {
   initialize(options?: { androidNeverForLocation?: boolean }): Promise<void>;
-  connect(deviceId: string, onDisconnect?: (deviceId: string) => void): Promise<void>;
+  connect(
+    deviceId: string,
+    onDisconnect?: (deviceId: string) => void,
+    options?: { timeout?: number },
+  ): Promise<void>;
   disconnect(deviceId: string): Promise<void>;
   getServices(deviceId: string): Promise<BleServiceInfo[]>;
   startNotifications(
@@ -260,6 +264,26 @@ const EMPTY_BYTES = new Uint8Array(0);
 export const BLE_DEFAULT_BACKOFF_MS = [500, 1000, 2000, 5000];
 /** Sin un solo byte por más de esto aunque "conectado" → enlace zombi. */
 export const BLE_DEFAULT_NO_DATA_TIMEOUT_MS = 6000;
+/**
+ * Límite DURO para conectar+descubrir+suscribir el GATT. Sin esto el connect
+ * BLE puede quedarse "esperando" para siempre (módulo dormido, fuera de rango,
+ * o stack MIUI colgado). Al vencer, open() falla claro y el detector/connect
+ * cae al siguiente modo o avisa — nunca se cuelga.
+ */
+export const BLE_CONNECT_TIMEOUT_MS = 15000;
+
+/** Corre `p` con tope de tiempo; si vence, rechaza con `label` (no cuelga). */
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export interface BleOptions {
   /** Cliente GATT (inyectable en tests); por defecto el plugin real. */
@@ -337,13 +361,26 @@ export class BleTransport implements ByteTransport {
     this.setStatus("connected");
   }
 
-  /** Conecta el GATT, descubre la característica UART y se suscribe a NOTIFY. */
+  /** Conecta el GATT, descubre la característica UART y se suscribe a NOTIFY.
+   *  Con tope de tiempo DURO (BLE_CONNECT_TIMEOUT_MS) para no quedarse colgado. */
   private async connectAndSubscribe(): Promise<void> {
+    await withTimeout(
+      this.doConnectAndSubscribe(),
+      BLE_CONNECT_TIMEOUT_MS,
+      "ble_timeout: el módulo BLE no respondió a tiempo (¿encendido y cerca?)",
+    );
+  }
+
+  private async doConnectAndSubscribe(): Promise<void> {
     await this.client.initialize({ androidNeverForLocation: true });
-    await this.client.connect(this.deviceId, () => {
-      // desconexión inesperada del GATT → el próximo read dispara la reconexión
-      this.linkDown = true;
-    });
+    await this.client.connect(
+      this.deviceId,
+      () => {
+        // desconexión inesperada del GATT → el próximo read dispara la reconexión
+        this.linkDown = true;
+      },
+      { timeout: BLE_CONNECT_TIMEOUT_MS },
+    );
     const services = await this.client.getServices(this.deviceId);
     const uart = pickUartCharacteristic(services);
     if (!uart) {
@@ -499,7 +536,7 @@ async function loadRealBle(): Promise<RealBleModule["BleClient"]> {
 function realBleClient(): BleClientLike {
   return {
     initialize: async (o) => (await loadRealBle()).initialize(o),
-    connect: async (id, cb) => (await loadRealBle()).connect(id, cb),
+    connect: async (id, cb, opts) => (await loadRealBle()).connect(id, cb, opts),
     disconnect: async (id) => (await loadRealBle()).disconnect(id),
     getServices: async (id) => (await loadRealBle()).getServices(id),
     startNotifications: async (id, s, c, cb) =>

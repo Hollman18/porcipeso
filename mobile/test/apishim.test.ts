@@ -600,6 +600,51 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     }
   });
 
+  it("POST /api/scale/detect cae a BLE solo cuando el clásico no abre (fell_back_ble)", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    await import("../src/detector");
+    await import("../src/serial");
+    const FRAMES = stringToBytes("= 126.35= 126.35= 126.35= 126.35");
+    // El clásico (SPP) falla al abrir (read ret -1 de campo); el módulo es BLE.
+    const bt = await makeBackend({
+      serial: {
+        makeTransport: async (kind: string) => {
+          if (kind === "bluetooth") {
+            return {
+              label: "fake-classic",
+              open: async () => {
+                throw new Error("SPP no conectó: read failed, socket might closed or timeout, read ret: -1");
+              },
+              read: async () => new Uint8Array(0),
+              close: async () => {},
+            };
+          }
+          return { label: "fake-ble", open: async () => {}, read: async () => FRAMES, close: async () => {} };
+        },
+      },
+    });
+    try {
+      const p = call(bt, "POST", "/api/scale/detect", {
+        profile_id: "auto",
+        transport: "bluetooth",
+        port: "48:87:2D:9D:D5:71",
+      });
+      let settled: Awaited<typeof p> | null = null;
+      void p.then((r) => (settled = r));
+      for (let i = 0; i < 100 && settled === null; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(res.json.parser_ok).toBe(true);
+      expect(res.json.parser).toBe("matrix");
+      expect(res.json.fell_back_ble).toBe(true); // conectó por BLE aunque se tocó "clásico"
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
   it("POST /api/scale/detect con profile_id 'auto' detecta parser sin marca elegida", async () => {
     const { stringToBytes } = await import("../src/parsers");
     await import("../src/detector");

@@ -1156,13 +1156,13 @@ export class LocalBackend {
 
     await this.stopDriver(); // libera el SPP / puerto USB para poder escuchar
     let lastHexAt = 0;
-    try {
-      const { detectSignal } = await import("./detector");
-      const result = await detectSignal({
+    const { detectSignal } = await import("./detector");
+    const runDetect = (k: "bluetooth" | "ble" | "usb") =>
+      detectSignal({
         profile,
         baudrates,
         openTransport: (baud) =>
-          this.makeTransport(kind, { profile, address, deviceId, baud }),
+          this.makeTransport(k, { profile, address, deviceId, baud }),
         onHex: (hex, baud) => {
           const now = Date.now();
           if (now - lastHexAt < 250) return;
@@ -1170,8 +1170,35 @@ export class LocalBackend {
           this.hub.broadcast({ type: "detect", hex, baud });
         },
       });
+
+    try {
+      const result = await runDetect(kind);
+      // AUTO-FALLBACK A BLE: muchos módulos "RS232-a-Bluetooth" de campo son en
+      // realidad BLE aunque el scan los liste como "clásico" (o dual que solo
+      // sirve por BLE). Si el clásico no entendió la trama, se reintenta por BLE
+      // a la MISMA MAC — sin que el usuario tenga que tocar "Probar como BLE".
+      if (kind === "bluetooth" && !result.parser_ok) {
+        try {
+          const ble = await runDetect("ble");
+          if (ble.parser_ok || (!result.ok && ble.ok)) {
+            return ok({ ...ble, fell_back_ble: true });
+          }
+        } catch {
+          /* BLE tampoco: se queda con el resultado clásico */
+        }
+      }
       return ok(result);
     } catch (e) {
+      // El clásico ni siquiera abrió (read ret -1, socket cerrado…): antes de
+      // rendirse, prueba BLE por la misma MAC (el caso del módulo BLE).
+      if (kind === "bluetooth") {
+        try {
+          const ble = await runDetect("ble");
+          return ok({ ...ble, fell_back_ble: true });
+        } catch {
+          /* ambos fallaron: devuelve el error original humanizado */
+        }
+      }
       const { humanizeSerialError } = await import("./serial");
       return err(502, humanizeSerialError(e));
     }

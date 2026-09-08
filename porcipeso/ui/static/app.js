@@ -2406,16 +2406,19 @@ async function btAutoConnect(dev) {
   }
   showHexPanel(false);
   if (r?.ok && r?.parser_ok && r?.parser) {
+    // El detector pudo caer a BLE (módulo BLE listado como "clásico"): conecta
+    // directo por BLE, sin repetir el intento clásico lento.
+    const connectTransport = r?.fell_back_ble ? 'ble' : transport;
     let cr = null;
     try {
       cr = await api('/api/scale/connect', {
         method: 'POST',
         body: {
-          profile_id: 'auto', parser: r.parser, transport,
+          profile_id: 'auto', parser: r.parser, transport: connectTransport,
           port: dev.address, invert_bits: !!r.invert_bits,
           reverse_frame: !!r.reverse_frame,
           // dual-mode: si el SPP clásico no conecta, el backend cae a BLE solo
-          also_ble: !!dev.alsoBle,
+          also_ble: true,
         },
       });
     } catch (e) {
