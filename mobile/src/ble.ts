@@ -311,6 +311,9 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   }
 }
 
+/** Fases del connect BLE para que la UI NUNCA parezca congelada. */
+export type BlePhase = "ble_prescan" | "ble_connect" | "ble_subscribed";
+
 export interface BleOptions {
   /** Cliente GATT (inyectable en tests); por defecto el plugin real. */
   client?: BleClientLike;
@@ -319,6 +322,8 @@ export interface BleOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   onStatus?: (status: LinkStatus) => void;
+  /** Aviso de fase (scan previo → conectando → escuchando) para la UI. */
+  onPhase?: (phase: BlePhase, detail?: string) => void;
 }
 
 function dataViewToBytes(value: DataView): Uint8Array {
@@ -352,6 +357,7 @@ export class BleTransport implements ByteTransport {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly onStatus: (status: LinkStatus) => void;
+  private readonly onPhase: (phase: BlePhase, detail?: string) => void;
 
   constructor(
     private deviceId: string,
@@ -365,6 +371,7 @@ export class BleTransport implements ByteTransport {
     this.now = opts.now ?? (() => Date.now());
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.onStatus = opts.onStatus ?? (() => {});
+    this.onPhase = opts.onPhase ?? (() => {});
   }
 
   status(): LinkStatus {
@@ -419,6 +426,7 @@ export class BleTransport implements ByteTransport {
     const c = this.client;
     if (!c.requestLEScan || !c.stopLEScan) return false; // fake sin scan (tests)
     const target = normalizeMac(this.deviceId);
+    this.onPhase("ble_prescan");
     let found = false;
     let markSeen: () => void = () => {};
     const seen = new Promise<void>((r) => {
@@ -447,6 +455,10 @@ export class BleTransport implements ByteTransport {
   private async doConnectAndSubscribe(): Promise<void> {
     await this.client.initialize({ androidNeverForLocation: true });
     this.prescanFound = await this.prescanForDevice();
+    this.onPhase(
+      "ble_connect",
+      this.prescanFound ? "módulo visto en el aire" : "no apareció en el scan; intento igual",
+    );
     try {
       await this.client.connect(
         this.deviceId,
@@ -494,6 +506,7 @@ export class BleTransport implements ByteTransport {
       uart.notifyChar,
       (value) => this.onNotify(value),
     );
+    this.onPhase("ble_subscribed");
   }
 
   private onNotify(value: DataView): void {

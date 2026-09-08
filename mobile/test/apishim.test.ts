@@ -645,6 +645,55 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     }
   });
 
+  it("POST /api/scale/detect con prefer:'ble' prueba BLE PRIMERO (módulo 'cercano' no emparejado)", async () => {
+    const { stringToBytes } = await import("../src/parsers");
+    await import("../src/detector");
+    await import("../src/serial");
+    const FRAMES = stringToBytes("= 126.35= 126.35= 126.35= 126.35");
+    const kinds: string[] = [];
+    const bt = await makeBackend({
+      serial: {
+        makeTransport: async (kind: string) => {
+          kinds.push(kind);
+          if (kind === "bluetooth") {
+            // si se intentara el clásico fallaría (lento en campo); aquí NO debe llamarse
+            return {
+              label: "fake-classic",
+              open: async () => {
+                throw new Error("read ret: -1");
+              },
+              read: async () => new Uint8Array(0),
+              close: async () => {},
+            };
+          }
+          return { label: "fake-ble", open: async () => {}, read: async () => FRAMES, close: async () => {} };
+        },
+      },
+    });
+    try {
+      const p = call(bt, "POST", "/api/scale/detect", {
+        profile_id: "auto",
+        transport: "bluetooth",
+        port: "48:87:2D:9D:D5:71",
+        prefer: "ble",
+      });
+      let settled: Awaited<typeof p> | null = null;
+      void p.then((r) => (settled = r));
+      for (let i = 0; i < 100 && settled === null; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(res.json.parser_ok).toBe(true);
+      expect(res.json.used_transport).toBe("ble");
+      expect(res.json.fell_back).toBe(false);
+      expect(kinds).toEqual(["ble"]); // el clásico lento NUNCA se abrió
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
   it("POST /api/scale/detect con profile_id 'auto' detecta parser sin marca elegida", async () => {
     const { stringToBytes } = await import("../src/parsers");
     await import("../src/detector");

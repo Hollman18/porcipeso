@@ -873,7 +873,11 @@ export class LocalBackend {
     if (kind === "ble") {
       // El "puerto" del perfil es el id del dispositivo BLE (MAC en Android,
       // UUID en iOS). GATT-notify → MISMO pipeline de parsers que el clásico.
-      return new serial.BleTransport(opts.address as string);
+      // onPhase → la UI muestra "buscando por BLE / conectando / escuchando" en
+      // vivo, para que el usuario NUNCA vea la pantalla congelada en "Escuchando…".
+      return new serial.BleTransport(opts.address as string, {
+        onPhase: (phase, detail) => this.hub.broadcast({ type: "detect_phase", phase, detail }),
+      });
     }
     return new serial.RawBtTransport(opts.address as string);
   }
@@ -1171,45 +1175,70 @@ export class LocalBackend {
         },
       });
 
+    // ORDEN DE INTENTOS: `prefer` (lo manda la UI) decide el PRIMERO. Regla de
+    // campo: un módulo NO emparejado ("cercano") casi siempre es BLE — un clásico
+    // que funciona aparece "emparejado" — así que para esos la UI pide BLE
+    // primero y el clásico (lento: 4 sockets + bond ≈ 40–60 s) queda de RESPALDO.
+    // Antes el clásico iba siempre primero y el usuario veía "Escuchando…"
+    // congelado casi un minuto antes de que el BLE siquiera arrancara. USB no
+    // tiene segundo intento. Cada etapa avisa su fase a la UI (detect_phase).
+    type K = "bluetooth" | "ble" | "usb";
+    const prefer = String(body["prefer"] ?? "");
+    const primary: K =
+      kind === "usb" ? "usb" : prefer === "ble" ? "ble" : prefer === "bluetooth" ? "bluetooth" : kind;
+    const secondary: K | null =
+      primary === "bluetooth" ? "ble" : primary === "ble" ? "bluetooth" : null;
+    const phaseOf = (k: K) => (k === "ble" ? "ble" : k === "usb" ? "usb" : "classic");
+    const label = (k: K) => (k === "ble" ? "BLE" : k === "usb" ? "USB" : "Bluetooth clásico");
+    const { humanizeSerialError } = await import("./serial");
+
+    let primaryErr: unknown = null;
+    let primaryResult: Awaited<ReturnType<typeof runDetect>> | null = null;
+    this.hub.broadcast({ type: "detect_phase", phase: phaseOf(primary) });
     try {
-      const result = await runDetect(kind);
-      // AUTO-FALLBACK A BLE: muchos módulos "RS232-a-Bluetooth" de campo son en
-      // realidad BLE aunque el scan los liste como "clásico" (o dual que solo
-      // sirve por BLE). Si el clásico no entendió la trama, se reintenta por BLE
-      // a la MISMA MAC — sin que el usuario tenga que tocar "Probar como BLE".
-      if (kind === "bluetooth" && !result.parser_ok) {
-        try {
-          const ble = await runDetect("ble");
-          if (ble.parser_ok || (!result.ok && ble.ok)) {
-            return ok({ ...ble, fell_back_ble: true });
-          }
-        } catch {
-          /* BLE tampoco: se queda con el resultado clásico */
-        }
+      primaryResult = await runDetect(primary);
+      if (primaryResult.parser_ok) {
+        return ok({ ...primaryResult, used_transport: primary, fell_back: false, fell_back_ble: false });
       }
-      return ok(result);
     } catch (e) {
-      // El clásico ni siquiera abrió (read ret -1, socket cerrado…): antes de
-      // rendirse, prueba BLE por la misma MAC (el caso del módulo BLE).
-      if (kind === "bluetooth") {
-        try {
-          const ble = await runDetect("ble");
-          return ok({ ...ble, fell_back_ble: true });
-        } catch (eBle) {
-          // AMBOS fallaron: dilo con los DOS motivos. Antes el fallo BLE quedaba
-          // escondido detrás del error clásico y el usuario veía "lo mismo de
-          // siempre" sin saber que BLE también se intentó ni por qué falló.
-          const { humanizeSerialError } = await import("./serial");
-          return err(
-            502,
-            humanizeSerialError(e) +
-              "\n\nTambién lo intenté por BLE y tampoco: " +
-              humanizeSerialError(eBle),
-          );
-        }
+      primaryErr = e;
+    }
+    if (secondary === null) {
+      // USB: sin respaldo — devuelve lo que hubo (resultado sin señal o error)
+      if (primaryResult !== null) {
+        return ok({ ...primaryResult, used_transport: primary, fell_back: false, fell_back_ble: false });
       }
-      const { humanizeSerialError } = await import("./serial");
-      return err(502, humanizeSerialError(e));
+      return err(502, humanizeSerialError(primaryErr));
+    }
+
+    // RESPALDO por el otro transporte, a la MISMA MAC.
+    this.hub.broadcast({
+      type: "detect_phase",
+      phase: phaseOf(secondary),
+      detail: `${label(primary)} no respondió`,
+    });
+    try {
+      const sec = await runDetect(secondary);
+      const better = sec.parser_ok || primaryResult === null || (!primaryResult.ok && sec.ok);
+      if (better) {
+        return ok({ ...sec, used_transport: secondary, fell_back: true, fell_back_ble: secondary === "ble" });
+      }
+      return ok({ ...primaryResult, used_transport: primary, fell_back: false, fell_back_ble: false });
+    } catch (eSec) {
+      if (primaryResult !== null) {
+        // el primero al menos abrió (sin señal clara); el segundo ni abrió
+        return ok({ ...primaryResult, used_transport: primary, fell_back: false, fell_back_ble: false });
+      }
+      // AMBOS fallaron: dilo con los DOS motivos y en qué orden se probó. Antes
+      // el fallo BLE quedaba escondido detrás del clásico y el usuario veía
+      // "lo mismo de siempre" sin saber que BLE también se intentó ni por qué.
+      return err(
+        502,
+        `Probé primero por ${label(primary)}: ` +
+          humanizeSerialError(primaryErr) +
+          `\n\nTambién por ${label(secondary)} y tampoco: ` +
+          humanizeSerialError(eSec),
+      );
     }
   }
 

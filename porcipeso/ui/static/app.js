@@ -2386,6 +2386,10 @@ async function btAutoConnect(dev) {
   // 'classic' → SPP clásico. El detector y el connect corren IGUAL encima.
   const transport = dev.kind === 'ble' ? 'ble' : 'bluetooth';
   const tipoTxt = dev.kind === 'ble' ? 'BLE' : 'Bluetooth';
+  // ORDEN de intentos: un módulo NO emparejado ("cercano") casi siempre es BLE
+  // (un clásico que funciona aparece "emparejado") → BLE primero y el clásico
+  // lento de respaldo. Emparejado → clásico primero, BLE de respaldo.
+  const prefer = (dev.kind === 'ble' || !dev.paired) ? 'ble' : 'bluetooth';
   btScanSeq++; // congela el escaneo en vivo (el connect nativo cancela el discovery)
   showHexPanel(true);
   if (status) status.innerHTML = `🎧 Escuchando <b>${escapeHtml(dev.name || dev.address)}</b>… ` +
@@ -2395,7 +2399,7 @@ async function btAutoConnect(dev) {
   try {
     r = await apiJson('/api/scale/detect', {
       method: 'POST',
-      body: { profile_id: 'auto', transport, port: dev.address },
+      body: { profile_id: 'auto', transport, port: dev.address, prefer },
     });
   } catch (e) {
     showHexPanel(false);
@@ -2408,7 +2412,7 @@ async function btAutoConnect(dev) {
   if (r?.ok && r?.parser_ok && r?.parser) {
     // El detector pudo caer a BLE (módulo BLE listado como "clásico"): conecta
     // directo por BLE, sin repetir el intento clásico lento.
-    const connectTransport = r?.fell_back_ble ? 'ble' : transport;
+    const connectTransport = r?.used_transport || (r?.fell_back_ble ? 'ble' : transport);
     let cr = null;
     try {
       cr = await api('/api/scale/connect', {
@@ -3182,6 +3186,25 @@ function routeMessage(m) {
   else if (m.type === 'event') onEvent(m.event ?? m.data ?? m);
   else if (m.type === 'snapshot') onSnapshot(m.snapshot ?? m.data ?? m);
   else if (m.type === 'detect') onDetectHex(m);
+  else if (m.type === 'detect_phase') onDetectPhase(m);
+}
+
+/* Fases del detector (backend → UI) para que "Escuchando…" NUNCA quede
+   congelado: el usuario ve en qué va (clásico / scan BLE / conectando /
+   escuchando). Antes el intento clásico podía bloquear ~1 min en silencio. */
+const DETECT_PHASE_TXT = {
+  classic: '🎧 Probando Bluetooth clásico…',
+  ble: '📡 Buscando el módulo por BLE…',
+  usb: '🔌 Escuchando por USB…',
+  ble_prescan: '📡 Buscando el módulo por BLE (scan)…',
+  ble_connect: '🔗 Conectando por BLE…',
+  ble_subscribed: '✅ Conectado por BLE — escuchando datos…',
+};
+function onDetectPhase(m) {
+  const status = $('btAutoStatus');
+  if (!status || !status.isConnected) return;
+  const base = DETECT_PHASE_TXT[m?.phase] || 'Conectando…';
+  status.textContent = m?.detail ? `${base} (${m.detail})` : base;
 }
 
 /* panel HEX en vivo del detector de señal (wizard, app móvil) */
