@@ -66,6 +66,11 @@ export interface BleServiceInfo {
  * Cliente GATT mínimo (subset estructural de BleClient). El real lo satisface
  * tal cual; los tests inyectan un fake controlable.
  */
+export interface BleScanHit {
+  device: { deviceId: string; name?: string };
+  localName?: string;
+}
+
 export interface BleClientLike {
   initialize(options?: { androidNeverForLocation?: boolean }): Promise<void>;
   connect(
@@ -82,6 +87,21 @@ export interface BleClientLike {
     callback: (value: DataView) => void,
   ): Promise<void>;
   stopNotifications(deviceId: string, service: string, characteristic: string): Promise<void>;
+  /**
+   * OPCIONALES — scan LE para "PRESENTAR" el dispositivo al stack de Android
+   * antes de conectar (ver BleTransport.prescanForDevice). El cliente real los
+   * tiene; los fakes de tests pueden omitirlos y el prescan se salta.
+   */
+  requestLEScan?(
+    options: { allowDuplicates?: boolean; services?: string[] },
+    callback: (result: BleScanHit) => void,
+  ): Promise<void>;
+  stopLEScan?(): Promise<void>;
+}
+
+/** MAC/id comparable: mayúsculas, sin espacios. */
+export function normalizeMac(id: string): string {
+  return (id || "").trim().toUpperCase();
 }
 
 // ------------------------------------------ descubrimiento de la característica
@@ -271,6 +291,12 @@ export const BLE_DEFAULT_NO_DATA_TIMEOUT_MS = 6000;
  * cae al siguiente modo o avisa — nunca se cuelga.
  */
 export const BLE_CONNECT_TIMEOUT_MS = 15000;
+/**
+ * Tiempo máximo del scan LE PREVIO al connect (ver prescanForDevice). Un módulo
+ * BLE anuncia cada ~100 ms–1 s; 8 s sobran para verlo si está encendido y
+ * cerca. Si no aparece, igual se intenta conectar, pero el error lo dirá.
+ */
+export const BLE_PRESCAN_TIMEOUT_MS = 8000;
 
 /** Corre `p` con tope de tiempo; si vence, rechaza con `label` (no cuelga). */
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -318,6 +344,8 @@ export class BleTransport implements ByteTransport {
   /** El plugin avisó una desconexión inesperada del GATT → reconectar. */
   private linkDown = false;
   private uart: DiscoveredUart | null = null;
+  /** Resultado del scan previo del último intento (diagnóstico): null = no corrió. */
+  private prescanFound: boolean | null = null;
 
   private readonly backoffMs: number[];
   private readonly noDataTimeoutMs: number;
@@ -371,16 +399,73 @@ export class BleTransport implements ByteTransport {
     );
   }
 
+  /**
+   * "PRESENTA" el dispositivo al stack BLE de Android ANTES de conectar.
+   *
+   * CAUSA RAÍZ de campo: el plugin, si la MAC no salió de un scan LE (la nuestra
+   * viene del discovery CLÁSICO), cae a getRemoteDevice(mac) + connectGatt, que
+   * asume DIRECCIÓN PÚBLICA. Los adaptadores RS232-BLE suelen anunciar con
+   * dirección ALEATORIA → ese connectGatt falla o vence por timeout, siempre.
+   * Un scan LE que VEA el módulo registra su tipo de dirección (y lo mete en el
+   * deviceMap del plugin), y entonces el connect sí funciona. Es exactamente lo
+   * que hace la app de referencia (Serial Bluetooth Terminal: la pestaña LE es
+   * un scan y de ahí conecta).
+   *
+   * Devuelve true si lo vio. Si no aparece, igual se intenta conectar (podría
+   * estar bondeado / ser pública), pero el error final dirá que NO se vio en
+   * el aire — dato clave para diagnosticar (apagado, lejos, tomado por otro).
+   */
+  private async prescanForDevice(): Promise<boolean> {
+    const c = this.client;
+    if (!c.requestLEScan || !c.stopLEScan) return false; // fake sin scan (tests)
+    const target = normalizeMac(this.deviceId);
+    let found = false;
+    let markSeen: () => void = () => {};
+    const seen = new Promise<void>((r) => {
+      markSeen = r;
+    });
+    try {
+      await c.requestLEScan({ allowDuplicates: false }, (r) => {
+        if (normalizeMac(r?.device?.deviceId ?? "") === target) {
+          found = true;
+          markSeen();
+        }
+      });
+      await Promise.race([seen, this.sleep(BLE_PRESCAN_TIMEOUT_MS)]);
+    } catch {
+      /* scan no disponible / BT apagado: el connect reportará el fallo real */
+    } finally {
+      try {
+        await c.stopLEScan();
+      } catch {
+        /* no había scan activo */
+      }
+    }
+    return found;
+  }
+
   private async doConnectAndSubscribe(): Promise<void> {
     await this.client.initialize({ androidNeverForLocation: true });
-    await this.client.connect(
-      this.deviceId,
-      () => {
-        // desconexión inesperada del GATT → el próximo read dispara la reconexión
-        this.linkDown = true;
-      },
-      { timeout: BLE_CONNECT_TIMEOUT_MS },
-    );
+    this.prescanFound = await this.prescanForDevice();
+    try {
+      await this.client.connect(
+        this.deviceId,
+        () => {
+          // desconexión inesperada del GATT → el próximo read dispara la reconexión
+          this.linkDown = true;
+        },
+        { timeout: BLE_CONNECT_TIMEOUT_MS },
+      );
+    } catch (e) {
+      // El motivo del fallo cambia TODO el diagnóstico: distinto es "no está en
+      // el aire" (apagado/lejos/tomado por otro teléfono) que "lo veo pero el
+      // GATT no conecta" (bloqueo del stack / módulo que rechaza).
+      const why = this.prescanFound
+        ? "el módulo SÍ apareció en el scan BLE pero el GATT no conectó"
+        : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono?)";
+      const detail = e instanceof Error ? e.message : String(e);
+      throw new Error(`ble_connect: ${why} · detalle: ${detail}`);
+    }
     const services = await this.client.getServices(this.deviceId);
     const uart = pickUartCharacteristic(services);
     if (!uart) {
@@ -538,6 +623,9 @@ function realBleClient(): BleClientLike {
     initialize: async (o) => (await loadRealBle()).initialize(o),
     connect: async (id, cb, opts) => (await loadRealBle()).connect(id, cb, opts),
     disconnect: async (id) => (await loadRealBle()).disconnect(id),
+    // scan LE para el prescan (presentar el dispositivo al stack antes del connect)
+    requestLEScan: async (o, cb) => (await loadRealBle()).requestLEScan(o, cb),
+    stopLEScan: async () => (await loadRealBle()).stopLEScan(),
     getServices: async (id) => (await loadRealBle()).getServices(id),
     startNotifications: async (id, s, c, cb) =>
       (await loadRealBle()).startNotifications(id, s, c, cb),

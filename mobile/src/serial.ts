@@ -161,6 +161,11 @@ export function humanizeSerialError(e: unknown): string {
   if (/no_uart/i.test(raw)) {
     return BLE_NO_UART_MSG;
   }
+  // BLE: el prescan/connect ya trae el diagnóstico en humano ("NO apareció en
+  // el scan" vs "apareció pero el GATT no conectó"); solo se quita el prefijo.
+  if (/^ble_(connect|timeout):/i.test(raw)) {
+    return "BLE: " + raw.replace(/^ble_(connect|timeout):\s*/i, "");
+  }
   if (/permission|permiso|denied/i.test(raw)) {
     return (
       "Permiso de Bluetooth denegado. Ve a Ajustes → Aplicaciones → PorciPeso → " +

@@ -1195,8 +1195,17 @@ export class LocalBackend {
         try {
           const ble = await runDetect("ble");
           return ok({ ...ble, fell_back_ble: true });
-        } catch {
-          /* ambos fallaron: devuelve el error original humanizado */
+        } catch (eBle) {
+          // AMBOS fallaron: dilo con los DOS motivos. Antes el fallo BLE quedaba
+          // escondido detrás del error clásico y el usuario veía "lo mismo de
+          // siempre" sin saber que BLE también se intentó ni por qué falló.
+          const { humanizeSerialError } = await import("./serial");
+          return err(
+            502,
+            humanizeSerialError(e) +
+              "\n\nTambién lo intenté por BLE y tampoco: " +
+              humanizeSerialError(eBle),
+          );
         }
       }
       const { humanizeSerialError } = await import("./serial");
