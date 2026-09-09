@@ -35,14 +35,14 @@ describe("mergeBtDevices — merge en vivo sin duplicados", () => {
 
   it("emparejados primero, cercanos después, dedupe por MAC", () => {
     const found = [
-      { name: "BOLUTEK", address: "98:D3:31:F0:12:34" },
+      { name: "MODULO-BT", address: "98:D3:31:F0:12:34" },
       { name: "BC04-BT", address: "00:14:03:05:59:02" }, // duplicado: ya emparejado
-      { name: "BOLUTEK", address: "98:D3:31:F0:12:34" }, // duplicado exacto
+      { name: "MODULO-BT", address: "98:D3:31:F0:12:34" }, // duplicado exacto
     ];
     const merged = mergeBtDevices(paired, found);
     expect(merged).toHaveLength(3);
     expect(merged[0]).toMatchObject({ address: "00:14:03:05:59:02", paired: true });
-    expect(merged[2]).toMatchObject({ name: "BOLUTEK", paired: false });
+    expect(merged[2]).toMatchObject({ name: "MODULO-BT", paired: false });
   });
 
   it("los sin nombre salen como 'Dispositivo BT (MAC)'", () => {
@@ -55,10 +55,10 @@ describe("mergeBtDevices — merge en vivo sin duplicados", () => {
 describe("endpoints de discovery en vivo", () => {
   const polls = [
     { devices: [] as Array<{ name: string; address: string }>, finished: false },
-    { devices: [{ name: "BOLUTEK", address: "98:D3:31:F0:12:34" }], finished: false },
+    { devices: [{ name: "MODULO-BT", address: "98:D3:31:F0:12:34" }], finished: false },
     {
       devices: [
-        { name: "BOLUTEK", address: "98:D3:31:F0:12:34" },
+        { name: "MODULO-BT", address: "98:D3:31:F0:12:34" },
         { name: "", address: "AA:BB:CC:DD:EE:FF" },
       ],
       finished: true,
@@ -85,8 +85,8 @@ describe("endpoints de discovery en vivo", () => {
       expect(p1.json.devices).toHaveLength(1); // solo el emparejado
 
       const p2 = await call(bt, "GET", "/api/bt/discovery");
-      expect(p2.json.devices).toHaveLength(2); // llegó BOLUTEK en vivo
-      expect(p2.json.devices[1]).toMatchObject({ name: "BOLUTEK", paired: false });
+      expect(p2.json.devices).toHaveLength(2); // llegó MODULO-BT en vivo
+      expect(p2.json.devices[1]).toMatchObject({ name: "MODULO-BT", paired: false });
 
       const p3 = await call(bt, "GET", "/api/bt/discovery");
       expect(p3.json.finished).toBe(true);

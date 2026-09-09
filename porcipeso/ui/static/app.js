@@ -246,11 +246,12 @@ function watchDbBackend() {
 function loadCfg() {
   try {
     const cfg = JSON.parse(localStorage.getItem('porcipeso_cfg') || 'null');
-    // Limpieza: una báscula guardada de pruebas antiguas ("Bolutex") no debe
-    // volver a aparecer como "conectada". Si el guardado la menciona, se borra
-    // solo y la app arranca sin báscula recordada.
+    // Limpieza: una báscula guardada de pruebas antiguas ("BOLUTEK" / Bolutec /
+    // Bolutex — cualquier grafía) no debe volver a aparecer como recordada ni
+    // "conectada". Si el guardado la menciona, se borra solo y la app arranca
+    // sin báscula recordada.
     const txt = `${cfg?.name ?? ''} ${cfg?.port ?? ''} ${cfg?.profile_id ?? ''}`.toLowerCase();
-    if (cfg && txt.includes('bolutex')) { clearCfg(); return null; }
+    if (cfg && txt.includes('bolute')) { clearCfg(); return null; }
     return cfg;
   }
   catch { return null; }
@@ -1618,7 +1619,7 @@ setInterval(() => {
 
 $('bConnStart').onclick = () => openWizard();
 // "Cambiar de báscula" = OLVIDAR la guardada de verdad (antes solo abría el
-// asistente y la anterior —p. ej. una "Bolutex" de pruebas— seguía apareciendo
+// asistente y la anterior —p. ej. una "BOLUTEK" de pruebas— seguía apareciendo
 // como recordada). Se corta el enlace y se borra la config guardada.
 $('bccChange').onclick = async () => {
   try { await apiJson('/api/scale/disconnect', { method: 'POST', body: {} }); } catch { /* sin enlace */ }
