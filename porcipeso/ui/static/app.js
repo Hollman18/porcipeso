@@ -244,7 +244,15 @@ function watchDbBackend() {
 
 /* ---------------- configuración guardada (báscula real) ---------------- */
 function loadCfg() {
-  try { return JSON.parse(localStorage.getItem('porcipeso_cfg') || 'null'); }
+  try {
+    const cfg = JSON.parse(localStorage.getItem('porcipeso_cfg') || 'null');
+    // Limpieza: una báscula guardada de pruebas antiguas ("Bolutex") no debe
+    // volver a aparecer como "conectada". Si el guardado la menciona, se borra
+    // solo y la app arranca sin báscula recordada.
+    const txt = `${cfg?.name ?? ''} ${cfg?.port ?? ''} ${cfg?.profile_id ?? ''}`.toLowerCase();
+    if (cfg && txt.includes('bolutex')) { clearCfg(); return null; }
+    return cfg;
+  }
   catch { return null; }
 }
 function saveCfg(cfg) {
@@ -1609,7 +1617,16 @@ setInterval(() => {
 }, 2500);
 
 $('bConnStart').onclick = () => openWizard();
-$('bccChange').onclick = () => openWizard();
+// "Cambiar de báscula" = OLVIDAR la guardada de verdad (antes solo abría el
+// asistente y la anterior —p. ej. una "Bolutex" de pruebas— seguía apareciendo
+// como recordada). Se corta el enlace y se borra la config guardada.
+$('bccChange').onclick = async () => {
+  try { await apiJson('/api/scale/disconnect', { method: 'POST', body: {} }); } catch { /* sin enlace */ }
+  APP.scaleConnected = false;
+  APP.simActive = false;
+  clearCfg();
+  openWizard();
+};
 
 $('bccDisconnect').onclick = async () => {
   const b = $('bccDisconnect');
@@ -2399,7 +2416,15 @@ async function btAutoConnect(dev) {
   try {
     r = await apiJson('/api/scale/detect', {
       method: 'POST',
-      body: { profile_id: 'auto', transport, port: dev.address, prefer },
+      body: {
+        profile_id: 'auto', transport, port: dev.address, prefer,
+        // nombre anunciado: el módulo BLE dual-mode puede anunciar con OTRA
+        // dirección; el backend lo busca por nombre y conecta a esa.
+        name: dev.name || '',
+        // módulo BLE / no emparejado: sin el minuto inútil de clásico —
+        // si BLE falla, que diga el motivo de inmediato.
+        no_fallback: prefer === 'ble',
+      },
     });
   } catch (e) {
     showHexPanel(false);
@@ -2917,6 +2942,8 @@ function btFailActions() {
     { label: '📶 Abrir Bluetooth', onclick: () => openBtDeepLink('/api/bt/settings/open') },
     { label: '⚙ Permisos de la app', onclick: () => openBtDeepLink('/api/bt/app-settings/open') },
     { label: '🔍 Diagnóstico', onclick: runBtDiagnose },
+    // Xiaomi/MIUI: el scan BLE puede venir vacío con la Ubicación apagada
+    { label: '📍 Encender Ubicación', onclick: () => openBtDeepLink('/api/bt/location/open') },
   ];
 }
 

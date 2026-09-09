@@ -694,6 +694,49 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     }
   });
 
+  it("POST /api/scale/detect con no_fallback: si BLE falla NO corre el clásico y devuelve el motivo BLE ya", async () => {
+    await import("../src/detector");
+    await import("../src/serial");
+    const kinds: string[] = [];
+    const bt = await makeBackend({
+      serial: {
+        makeTransport: async (kind: string) => {
+          kinds.push(kind);
+          return {
+            label: `fake-${kind}`,
+            open: async () => {
+              throw new Error("ble_connect: el módulo NO apareció en el scan BLE · detalle: Connection timeout.");
+            },
+            read: async () => new Uint8Array(0),
+            close: async () => {},
+          };
+        },
+      },
+    });
+    try {
+      const p = call(bt, "POST", "/api/scale/detect", {
+        profile_id: "auto",
+        transport: "bluetooth",
+        port: "48:87:2D:9D:D5:71",
+        prefer: "ble",
+        no_fallback: true,
+      });
+      let settled: Awaited<typeof p> | null = null;
+      void p.then((r) => (settled = r));
+      for (let i = 0; i < 100 && settled === null; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const res = await p;
+      expect(res.status).toBe(502);
+      expect(kinds).toEqual(["ble"]); // el clásico lento NUNCA se intentó
+      expect(String(res.json.detail)).toMatch(/BLE/);
+      expect(String(res.json.detail)).toMatch(/NO apareció en el scan BLE/);
+    } finally {
+      await bt.stopDriver();
+      await bt.repo.close();
+    }
+  });
+
   it("POST /api/scale/detect con profile_id 'auto' detecta parser sin marca elegida", async () => {
     const { stringToBytes } = await import("../src/parsers");
     await import("../src/detector");

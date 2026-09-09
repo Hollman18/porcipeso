@@ -324,6 +324,12 @@ export interface BleOptions {
   onStatus?: (status: LinkStatus) => void;
   /** Aviso de fase (scan previo → conectando → escuchando) para la UI. */
   onPhase?: (phase: BlePhase, detail?: string) => void;
+  /**
+   * Nombre anunciado del módulo (ej. "RS232\485"). Los módulos DUAL-MODE
+   * suelen anunciar por BLE con una dirección DISTINTA a su MAC clásica; si el
+   * scan lo ve por NOMBRE bajo otra dirección, se conecta a ESA.
+   */
+  expectName?: string;
 }
 
 function dataViewToBytes(value: DataView): Uint8Array {
@@ -351,6 +357,9 @@ export class BleTransport implements ByteTransport {
   private uart: DiscoveredUart | null = null;
   /** Resultado del scan previo del último intento (diagnóstico): null = no corrió. */
   private prescanFound: boolean | null = null;
+  /** Si el scan lo vio por NOMBRE bajo otra dirección BLE: la MAC original. */
+  private switchedFrom: string | null = null;
+  private readonly expectName: string;
 
   private readonly backoffMs: number[];
   private readonly noDataTimeoutMs: number;
@@ -372,6 +381,7 @@ export class BleTransport implements ByteTransport {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.onStatus = opts.onStatus ?? (() => {});
     this.onPhase = opts.onPhase ?? (() => {});
+    this.expectName = (opts.expectName ?? "").trim();
   }
 
   status(): LinkStatus {
@@ -426,20 +436,35 @@ export class BleTransport implements ByteTransport {
     const c = this.client;
     if (!c.requestLEScan || !c.stopLEScan) return false; // fake sin scan (tests)
     const target = normalizeMac(this.deviceId);
+    const wantName = this.expectName.toLowerCase();
     this.onPhase("ble_prescan");
     let found = false;
+    let seenId: string | null = null;
     let markSeen: () => void = () => {};
     const seen = new Promise<void>((r) => {
       markSeen = r;
     });
     try {
       await c.requestLEScan({ allowDuplicates: false }, (r) => {
-        if (normalizeMac(r?.device?.deviceId ?? "") === target) {
+        const id = r?.device?.deviceId ?? "";
+        const name = (r?.device?.name || r?.localName || "").trim().toLowerCase();
+        // Coincide por MAC… o por NOMBRE: un módulo dual-mode anuncia por BLE
+        // con OTRA dirección distinta a su MAC clásica (la que trae el discovery
+        // clásico). Si lo vemos por nombre, ESA es la dirección a la que hay
+        // que conectar; buscar solo la MAC clásica nunca lo encontraría.
+        const byMac = normalizeMac(id) === target;
+        const byName = wantName !== "" && name !== "" && name === wantName;
+        if ((byMac || byName) && !found) {
           found = true;
+          seenId = id;
           markSeen();
         }
       });
       await Promise.race([seen, this.sleep(BLE_PRESCAN_TIMEOUT_MS)]);
+      if (seenId !== null && normalizeMac(seenId) !== target) {
+        this.switchedFrom = this.deviceId;
+        this.deviceId = seenId; // conectar a la dirección BLE real, no a la clásica
+      }
     } catch {
       /* scan no disponible / BT apagado: el connect reportará el fallo real */
     } finally {
@@ -457,7 +482,11 @@ export class BleTransport implements ByteTransport {
     this.prescanFound = await this.prescanForDevice();
     this.onPhase(
       "ble_connect",
-      this.prescanFound ? "módulo visto en el aire" : "no apareció en el scan; intento igual",
+      this.prescanFound
+        ? this.switchedFrom
+          ? `visto por nombre en ${this.deviceId} (no en la MAC clásica ${this.switchedFrom})`
+          : "módulo visto en el aire"
+        : "no apareció en el scan; intento igual",
     );
     try {
       await this.client.connect(
@@ -473,7 +502,7 @@ export class BleTransport implements ByteTransport {
       // el aire" (apagado/lejos/tomado por otro teléfono) que "lo veo pero el
       // GATT no conecta" (bloqueo del stack / módulo que rechaza).
       const why = this.prescanFound
-        ? "el módulo SÍ apareció en el scan BLE pero el GATT no conectó"
+        ? `el módulo SÍ apareció en el scan BLE (${this.deviceId}) pero el GATT no conectó`
         : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono?)";
       const detail = e instanceof Error ? e.message : String(e);
       throw new Error(`ble_connect: ${why} · detalle: ${detail}`);

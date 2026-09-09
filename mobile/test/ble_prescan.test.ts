@@ -77,7 +77,38 @@ describe("BleTransport: prescan LE antes del connect (causa raíz del módulo BL
   it("si SÍ aparece pero el GATT falla, distingue ese caso", async () => {
     const { client } = fakeClient({ advertises: true, connectOk: false });
     const t = new BleTransport(MAC, { client, sleep: instant });
-    await expect(t.open()).rejects.toThrow(/SÍ apareció en el scan BLE pero el GATT no conectó/);
+    // el mensaje incluye la dirección BLE vista: "…en el scan BLE (AA:BB:…) pero…"
+    await expect(t.open()).rejects.toThrow(/SÍ apareció en el scan BLE.*pero el GATT no conectó/);
+  });
+
+  it("dual-mode: anuncia por BLE con OTRA dirección → lo encuentra por NOMBRE y conecta a esa", async () => {
+    const LE_ADDR = "C4:12:AB:00:11:22"; // dirección BLE real (≠ MAC clásica)
+    const connectedTo: string[] = [];
+    const client: BleClientLike = {
+      initialize: async () => {},
+      connect: async (id) => {
+        connectedTo.push(id);
+      },
+      disconnect: async () => {},
+      getServices: async () => [
+        {
+          uuid: HM10_SERVICE,
+          characteristics: [{ uuid: HM10_CHAR, properties: { notify: true, write: true } }],
+        },
+      ],
+      startNotifications: async () => {},
+      stopNotifications: async () => {},
+      requestLEScan: async (_o, cb: (r: BleScanHit) => void) => {
+        // en el aire NO aparece la MAC clásica: aparece el NOMBRE bajo otra dirección
+        cb({ device: { deviceId: LE_ADDR, name: "RS232\\485" } });
+      },
+      stopLEScan: async () => {},
+    };
+    const t = new BleTransport(MAC, { client, sleep: instant, expectName: "RS232\\485" });
+    await t.open();
+    expect(t.status()).toBe("connected");
+    expect(connectedTo).toEqual([LE_ADDR]); // conectó a la dirección BLE vista, no a la clásica
+    await t.close();
   });
 
   it("cliente sin scan (fakes/legado): se salta el prescan y conecta igual", async () => {

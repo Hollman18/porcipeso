@@ -181,7 +181,7 @@ export interface BackendDeps {
     listUsb?: () => Promise<UsbDeviceInfo[]>;
     makeTransport?: (
       kind: "bluetooth" | "ble" | "usb",
-      opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
+      opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null; name?: string },
     ) => Promise<ByteTransport>;
   };
   /** Exportador CSV nativo (Filesystem+Share); si falta, descarga web. */
@@ -849,7 +849,7 @@ export class LocalBackend {
    */
   private async makeTransport(
     kind: "bluetooth" | "ble" | "usb",
-    opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
+    opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null; name?: string },
   ): Promise<ByteTransport> {
     return tapTransport(await this.makeRawTransport(kind, opts), this.raw);
   }
@@ -857,7 +857,7 @@ export class LocalBackend {
   /** Transporte SIN tap (inyectable en tests, o el nativo por tipo de enlace). */
   private async makeRawTransport(
     kind: "bluetooth" | "ble" | "usb",
-    opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null },
+    opts: { profile: ScaleProfile; address?: string; deviceId?: number; baud: number | null; name?: string },
   ): Promise<ByteTransport> {
     if (this.serialDeps?.makeTransport) return this.serialDeps.makeTransport(kind, opts);
     const serial = await import("./serial");
@@ -877,6 +877,9 @@ export class LocalBackend {
       // vivo, para que el usuario NUNCA vea la pantalla congelada en "Escuchando…".
       return new serial.BleTransport(opts.address as string, {
         onPhase: (phase, detail) => this.hub.broadcast({ type: "detect_phase", phase, detail }),
+        // nombre anunciado: si el módulo dual-mode anuncia por BLE con OTRA
+        // dirección, el prescan lo encuentra por nombre y conecta a esa.
+        expectName: opts.name,
       });
     }
     return new serial.RawBtTransport(opts.address as string);
@@ -1166,7 +1169,7 @@ export class LocalBackend {
         profile,
         baudrates,
         openTransport: (baud) =>
-          this.makeTransport(k, { profile, address, deviceId, baud }),
+          this.makeTransport(k, { profile, address, deviceId, baud, name }),
         onHex: (hex, baud) => {
           const now = Date.now();
           if (now - lastHexAt < 250) return;
@@ -1184,6 +1187,12 @@ export class LocalBackend {
     // tiene segundo intento. Cada etapa avisa su fase a la UI (detect_phase).
     type K = "bluetooth" | "ble" | "usb";
     const prefer = String(body["prefer"] ?? "");
+    // nombre anunciado del módulo (para que el prescan BLE lo encuentre por
+    // nombre si anuncia con otra dirección) y "sin respaldo": para un módulo
+    // BLE/no emparejado el clásico nunca va a servir y solo gasta ~1 min —
+    // mejor devolver el motivo BLE de inmediato.
+    const name = String(body["name"] ?? "").trim();
+    const noFallback = body["no_fallback"] === true || body["no_fallback"] === "true";
     const primary: K =
       kind === "usb" ? "usb" : prefer === "ble" ? "ble" : prefer === "bluetooth" ? "bluetooth" : kind;
     const secondary: K | null =
@@ -1202,6 +1211,16 @@ export class LocalBackend {
       }
     } catch (e) {
       primaryErr = e;
+    }
+    if (noFallback && secondary !== null) {
+      // SIN RESPALDO (módulo BLE / no emparejado): el clásico no va a servir y
+      // gasta ~1 min mudo. Devuelve YA el resultado o el motivo exacto del BLE
+      // ("NO apareció en el scan" / "SÍ apareció pero el GATT no conectó" /
+      // sin característica UART / sin datos) para actuar de inmediato.
+      if (primaryResult !== null) {
+        return ok({ ...primaryResult, used_transport: primary, fell_back: false, fell_back_ble: false });
+      }
+      return err(502, `${label(primary)}: ` + humanizeSerialError(primaryErr));
     }
     if (secondary === null) {
       // USB: sin respaldo — devuelve lo que hubo (resultado sin señal o error)
