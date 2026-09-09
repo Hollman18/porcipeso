@@ -93,10 +93,13 @@ export interface BleClientLike {
    * tiene; los fakes de tests pueden omitirlos y el prescan se salta.
    */
   requestLEScan?(
-    options: { allowDuplicates?: boolean; services?: string[] },
+    options: { allowDuplicates?: boolean; services?: string[]; scanMode?: number },
     callback: (result: BleScanHit) => void,
   ): Promise<void>;
   stopLEScan?(): Promise<void>;
+  /** ¿Servicio de Ubicación del teléfono encendido? (Android 6–13 lo exige
+   *  para que el scan BLE devuelva resultados; en Xiaomi/MIUI 12/13 también.) */
+  isLocationEnabled?(): Promise<boolean>;
 }
 
 /** MAC/id comparable: mayúsculas, sin espacios. */
@@ -297,6 +300,42 @@ export const BLE_CONNECT_TIMEOUT_MS = 15000;
  * cerca. Si no aparece, igual se intenta conectar, pero el error lo dirá.
  */
 export const BLE_PRESCAN_TIMEOUT_MS = 8000;
+/** ScanSettings.SCAN_MODE_LOW_LATENCY (Android): resultados en <1 s, como la
+ *  app de referencia (Serial Bluetooth Terminal). El default del plugin es
+ *  BALANCED, más lento en ver un módulo que anuncia cada ~500 ms. */
+export const SCAN_MODE_LOW_LATENCY = 2;
+/** Pausa tras conceder permisos antes de escanear: en algunos Xiaomi un scan
+ *  inmediato tras el diálogo de permisos falla en silencio (Punch Through). */
+export const BLE_PERMISSION_SETTLE_MS = 300;
+
+/**
+ * Inicializa el plugin BLE pidiendo TAMBIÉN el permiso de Ubicación en
+ * Android 12/13 (`androidNeverForLocation:false`): la doc oficial admite que
+ * `neverForLocation` filtra resultados, y los ROMs Xiaomi/MIUI 12/13 devuelven
+ * el scan VACÍO sin ubicación — por eso "solo conectaba en Android 14+". Si el
+ * usuario NIEGA la ubicación, se reintenta sin ella (Android 14+ escanea igual)
+ * para no bloquear a quien no la quiera conceder. Devuelve si la Ubicación del
+ * teléfono está encendida (null si no se pudo saber).
+ */
+export async function initializeBleClient(client: BleClientLike): Promise<boolean | null> {
+  try {
+    await client.initialize({ androidNeverForLocation: false });
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e);
+    if (!/permission|permiso|denied/i.test(msg)) throw e;
+    // negó la ubicación: en 14+ el scan funciona sin ella; en 12/13 puede venir vacío
+    await client.initialize({ androidNeverForLocation: true });
+  }
+  let locationOn: boolean | null = null;
+  if (client.isLocationEnabled) {
+    try {
+      locationOn = await client.isLocationEnabled();
+    } catch {
+      locationOn = null;
+    }
+  }
+  return locationOn;
+}
 
 /** Corre `p` con tope de tiempo; si vence, rechaza con `label` (no cuelga). */
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -359,6 +398,8 @@ export class BleTransport implements ByteTransport {
   private prescanFound: boolean | null = null;
   /** Si el scan lo vio por NOMBRE bajo otra dirección BLE: la MAC original. */
   private switchedFrom: string | null = null;
+  /** Ubicación del teléfono encendida al iniciar (null = no se pudo saber). */
+  private locationOn: boolean | null = null;
   private readonly expectName: string;
 
   private readonly backoffMs: number[];
@@ -438,6 +479,9 @@ export class BleTransport implements ByteTransport {
     const target = normalizeMac(this.deviceId);
     const wantName = this.expectName.toLowerCase();
     this.onPhase("ble_prescan");
+    // Pausa breve SOLO antes de escanear (no en cada reconexión): en algunos
+    // Xiaomi un scan lanzado justo tras el diálogo de permisos falla en silencio.
+    await this.sleep(BLE_PERMISSION_SETTLE_MS);
     let found = false;
     let seenId: string | null = null;
     let markSeen: () => void = () => {};
@@ -445,7 +489,7 @@ export class BleTransport implements ByteTransport {
       markSeen = r;
     });
     try {
-      await c.requestLEScan({ allowDuplicates: false }, (r) => {
+      await c.requestLEScan({ allowDuplicates: false, scanMode: SCAN_MODE_LOW_LATENCY }, (r) => {
         const id = r?.device?.deviceId ?? "";
         const name = (r?.device?.name || r?.localName || "").trim().toLowerCase();
         // Coincide por MAC… o por NOMBRE: un módulo dual-mode anuncia por BLE
@@ -478,7 +522,9 @@ export class BleTransport implements ByteTransport {
   }
 
   private async doConnectAndSubscribe(): Promise<void> {
-    await this.client.initialize({ androidNeverForLocation: true });
+    // pide Ubicación también en Android 12/13 (Xiaomi devuelve el scan vacío sin
+    // ella) y anota si el servicio de Ubicación está encendido, para el diagnóstico
+    this.locationOn = await initializeBleClient(this.client);
     this.prescanFound = await this.prescanForDevice();
     this.onPhase(
       "ble_connect",
@@ -503,7 +549,10 @@ export class BleTransport implements ByteTransport {
       // GATT no conecta" (bloqueo del stack / módulo que rechaza).
       const why = this.prescanFound
         ? `el módulo SÍ apareció en el scan BLE (${this.deviceId}) pero el GATT no conectó`
-        : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono?)";
+        : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono?)" +
+          (this.locationOn === false
+            ? " · además la UBICACIÓN del teléfono está APAGADA: en Android 12/13 (Xiaomi) el scan BLE llega vacío sin ella — enciéndela y reintenta"
+            : "");
       const detail = e instanceof Error ? e.message : String(e);
       throw new Error(`ble_connect: ${why} · detalle: ${detail}`);
     }
@@ -643,8 +692,9 @@ export function bleAvailable(): boolean {
 interface RealBleModule {
   BleClient: BleClientLike & {
     isEnabled(): Promise<boolean>;
+    isLocationEnabled(): Promise<boolean>;
     requestLEScan(
-      options: { allowDuplicates?: boolean; services?: string[] },
+      options: { allowDuplicates?: boolean; services?: string[]; scanMode?: number },
       callback: (result: { device: { deviceId: string; name?: string }; localName?: string }) => void,
     ): Promise<void>;
     stopLEScan(): Promise<void>;
@@ -668,6 +718,7 @@ function realBleClient(): BleClientLike {
     // scan LE para el prescan (presentar el dispositivo al stack antes del connect)
     requestLEScan: async (o, cb) => (await loadRealBle()).requestLEScan(o, cb),
     stopLEScan: async () => (await loadRealBle()).stopLEScan(),
+    isLocationEnabled: async () => (await loadRealBle()).isLocationEnabled(),
     getServices: async (id) => (await loadRealBle()).getServices(id),
     startNotifications: async (id, s, c, cb) =>
       (await loadRealBle()).startNotifications(id, s, c, cb),
@@ -684,7 +735,8 @@ let bleScanning = false;
 /** Arranca el scan LE (limpia el ciclo anterior). Lanza si el BT está apagado. */
 export async function startBleScan(): Promise<void> {
   const client = await loadRealBle();
-  await client.initialize({ androidNeverForLocation: true });
+  await initializeBleClient(client); // pide Ubicación en 12/13 (scan vacío sin ella en Xiaomi)
+  await new Promise<void>((r) => setTimeout(r, BLE_PERMISSION_SETTLE_MS)); // quirk Xiaomi
   const enabled = await client.isEnabled();
   if (!enabled) throw new Error("bluetooth_off");
   if (bleScanning) {
@@ -696,7 +748,7 @@ export async function startBleScan(): Promise<void> {
   }
   bleFound.clear();
   bleScanning = true;
-  await client.requestLEScan({ allowDuplicates: false }, (result) => {
+  await client.requestLEScan({ allowDuplicates: false, scanMode: SCAN_MODE_LOW_LATENCY }, (result) => {
     const id = result?.device?.deviceId;
     if (!id) return;
     const name = result.device.name || result.localName || "";

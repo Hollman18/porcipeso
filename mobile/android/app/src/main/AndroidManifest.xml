@@ -58,12 +58,12 @@
          Android 12+ (API 31): BLUETOOTH_SCAN + BLUETOOTH_CONNECT.
          Android <= 11: permisos legacy BLUETOOTH/BLUETOOTH_ADMIN +
          ubicación (requisito del discovery clásico pre-12). -->
-    <!-- neverForLocation: el discovery NO deriva ubicación → en Android 12+
-         los resultados de scan no exigen los servicios de Ubicación
-         encendidos (en ≤11 sí: ver PorciSerialPlugin.isLocationEnabled). -->
+    <!-- SIN neverForLocation: la doc oficial admite que esa bandera FILTRA
+         resultados del scan, y en Xiaomi/MIUI 12/13 el scan BLE llega VACÍO si
+         la app no tiene Ubicación. Pedimos Ubicación también en 12/13 (como la
+         app de referencia) → mismo alcance que ella desde Android 5.1. -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission
         android:name="android.permission.BLUETOOTH_CONNECT"
@@ -84,7 +84,7 @@
     <!-- Bluetooth Low Energy (BLE): el módulo del cliente puede ser BLE o
          dual-mode que solo anuncia por BLE. El scan LE + GATT lo maneja
          @capacitor-community/bluetooth-le, que REUSA los MISMOS permisos de
-         arriba: BLUETOOTH_SCAN/CONNECT (12+, con neverForLocation) y
+         arriba: BLUETOOTH_SCAN/CONNECT (12+, pidiendo TAMBIÉN Ubicación) y
          BLUETOOTH/ADMIN + ubicación en ≤11. No obligatorio para instalar. -->
     <uses-feature
         android:name="android.hardware.bluetooth_le"

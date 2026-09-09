@@ -111,6 +111,59 @@ describe("BleTransport: prescan LE antes del connect (causa raíz del módulo BL
     await t.close();
   });
 
+  it("Android 12/13: pide Ubicación; si la niegan reintenta sin ella; scan en baja latencia", async () => {
+    const initOpts: Array<boolean | undefined> = [];
+    let scanMode: number | undefined;
+    const client: BleClientLike = {
+      initialize: async (o) => {
+        initOpts.push(o?.androidNeverForLocation);
+        // el usuario NIEGA la ubicación en el primer intento (androidNeverForLocation:false)
+        if (o?.androidNeverForLocation === false) throw new Error("Permission denied.");
+      },
+      connect: async () => {},
+      disconnect: async () => {},
+      getServices: async () => [
+        {
+          uuid: HM10_SERVICE,
+          characteristics: [{ uuid: HM10_CHAR, properties: { notify: true, write: true } }],
+        },
+      ],
+      startNotifications: async () => {},
+      stopNotifications: async () => {},
+      requestLEScan: async (o, cb: (r: BleScanHit) => void) => {
+        scanMode = o.scanMode;
+        cb({ device: { deviceId: MAC, name: "RS232\\485" } });
+      },
+      stopLEScan: async () => {},
+      isLocationEnabled: async () => false,
+    };
+    const t = new BleTransport(MAC, { client, sleep: instant });
+    await t.open();
+    expect(t.status()).toBe("connected");
+    // 1º con ubicación (false) → negado → 2º sin ubicación (true): no bloquea a Android 14+
+    expect(initOpts).toEqual([false, true]);
+    expect(scanMode).toBe(2); // SCAN_MODE_LOW_LATENCY, como Serial Bluetooth Terminal
+    await t.close();
+  });
+
+  it("si NO aparece en el scan y la Ubicación está APAGADA, el error lo dice (Android 12/13)", async () => {
+    const client: BleClientLike = {
+      initialize: async () => {},
+      connect: async () => {
+        throw new Error("Connection timeout.");
+      },
+      disconnect: async () => {},
+      getServices: async () => [],
+      startNotifications: async () => {},
+      stopNotifications: async () => {},
+      requestLEScan: async () => {}, // nadie anuncia
+      stopLEScan: async () => {},
+      isLocationEnabled: async () => false,
+    };
+    const t = new BleTransport(MAC, { client, sleep: instant });
+    await expect(t.open()).rejects.toThrow(/UBICACIÓN del teléfono está APAGADA/);
+  });
+
   it("cliente sin scan (fakes/legado): se salta el prescan y conecta igual", async () => {
     const { client, calls } = fakeClient({ advertises: true, withScan: false });
     const t = new BleTransport(MAC, { client, sleep: instant });
