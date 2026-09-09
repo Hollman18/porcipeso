@@ -2998,6 +2998,8 @@ function btFailActions() {
     { label: '🔍 Diagnóstico', onclick: runBtDiagnose },
     // Xiaomi/MIUI: el scan BLE puede venir vacío con la Ubicación apagada
     { label: '📍 Encender Ubicación', onclick: () => openBtDeepLink('/api/bt/location/open') },
+    // prueba LIMPIA del scan BLE del teléfono: ¿ve el módulo o no? (dato decisivo)
+    { label: '🔬 ¿El teléfono ve el módulo?', onclick: runBleProbe },
   ];
 }
 
@@ -3035,6 +3037,37 @@ async function runBtDiagnose() {
     : `✓ Bluetooth OK (Android nivel ${d.android_sdk}, permisos concedidos, Ubicación encendida).\n` +
       'Si aún no conecta, el módulo puede estar TOMADO por otro teléfono: apágale el Bluetooth a ese teléfono, o reinicia el módulo (quítale la corriente 5 s).';
   wizResult(problems.length ? 'fail' : 'ok', msg, btFailActions());
+}
+
+/* 🔬 Prueba LIMPIA del scan BLE: cancela el clásico y el scan anterior, espera
+   y escanea 8 s en baja latencia. Muestra TODO lo que el teléfono ve por BLE.
+   Si el módulo NO sale aquí, no es la app: está apagado, tomado por otro
+   (la Terminal abierta) o Android bloqueó los scans (5 cada 30 s). */
+async function runBleProbe() {
+  wizResult('', '🔬 Escaneando por BLE 8 segundos… (deja el módulo encendido y la Terminal CERRADA)');
+  let r = null;
+  try { r = await apiJson('/api/bt/ble-probe'); }
+  catch (e) { wizResult('fail', 'No pude escanear: ' + (e?.message || 'sin plugin BLE (¿desktop?)'), btFailActions()); return; }
+  const devs = Array.isArray(r?.devices) ? r.devices : [];
+  if (!devs.length) {
+    wizResult('fail',
+      'El teléfono NO vio ningún dispositivo BLE en 8 s.\n' +
+      'Causas reales: módulo apagado/lejos · módulo TOMADO por otro (cierra la Terminal, apaga el BT del otro teléfono, quítale corriente 5 s) · ' +
+      'Android bloqueó los scans por reintentos seguidos (espera 30 s) · Ubicación apagada/sin permiso.',
+      btFailActions());
+    return;
+  }
+  const lines = devs.map(d => {
+    const n = d.name || 'Dispositivo BT';
+    const hit = /rs232|485|bt24|ble|hm|uart|serial/i.test(n) ? ' ⬅ parece el módulo' : '';
+    return `• ${n}  (${d.address})${hit}`;
+  });
+  const found = devs.some(d => /rs232|485|bt24/i.test(d.name || ''));
+  wizResult(found ? 'ok' : '',
+    `El teléfono SÍ ve ${devs.length} dispositivo(s) por BLE:\n` + lines.join('\n') +
+    (found ? '\n\n✓ El módulo se ve. Toca "Reintentar": ahora conecto directo sin volver a escanear.' :
+             '\n\n⚠ El módulo NO está entre ellos: apagado, lejos, o tomado por otro (Terminal/otro teléfono).'),
+    btFailActions());
 }
 
 let lastKg = null;

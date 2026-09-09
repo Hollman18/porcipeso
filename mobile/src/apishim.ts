@@ -177,6 +177,8 @@ export interface BackendDeps {
     startBleScan?: () => Promise<void>;
     pollBleScan?: () => Promise<{ devices: Array<{ name: string; address: string }> }>;
     stopBleScan?: () => Promise<void>;
+    /** Cancela el inquiry clásico (libera la radio antes de un scan/connect BLE). */
+    cancelDiscovery?: () => Promise<void>;
     openLocationSettings?: () => Promise<void>;
     listUsb?: () => Promise<UsbDeviceInfo[]>;
     makeTransport?: (
@@ -611,6 +613,7 @@ export class LocalBackend {
     if (method === "POST" && path === "/api/bt/app-settings/open") return this.btAppSettingsOpen();
     if (method === "POST" && path === "/api/bt/settings/open") return this.btSettingsOpen();
     if (method === "GET" && path === "/api/bt/diagnose") return this.btDiagnoseRoute();
+    if (method === "GET" && path === "/api/bt/ble-probe") return this.btBleProbe();
     if (method === "GET" && path === "/api/usb/devices") return this.usbDevices();
 
     // Auto-actualización: mismo contrato que porcipeso/api/updatecheck.py
@@ -734,33 +737,88 @@ export class LocalBackend {
    *  El scan BLE arranca EN PARALELO (best-effort): si el módulo del cliente
    *  es BLE, sus cercanos aparecen junto a los clásicos. Un fallo del scan
    *  BLE (equipo sin BLE, etc.) NO tumba el discovery clásico. */
+  /** Ventaja del scan BLE antes de arrancar el inquiry clásico (ms). El inquiry
+   *  (~12 s) acapara la radio y en varios chipsets Xiaomi/MediaTek el scan LE
+   *  no recibe NADA mientras corre: la app de referencia (SBT) solo hace LE. */
+  static readonly BLE_HEAD_START_MS = 3000;
+
   private async btDiscoveryStart(): Promise<JsonResponse> {
+    const serial = await import("./serial");
+    // 1) BLE PRIMERO y SOLO durante unos segundos — best-effort: el MOTIVO del
+    // fallo se GUARDA y viaja en el poll (ble_error). En Android 6–11 el scan
+    // BLE exige Ubicación; en Xiaomi 12/13 también. Como el módulo de campo es
+    // BLE, un fallo silencioso aquí = "no aparece" sin explicación.
     try {
-      const start =
-        this.serialDeps?.startDiscovery ?? (await import("./serial")).startBtDiscovery;
+      const startBle = this.serialDeps?.startBleScan ?? serial.startBleScan;
+      await startBle();
+      this.bleScanError = null;
+      // ventaja al LE solo en el camino REAL (los tests inyectan startDiscovery
+      // y usan fake timers: un setTimeout real los colgaría)
+      if (!this.serialDeps?.startDiscovery) {
+        await new Promise<void>((r) => setTimeout(r, LocalBackend.BLE_HEAD_START_MS));
+      }
+    } catch (e) {
+      this.bleScanError = serial.humanizeSerialError(e);
+    }
+    // 2) DESPUÉS el discovery clásico (emparejados/clásicos): sus errores sí
+    // son fatales para la búsqueda (BT apagado, Ubicación en ≤11, permiso).
+    try {
+      const start = this.serialDeps?.startDiscovery ?? serial.startBtDiscovery;
       await start();
     } catch (e) {
-      const serial = await import("./serial");
       const msg = serial.humanizeSerialError(e);
       if (msg === serial.LOCATION_OFF_MSG) return err(409, msg);
       if (/permiso .*denegado/i.test(msg)) return err(403, msg);
       return err(503, `Bluetooth no disponible: ${msg}`);
     }
-    // BLE en paralelo — best-effort, nunca rompe el discovery clásico… pero el
-    // MOTIVO del fallo se GUARDA y viaja en el poll (ble_error): en Android 6–11
-    // el scan BLE exige Ubicación (servicio + permiso) y, como el módulo de
-    // campo es BLE, un fallo silencioso aquí = "no aparece" sin explicación.
-    try {
-      const startBle = this.serialDeps?.startBleScan ?? (await import("./serial")).startBleScan;
-      await startBle();
-      this.bleScanError = null;
-    } catch (e) {
-      const { humanizeSerialError } = await import("./serial");
-      this.bleScanError = humanizeSerialError(e);
-    }
     // contrato de start intacto ({started:true}); el motivo del fallo BLE viaja
     // en cada poll (ble_error), que es lo que la UI lee durante la búsqueda.
     return ok({ started: true });
+  }
+
+  /**
+   * 🔬 Prueba LIMPIA del scan BLE del teléfono: cancela el inquiry clásico y el
+   * scan LE anterior (contención de radio + límite de 5 scans/30 s de Android),
+   * espera un momento y escanea ~8 s en baja latencia. Devuelve TODO lo que el
+   * teléfono ve por BLE (nombre + dirección) — el dato decisivo cuando "la
+   * Terminal sí lo ve y la app no".
+   */
+  private async btBleProbe(): Promise<JsonResponse> {
+    const serial = await import("./serial");
+    const cancelClassic = this.serialDeps?.cancelDiscovery ?? serial.cancelBtDiscovery;
+    const stopBle = this.serialDeps?.stopBleScan ?? serial.stopBleScan;
+    const startBle = this.serialDeps?.startBleScan ?? serial.startBleScan;
+    const pollBle = this.serialDeps?.pollBleScan ?? serial.pollBleScan;
+    try {
+      await cancelClassic();
+    } catch {
+      /* no había discovery */
+    }
+    try {
+      await stopBle();
+    } catch {
+      /* no había scan */
+    }
+    const tick = () => new Promise<void>((r) => setTimeout(r, 250));
+    await tick(); await tick(); // ~500 ms para que la radio quede libre
+    try {
+      await startBle();
+    } catch (e) {
+      return err(503, `No pude iniciar el scan BLE: ${serial.humanizeSerialError(e)}`);
+    }
+    for (let i = 0; i < 32; i++) await tick(); // ~8 s
+    let devices: Array<{ name: string; address: string }> = [];
+    try {
+      devices = (await pollBle()).devices ?? [];
+    } finally {
+      try {
+        await stopBle();
+      } catch {
+        /* nada */
+      }
+    }
+    for (const d of devices) if (d?.address) this.btBleAddrCache.add(d.address);
+    return ok({ devices, seconds: 8 });
   }
 
   /** Acumulado EN VIVO: emparejados (cache, clásicos) + cercanos CLÁSICOS +
@@ -889,11 +947,31 @@ export class LocalBackend {
       // UUID en iOS). GATT-notify → MISMO pipeline de parsers que el clásico.
       // onPhase → la UI muestra "buscando por BLE / conectando / escuchando" en
       // vivo, para que el usuario NUNCA vea la pantalla congelada en "Escuchando…".
+      // RADIO LIBRE antes del BLE: el inquiry clásico (~12 s) y el scan LE de la
+      // búsqueda siguen corriendo cuando el usuario toca el módulo; en varios
+      // chipsets Xiaomi/MediaTek el prescan LE no recibe NADA mientras tanto, y
+      // cada scan extra cuenta para el límite de Android (5 scans / 30 s).
+      try {
+        await serial.cancelBtDiscovery();
+      } catch {
+        /* no había discovery */
+      }
+      try {
+        await serial.stopBleScan();
+      } catch {
+        /* no había scan */
+      }
+      await new Promise<void>((r) => setTimeout(r, 300));
+      // Si el scan LE de la búsqueda YA vio esta dirección, el stack conoce su
+      // tipo de dirección: conectar directo, sin gastar otro scan (throttle).
+      const addr = String(opts.address ?? "").toUpperCase();
+      const alreadySeen = Array.from(this.btBleAddrCache).some((a) => a.toUpperCase() === addr);
       return new serial.BleTransport(opts.address as string, {
         onPhase: (phase, detail) => this.hub.broadcast({ type: "detect_phase", phase, detail }),
         // nombre anunciado: si el módulo dual-mode anuncia por BLE con OTRA
         // dirección, el prescan lo encuentra por nombre y conecta a esa.
         expectName: opts.name,
+        alreadySeen,
       });
     }
     return new serial.RawBtTransport(opts.address as string);

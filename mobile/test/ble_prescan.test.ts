@@ -164,6 +164,16 @@ describe("BleTransport: prescan LE antes del connect (causa raíz del módulo BL
     await expect(t.open()).rejects.toThrow(/UBICACIÓN del teléfono está APAGADA/);
   });
 
+  it("alreadySeen: si la búsqueda ya vio la dirección por LE, NO vuelve a escanear y conecta directo", async () => {
+    const { client, calls } = fakeClient({ advertises: true });
+    const t = new BleTransport(MAC, { client, sleep: instant, alreadySeen: true });
+    await t.open();
+    expect(t.status()).toBe("connected");
+    expect(calls).not.toContain("requestLEScan"); // sin gastar otro scan (5 cada 30 s)
+    expect(calls).toContain("connect");
+    await t.close();
+  });
+
   it("cliente sin scan (fakes/legado): se salta el prescan y conecta igual", async () => {
     const { client, calls } = fakeClient({ advertises: true, withScan: false });
     const t = new BleTransport(MAC, { client, sleep: instant });

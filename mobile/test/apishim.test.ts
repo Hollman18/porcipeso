@@ -764,6 +764,65 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     }
   });
 
+  it("discovery: el scan BLE arranca ANTES que el inquiry clásico (radio libre para el LE)", async () => {
+    const order: string[] = [];
+    const bt = await makeBackend({
+      serial: {
+        listBt: async () => [],
+        startBleScan: async () => {
+          order.push("ble");
+        },
+        startDiscovery: async () => {
+          order.push("classic");
+        },
+        pollDiscovery: async () => ({ devices: [], finished: true }),
+        pollBleScan: async () => ({ devices: [] }),
+        stopBleScan: async () => {},
+      },
+    });
+    try {
+      const start = await call(bt, "POST", "/api/bt/discovery/start", {});
+      expect(start.status).toBe(200);
+      expect(order).toEqual(["ble", "classic"]); // BLE primero; el clásico después
+    } finally {
+      await bt.repo.close();
+    }
+  });
+
+  it("GET /api/bt/ble-probe: cancela clásico + scan previo y devuelve TODO lo que el teléfono ve por BLE", async () => {
+    const calls: string[] = [];
+    const bt = await makeBackend({
+      serial: {
+        cancelDiscovery: async () => {
+          calls.push("cancelClassic");
+        },
+        stopBleScan: async () => {
+          calls.push("stopBle");
+        },
+        startBleScan: async () => {
+          calls.push("startBle");
+        },
+        pollBleScan: async () => ({ devices: [{ name: "RS232\\485", address: "48:87:2D:9D:D5:71" }] }),
+      },
+    });
+    try {
+      const p = call(bt, "GET", "/api/bt/ble-probe");
+      let settled: Awaited<typeof p> | null = null;
+      void p.then((r) => (settled = r));
+      for (let i = 0; i < 60 && settled === null; i++) {
+        await vi.advanceTimersByTimeAsync(250); // la sonda avanza en ticks de 250 ms (~8 s)
+      }
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(res.json.devices).toEqual([{ name: "RS232\\485", address: "48:87:2D:9D:D5:71" }]);
+      // radio libre ANTES de escanear, y el scan se detiene al terminar
+      expect(calls.slice(0, 3)).toEqual(["cancelClassic", "stopBle", "startBle"]);
+      expect(calls[calls.length - 1]).toBe("stopBle");
+    } finally {
+      await bt.repo.close();
+    }
+  });
+
   it("POST /api/scale/detect con profile_id 'auto' detecta parser sin marca elegida", async () => {
     const { stringToBytes } = await import("../src/parsers");
     await import("../src/detector");

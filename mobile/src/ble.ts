@@ -369,6 +369,12 @@ export interface BleOptions {
    * scan lo ve por NOMBRE bajo otra dirección, se conecta a ESA.
    */
   expectName?: string;
+  /**
+   * La dirección YA fue vista por un scan LE en esta sesión (búsqueda): el stack
+   * conoce su tipo de dirección → se salta el prescan y conecta directo. Ahorra
+   * ~8 s y un scan (Android limita a 5 scans cada 30 s por app).
+   */
+  alreadySeen?: boolean;
 }
 
 function dataViewToBytes(value: DataView): Uint8Array {
@@ -401,6 +407,7 @@ export class BleTransport implements ByteTransport {
   /** Ubicación del teléfono encendida al iniciar (null = no se pudo saber). */
   private locationOn: boolean | null = null;
   private readonly expectName: string;
+  private readonly alreadySeen: boolean;
 
   private readonly backoffMs: number[];
   private readonly noDataTimeoutMs: number;
@@ -423,6 +430,7 @@ export class BleTransport implements ByteTransport {
     this.onStatus = opts.onStatus ?? (() => {});
     this.onPhase = opts.onPhase ?? (() => {});
     this.expectName = (opts.expectName ?? "").trim();
+    this.alreadySeen = !!opts.alreadySeen;
   }
 
   status(): LinkStatus {
@@ -476,6 +484,12 @@ export class BleTransport implements ByteTransport {
   private async prescanForDevice(): Promise<boolean> {
     const c = this.client;
     if (!c.requestLEScan || !c.stopLEScan) return false; // fake sin scan (tests)
+    if (this.alreadySeen) {
+      // la búsqueda ya lo vio por LE: el stack conoce el tipo de dirección →
+      // conectar directo, sin gastar otro scan (límite 5 scans / 30 s)
+      this.onPhase("ble_prescan", "ya visto en la búsqueda: conecto directo");
+      return true;
+    }
     const target = normalizeMac(this.deviceId);
     const wantName = this.expectName.toLowerCase();
     this.onPhase("ble_prescan");
@@ -549,7 +563,7 @@ export class BleTransport implements ByteTransport {
       // GATT no conecta" (bloqueo del stack / módulo que rechaza).
       const why = this.prescanFound
         ? `el módulo SÍ apareció en el scan BLE (${this.deviceId}) pero el GATT no conectó`
-        : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono?)" +
+        : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono —p. ej. la Terminal abierta—?). Si reintentaste varias veces seguidas, Android limita los scans a 5 cada 30 s: espera medio minuto" +
           (this.locationOn === false
             ? " · además la UBICACIÓN del teléfono está APAGADA: en Android 6–11 es OBLIGATORIA para ver dispositivos Bluetooth y en Xiaomi 12/13 también hace falta — enciéndela y reintenta"
             : "");
