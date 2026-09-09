@@ -2309,7 +2309,7 @@ function btLocationWarning(list, diag) {
   const off = !diag || diag.location_enabled === false;
   let txt = old
     ? `📍 Este teléfono es <b>Android antiguo</b> (nivel ${diag.android_sdk}): para ver dispositivos Bluetooth Android exige `
-    : '📍 Para buscar dispositivos cercanos, Android exige ';
+    : '📍 En <b>Xiaomi/MIUI (Android 12/13)</b> la búsqueda BLE llega <b>vacía y sin aviso</b> si falta ';
   const partes = [];
   if (off) partes.push('la <b>Ubicación encendida</b>');
   if (noPerm) partes.push('el <b>permiso de Ubicación</b> para PorciPeso');
@@ -2365,7 +2365,9 @@ async function liveBtScan(onPick) {
   let diag = null;
   try { diag = (await apiJson('/api/bt/diagnose'))?.diagnosis ?? null; } catch { diag = null; }
   if (dead()) return;
-  if (diag && diag.android_sdk < 31 && (diag.location_enabled === false || diag.location_permission === false)) {
+  // En Android 12/13 (Xiaomi/MIUI) el scan BLE llega VACÍO y SIN ERROR si la app
+  // no tiene Ubicación → hay que avisar igual, no solo en Android < 12.
+  if (diag && (diag.location_enabled === false || diag.location_permission === false)) {
     btLocationWarning(list, diag);
   }
 
