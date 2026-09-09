@@ -58,12 +58,17 @@
          Android 12+ (API 31): BLUETOOTH_SCAN + BLUETOOTH_CONNECT.
          Android <= 11: permisos legacy BLUETOOTH/BLUETOOTH_ADMIN +
          ubicación (requisito del discovery clásico pre-12). -->
-    <!-- SIN neverForLocation: la doc oficial admite que esa bandera FILTRA
-         resultados del scan, y en Xiaomi/MIUI 12/13 el scan BLE llega VACÍO si
-         la app no tiene Ubicación. Pedimos Ubicación también en 12/13 (como la
-         app de referencia) → mismo alcance que ella desde Android 5.1. -->
+    <!-- CON neverForLocation (12+): sin esta bandera Android exige Ubicación
+         para ENTREGAR CUALQUIER resultado de scan — también el discovery CLÁSICO
+         de PorciSerialPlugin, que en 12+ no pide Ubicación → en v2.9.8 el módulo
+         desapareció de la lista. Con la bandera, la lista clásica funciona sin
+         Ubicación como siempre. La Ubicación se pide APARTE en runtime en el
+         camino BLE (initializeBleClient): en Xiaomi/MIUI 12/13 el scan BLE
+         llega vacío si la app no la TIENE concedida, y tenerla no choca con la
+         bandera. -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission
         android:name="android.permission.BLUETOOTH_CONNECT"
