@@ -747,6 +747,14 @@ public class PorciSerialPlugin extends Plugin {
             }
         }
         res.put("paired_count", paired);
+        // UBICACIÓN: en Android 6–11 (API 23–30) el sistema NO entrega ningún
+        // dispositivo (clásico ni BLE) sin el servicio de Ubicación ENCENDIDO y el
+        // permiso concedido. En 12+ con neverForLocation no es obligatoria (pero
+        // en Xiaomi/MIUI 12/13 tenerla ayuda al scan BLE).
+        res.put("location_required", !api31);
+        res.put("location_enabled", isLocationEnabled());
+        res.put("location_permission",
+                getPermissionState(LOCATION_ALIAS) == PermissionState.GRANTED);
         call.resolve(res);
     }
 

@@ -551,7 +551,7 @@ export class BleTransport implements ByteTransport {
         ? `el módulo SÍ apareció en el scan BLE (${this.deviceId}) pero el GATT no conectó`
         : "el módulo NO apareció en el scan BLE (¿apagado, lejos, o ya conectado a OTRO teléfono?)" +
           (this.locationOn === false
-            ? " · además la UBICACIÓN del teléfono está APAGADA: en Android 12/13 (Xiaomi) el scan BLE llega vacío sin ella — enciéndela y reintenta"
+            ? " · además la UBICACIÓN del teléfono está APAGADA: en Android 6–11 es OBLIGATORIA para ver dispositivos Bluetooth y en Xiaomi 12/13 también hace falta — enciéndela y reintenta"
             : "");
       const detail = e instanceof Error ? e.message : String(e);
       throw new Error(`ble_connect: ${why} · detalle: ${detail}`);

@@ -268,6 +268,10 @@ export class LocalBackend {
    * anunciaron por BLE.
    */
   private btBleAddrCache = new Set<string>();
+  /** Motivo (humano) del último fallo del scan BLE del discovery, o null. En
+   *  Android 6–11 el scan BLE exige Ubicación (servicio + permiso): si falla,
+   *  el módulo BLE nunca aparece y antes se tragaba en silencio. */
+  private bleScanError: string | null = null;
   private lastReadingBroadcast = 0;
   private eventIdMap = new Map<number, number>(); // id de DB -> id interno engine
   /** Cadena que serializa escrituras DB + broadcasts (orden de app.py). */
@@ -742,13 +746,20 @@ export class LocalBackend {
       if (/permiso .*denegado/i.test(msg)) return err(403, msg);
       return err(503, `Bluetooth no disponible: ${msg}`);
     }
-    // BLE en paralelo — best-effort, nunca rompe el discovery clásico.
+    // BLE en paralelo — best-effort, nunca rompe el discovery clásico… pero el
+    // MOTIVO del fallo se GUARDA y viaja en el poll (ble_error): en Android 6–11
+    // el scan BLE exige Ubicación (servicio + permiso) y, como el módulo de
+    // campo es BLE, un fallo silencioso aquí = "no aparece" sin explicación.
     try {
       const startBle = this.serialDeps?.startBleScan ?? (await import("./serial")).startBleScan;
       await startBle();
-    } catch {
-      /* sin BLE (equipo sin soporte, BT apagado, plugin ausente): seguimos con clásicos */
+      this.bleScanError = null;
+    } catch (e) {
+      const { humanizeSerialError } = await import("./serial");
+      this.bleScanError = humanizeSerialError(e);
     }
+    // contrato de start intacto ({started:true}); el motivo del fallo BLE viaja
+    // en cada poll (ble_error), que es lo que la UI lee durante la búsqueda.
     return ok({ started: true });
   }
 
@@ -782,6 +793,9 @@ export class LocalBackend {
       return ok({
         devices: serial.mergeBtDevices(this.btPairedCache, devices, bleDevices),
         finished,
+        // motivo del último fallo del scan BLE (Android 6–11: Ubicación) — solo
+        // cuando existe, para no cambiar la forma previa {devices, finished}
+        ...(this.bleScanError ? { ble_error: this.bleScanError } : {}),
       });
     } catch (e) {
       const { humanizeSerialError } = await import("./serial");

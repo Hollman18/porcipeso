@@ -737,6 +737,33 @@ describe("apishim — flujo de sesión completa con la báscula simulada", () =>
     }
   });
 
+  it("discovery: si el scan BLE falla (Android 6–11 sin Ubicación) el motivo viaja en ble_error y no se traga", async () => {
+    const bt = await makeBackend({
+      serial: {
+        listBt: async () => [],
+        startDiscovery: async () => {},
+        pollDiscovery: async () => ({ devices: [], finished: true }),
+        // el plugin BLE rechaza porque falta el permiso de Ubicación (Android ≤11)
+        startBleScan: async () => {
+          throw new Error("Permission denied.");
+        },
+        pollBleScan: async () => ({ devices: [] }),
+        stopBleScan: async () => {},
+      },
+    });
+    try {
+      const start = await call(bt, "POST", "/api/bt/discovery/start", {});
+      expect(start.status).toBe(200); // el clásico sigue; el fallo BLE NO tumba el discovery
+      expect(start.json).toEqual({ started: true }); // contrato de start intacto
+      const poll = await call(bt, "GET", "/api/bt/discovery");
+      expect(poll.status).toBe(200);
+      expect(poll.json.finished).toBe(true);
+      expect(String(poll.json.ble_error)).toMatch(/denegado|denied/i); // la UI lo muestra con botones
+    } finally {
+      await bt.repo.close();
+    }
+  });
+
   it("POST /api/scale/detect con profile_id 'auto' detecta parser sin marca elegida", async () => {
     const { stringToBytes } = await import("../src/parsers");
     await import("../src/detector");

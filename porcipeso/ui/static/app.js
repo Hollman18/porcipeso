@@ -2298,17 +2298,38 @@ function renderBtDeviceRows(list, devices, onPick) {
   }
 }
 
-/* aviso accionable MIUI/Android: Ubicación del sistema apagada */
-function btLocationWarning(list) {
+/* aviso accionable: Ubicación del sistema apagada y/o permiso de Ubicación
+   sin conceder. En Android 6–11 son OBLIGATORIOS para ver cualquier
+   dispositivo Bluetooth; `diag` (de /api/bt/diagnose) afina el texto. */
+function btLocationWarning(list, diag) {
   const warn = document.createElement('div');
   warn.className = 'empty';
-  warn.innerHTML = '📍 Para buscar dispositivos cercanos, Android exige la <b>Ubicación encendida</b> — actívala un momento y vuelve a buscar. ';
-  const b = document.createElement('button');
-  b.className = 'btn-primary';
-  b.textContent = 'Activar ubicación';
-  b.onclick = () => { apiJson('/api/bt/location/open', { method: 'POST', body: {} }).catch(() => {}); };
+  const old = diag && diag.android_sdk < 31;
+  const noPerm = diag && diag.location_permission === false;
+  const off = !diag || diag.location_enabled === false;
+  let txt = old
+    ? `📍 Este teléfono es <b>Android antiguo</b> (nivel ${diag.android_sdk}): para ver dispositivos Bluetooth Android exige `
+    : '📍 Para buscar dispositivos cercanos, Android exige ';
+  const partes = [];
+  if (off) partes.push('la <b>Ubicación encendida</b>');
+  if (noPerm) partes.push('el <b>permiso de Ubicación</b> para PorciPeso');
+  txt += (partes.length ? partes.join(' y ') : 'la <b>Ubicación encendida</b>') + ' — arréglalo y vuelve a buscar. ';
+  warn.innerHTML = txt;
   warn.appendChild(document.createElement('br'));
-  warn.appendChild(b);
+  if (off) {
+    const b = document.createElement('button');
+    b.className = 'btn-primary';
+    b.textContent = '📍 Activar ubicación';
+    b.onclick = () => { apiJson('/api/bt/location/open', { method: 'POST', body: {} }).catch(() => {}); };
+    warn.appendChild(b);
+  }
+  if (noPerm) {
+    const p = document.createElement('button');
+    p.className = 'btn-link';
+    p.textContent = '⚙ Dar permiso de Ubicación';
+    p.onclick = () => { apiJson('/api/bt/app-settings/open', { method: 'POST', body: {} }).catch(() => {}); };
+    warn.appendChild(p);
+  }
   list.appendChild(warn);
 }
 
@@ -2338,6 +2359,16 @@ async function liveBtScan(onPick) {
   }
   if (status && status.isConnected) status.textContent = shown.length ? 'Toca tu báscula para conectarla:' : '';
 
+  // 0) Android < 12 (teléfonos viejos): el sistema NO entrega NINGÚN dispositivo
+  // (clásico ni BLE) sin Ubicación ENCENDIDA + permiso de Ubicación. Avisar
+  // ANTES de que la lista salga vacía, con los botones para arreglarlo.
+  let diag = null;
+  try { diag = (await apiJson('/api/bt/diagnose'))?.diagnosis ?? null; } catch { diag = null; }
+  if (dead()) return;
+  if (diag && diag.android_sdk < 31 && (diag.location_enabled === false || diag.location_permission === false)) {
+    btLocationWarning(list, diag);
+  }
+
   // 2) CERCANOS en vivo: discovery nativo (~12 s) con spinner
   const spin = document.createElement('div');
   spin.className = 'empty bt-spin';
@@ -2358,6 +2389,7 @@ async function liveBtScan(onPick) {
   }
 
   let merged = shown;
+  let lastBleError = null; // motivo del fallo del scan BLE (Android 6–11: Ubicación)
   for (let i = 0; i < 30; i++) { // ~21 s de tope por si FINISHED no llega
     await waitMs(700);
     if (dead()) return;
@@ -2370,14 +2402,15 @@ async function liveBtScan(onPick) {
       renderBtDeviceRows(list, merged, onPick); // agrega cercanos EN VIVO
       list.appendChild(spin);
     }
+    if (d?.ble_error) lastBleError = d.ble_error;
     if (d?.finished) break;
   }
   if (dead()) return;
   spin.remove();
-  finishBtScan(list, merged, btn);
+  finishBtScan(list, merged, btn, lastBleError);
 }
 
-function finishBtScan(list, devices, btn) {
+function finishBtScan(list, devices, btn, bleError) {
   if (btn) btn.disabled = false;
   const cercanos = devices.filter(d => !d.paired).length;
   if (!devices.length) {
@@ -2387,6 +2420,24 @@ function finishBtScan(list, devices, btn) {
     note.className = 'empty';
     note.innerHTML = 'No aparecieron cercanos nuevos. Si el tuyo no está: empareja el módulo <b>Clásico</b> en Ajustes → Bluetooth (PIN 1234), o acerca y enciende el módulo <b>BLE</b>, y vuelve a buscar.';
     list.appendChild(note);
+  }
+  // El scan BLE FALLÓ (antes se tragaba en silencio): como el módulo de la
+  // báscula es BLE, sin este scan nunca aparece. Di el motivo y da los botones.
+  if (bleError && !devices.some(d => d.kind === 'ble')) {
+    const w = document.createElement('div');
+    w.className = 'empty';
+    const t = document.createElement('div');
+    t.textContent = '📡 No pude escanear por BLE (así se ve la báscula): ' + bleError;
+    w.appendChild(t);
+    const row = document.createElement('div');
+    row.style.marginTop = '8px';
+    for (const a of btFailActions()) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn-link'; b.textContent = a.label; b.onclick = a.onclick;
+      row.appendChild(b);
+    }
+    w.appendChild(row);
+    list.appendChild(w);
   }
 }
 
@@ -2963,10 +3014,23 @@ async function runBtDiagnose() {
     problems.push('❌ Falta el permiso «Dispositivos cercanos» (tócalo abajo).');
   }
   if (!d.bluetooth_on) problems.push('❌ El Bluetooth está apagado.');
-  if (d.paired_count === 0) problems.push('⚠ No hay ningún módulo emparejado — empareja con PIN 1234.');
+  // Ubicación: OBLIGATORIA en Android 6–11 (nivel < 31) para ver cualquier
+  // dispositivo; en 12/13 (Xiaomi) recomendada para el scan BLE.
+  const old = d.android_sdk < 31;
+  if (d.location_enabled === false) {
+    problems.push(old
+      ? `❌ La Ubicación del teléfono está APAGADA — en este Android (nivel ${d.android_sdk}) es OBLIGATORIA para ver dispositivos Bluetooth.`
+      : '⚠ La Ubicación del teléfono está apagada — en Xiaomi 12/13 el scan BLE puede venir vacío sin ella.');
+  }
+  if (d.location_permission === false) {
+    problems.push(old
+      ? '❌ Falta el permiso de Ubicación para PorciPeso (obligatorio en este Android) — tócalo abajo en «Permisos de la app».'
+      : '⚠ PorciPeso no tiene permiso de Ubicación — en Xiaomi 12/13 ayuda a que el scan BLE vea el módulo.');
+  }
+  if (d.paired_count === 0) problems.push('ℹ Ningún módulo emparejado (normal si tu módulo es BLE: no se empareja).');
   const msg = problems.length
     ? 'Diagnóstico Bluetooth:\n' + problems.join('\n')
-    : `✓ Bluetooth OK (Android ${d.android_sdk}, permiso concedido, ${d.paired_count} emparejado(s)).\n` +
+    : `✓ Bluetooth OK (Android nivel ${d.android_sdk}, permisos concedidos, Ubicación encendida).\n` +
       'Si aún no conecta, el módulo puede estar TOMADO por otro teléfono: apágale el Bluetooth a ese teléfono, o reinicia el módulo (quítale la corriente 5 s).';
   wizResult(problems.length ? 'fail' : 'ok', msg, btFailActions());
 }
