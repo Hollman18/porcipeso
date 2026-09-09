@@ -100,6 +100,9 @@ export interface BleClientLike {
   /** ¿Servicio de Ubicación del teléfono encendido? (Android 6–13 lo exige
    *  para que el scan BLE devuelva resultados; en Xiaomi/MIUI 12/13 también.) */
   isLocationEnabled?(): Promise<boolean>;
+  /** Re-descubre servicios GATT (el plugin hace refreshDeviceCache() antes):
+   *  en Xiaomi la 1ª lista de servicios puede llegar INCOMPLETA o de caché. */
+  discoverServices?(deviceId: string): Promise<void>;
 }
 
 /** MAC/id comparable: mayúsculas, sin espacios. */
@@ -570,8 +573,25 @@ export class BleTransport implements ByteTransport {
       const detail = e instanceof Error ? e.message : String(e);
       throw new Error(`ble_connect: ${why} · detalle: ${detail}`);
     }
-    const services = await this.client.getServices(this.deviceId);
-    const uart = pickUartCharacteristic(services);
+    // DESCUBRIMIENTO CON REINTENTO (caso de campo, Redmi Note 13 / MIUI 14): la
+    // 1ª lista de servicios puede llegar INCOMPLETA o de CACHÉ (solo Generic
+    // Access / Device Information, sin el FFE0 del módulo) aunque el módulo SÍ
+    // exponga FFE1 notify (verificado desde el Mac). El plugin ofrece
+    // discoverServices(), que hace refreshDeviceCache() y re-descubre — el
+    // "refresh services" de nRF Connect. Se reintenta hasta 2 veces.
+    let services = await this.client.getServices(this.deviceId);
+    let uart = pickUartCharacteristic(services);
+    for (let attempt = 1; !uart && attempt <= 2 && this.client.discoverServices; attempt++) {
+      this.onPhase("ble_connect", `servicios incompletos: re-descubriendo (${attempt}/2)`);
+      try {
+        await this.client.discoverServices(this.deviceId);
+      } catch {
+        /* si el refresh falla, se reintenta la lectura igual */
+      }
+      await this.sleep(500);
+      services = await this.client.getServices(this.deviceId);
+      uart = pickUartCharacteristic(services);
+    }
     if (!uart) {
       // sin NOTIFY no hay forma de recibir el peso: cierra limpio y avisa
       try {
@@ -707,6 +727,7 @@ interface RealBleModule {
   BleClient: BleClientLike & {
     isEnabled(): Promise<boolean>;
     isLocationEnabled(): Promise<boolean>;
+    discoverServices(deviceId: string): Promise<void>;
     requestLEScan(
       options: { allowDuplicates?: boolean; services?: string[]; scanMode?: number },
       callback: (result: { device: { deviceId: string; name?: string }; localName?: string }) => void,
@@ -733,6 +754,8 @@ function realBleClient(): BleClientLike {
     requestLEScan: async (o, cb) => (await loadRealBle()).requestLEScan(o, cb),
     stopLEScan: async () => (await loadRealBle()).stopLEScan(),
     isLocationEnabled: async () => (await loadRealBle()).isLocationEnabled(),
+    // re-descubrir servicios (con refresh de caché GATT): Xiaomi 1ª lista incompleta
+    discoverServices: async (id) => (await loadRealBle()).discoverServices(id),
     getServices: async (id) => (await loadRealBle()).getServices(id),
     startNotifications: async (id, s, c, cb) =>
       (await loadRealBle()).startNotifications(id, s, c, cb),

@@ -174,6 +174,60 @@ describe("BleTransport: prescan LE antes del connect (causa raíz del módulo BL
     await t.close();
   });
 
+  it("Xiaomi: si la 1ª lista de servicios llega INCOMPLETA (sin FFE0), re-descubre con refresh y encuentra FFE1", async () => {
+    let discoverCalls = 0;
+    let getCalls = 0;
+    const client: BleClientLike = {
+      initialize: async () => {},
+      connect: async () => {},
+      disconnect: async () => {},
+      getServices: async () => {
+        getCalls++;
+        // antes del refresh: solo Device Information (caso real del Redmi Note 13)
+        if (discoverCalls === 0) {
+          return [
+            {
+              uuid: "0000180a-0000-1000-8000-00805f9b34fb",
+              characteristics: [{ uuid: "00002a29-0000-1000-8000-00805f9b34fb", properties: { read: true } }],
+            },
+          ];
+        }
+        return [
+          {
+            uuid: HM10_SERVICE,
+            characteristics: [{ uuid: HM10_CHAR, properties: { notify: true, write: true } }],
+          },
+        ];
+      },
+      startNotifications: async () => {},
+      stopNotifications: async () => {},
+      discoverServices: async () => {
+        discoverCalls++;
+      },
+    };
+    const t = new BleTransport(MAC, { client, sleep: instant });
+    await t.open();
+    expect(t.status()).toBe("connected");
+    expect(discoverCalls).toBe(1); // un refresh bastó
+    expect(getCalls).toBe(2);
+    await t.close();
+  });
+
+  it("sin discoverServices en el cliente y sin UART: falla claro con el volcado GATT", async () => {
+    const client: BleClientLike = {
+      initialize: async () => {},
+      connect: async () => {},
+      disconnect: async () => {},
+      getServices: async () => [
+        { uuid: "0000180a-0000-1000-8000-00805f9b34fb", characteristics: [] },
+      ],
+      startNotifications: async () => {},
+      stopNotifications: async () => {},
+    };
+    const t = new BleTransport(MAC, { client, sleep: instant });
+    await expect(t.open()).rejects.toThrow(/no_uart/);
+  });
+
   it("cliente sin scan (fakes/legado): se salta el prescan y conecta igual", async () => {
     const { client, calls } = fakeClient({ advertises: true, withScan: false });
     const t = new BleTransport(MAC, { client, sleep: instant });

@@ -1292,6 +1292,13 @@ export class LocalBackend {
     const phaseOf = (k: K) => (k === "ble" ? "ble" : k === "usb" ? "usb" : "classic");
     const label = (k: K) => (k === "ble" ? "BLE" : k === "usb" ? "USB" : "Bluetooth clásico");
     const { humanizeSerialError } = await import("./serial");
+    // Si el fallo BLE fue "sin característica UART", adjunta la lista de
+    // servicios GATT que el teléfono vio (BleNoUartError.gattText): sin eso el
+    // mensaje humano no deja ver si la lista llegó incompleta o el módulo es raro.
+    const withGatt = (e: unknown, msg: string): string => {
+      const g = (e as { gattText?: string } | null)?.gattText;
+      return g ? `${msg}\n\nServicios GATT que vio el teléfono:\n${g}` : msg;
+    };
 
     let primaryErr: unknown = null;
     let primaryResult: Awaited<ReturnType<typeof runDetect>> | null = null;
@@ -1312,7 +1319,7 @@ export class LocalBackend {
       if (primaryResult !== null) {
         return ok({ ...primaryResult, used_transport: primary, fell_back: false, fell_back_ble: false });
       }
-      return err(502, `${label(primary)}: ` + humanizeSerialError(primaryErr));
+      return err(502, withGatt(primaryErr, `${label(primary)}: ` + humanizeSerialError(primaryErr)));
     }
     if (secondary === null) {
       // USB: sin respaldo — devuelve lo que hubo (resultado sin señal o error)
@@ -1345,10 +1352,16 @@ export class LocalBackend {
       // "lo mismo de siempre" sin saber que BLE también se intentó ni por qué.
       return err(
         502,
-        `Probé primero por ${label(primary)}: ` +
-          humanizeSerialError(primaryErr) +
-          `\n\nTambién por ${label(secondary)} y tampoco: ` +
-          humanizeSerialError(eSec),
+        withGatt(
+          eSec,
+          withGatt(
+            primaryErr,
+            `Probé primero por ${label(primary)}: ` +
+              humanizeSerialError(primaryErr) +
+              `\n\nTambién por ${label(secondary)} y tampoco: ` +
+              humanizeSerialError(eSec),
+          ),
+        ),
       );
     }
   }
