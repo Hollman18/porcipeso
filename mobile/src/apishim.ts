@@ -444,11 +444,13 @@ export class LocalBackend {
       this.lastReadingBroadcast = now;
       let state = "idle";
       let fase = "lote";
+      let cand_kg: number | null = null;
       if (this.engine !== null) {
         try {
           const snap = this.engine.snapshot();
           state = snap.state;
           fase = snap.fase ?? "lote";
+          cand_kg = snap.cand_kg ?? null;
         } catch {
           /* estado por defecto */
         }
@@ -459,6 +461,7 @@ export class LocalBackend {
         ts_ms: reading.ts_ms,
         state,
         fase,
+        cand_kg,
         // string crudo tal como lo muestra el indicador (el LED lo pinta
         // tal cual; null → la UI degrada a formato plano sin locale)
         raw: reading.raw ?? null,

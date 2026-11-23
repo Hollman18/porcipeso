@@ -99,6 +99,28 @@ def test_calibracion_referencia_exige_subir_y_bajar():
     assert snap.pending == 0
 
 
+def test_snapshot_cand_kg_es_el_peso_que_sera_la_referencia():
+    """bajar_prueba: cand_kg ya trae el peso del cerdo de prueba (la UI lo
+    muestra antes de ref_kg; antes salía "– kg") y es EXACTO la referencia."""
+    eng, events, _ = make_engine()
+    eng.open_session(1)
+    ts = now_ms()
+    ts = feed_level(eng, ts, 0.0)
+    assert eng.snapshot().cand_kg is None          # vacío: sin candidato
+    ts = feed_level(eng, ts, 98.0)
+    ts = feed_level(eng, ts, 101.5)                 # peak hold
+    snap = eng.snapshot()
+    assert snap.fase == "bajar_prueba"
+    assert snap.ref_kg is None
+    assert snap.cand_kg == pytest.approx(101.5)
+    ts = feed_level(eng, ts, 0.0)                   # se baja → REFERENCIA
+    assert events[0].delta_kg == pytest.approx(snap.cand_kg)
+    snap = eng.snapshot()
+    assert snap.fase == "lote"
+    assert snap.cand_kg is None                     # ya hay ref_kg
+    assert snap.ref_kg == pytest.approx(101.5)
+
+
 def test_calibracion_peak_hold_cerdo_inquieto():
     """Niveles estables 98 → 102 → 100 y se baja → ref = 102 (peak estable)."""
     eng, events, _ = make_engine()

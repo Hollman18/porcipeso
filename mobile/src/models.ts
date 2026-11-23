@@ -103,6 +103,9 @@ export interface EngineSnapshot {
   total_kg: number;
   pending: number; // eventos ambiguos sin confirmar
   fase: FaseT; // calibracion | bajar_prueba | lote | unidades (v2)
+  /** peso del cerdo de prueba esperando que lo bajen (peak de calibración);
+   *  null fuera de calibracion/bajar_prueba. Paridad con models.py. */
+  cand_kg?: number | null;
 }
 
 export interface ScaleProfile {

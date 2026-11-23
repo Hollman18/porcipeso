@@ -197,3 +197,33 @@ describe("registerReturned: promedio (lote) vs peso real (unidades)", () => {
     expect(snap.avg_kg!).toBeCloseTo(57.5, 5); // promedio intacto
   });
 });
+
+describe("cand_kg: peso del cerdo de prueba antes de ref_kg (paridad con engine.py)", () => {
+  it("bajar_prueba trae cand_kg = peak estable y es EXACTO la referencia", () => {
+    const events: WeighEvent[] = [];
+    let lastTs = 0;
+    const eng = new WeighingEngine(DEFAULT_ENGINE_CONFIG, (ev) => events.push(ev), null, () => lastTs);
+    const feed = (ts0: number, kg: number, n = 25): number => {
+      for (let i = 0; i < n; i++) {
+        lastTs = ts0 + i * 100;
+        eng.feed({ ts_ms: lastTs, kg } as Reading);
+      }
+      return ts0 + n * 100;
+    };
+    eng.openSession(1, "lote");
+    let ts = 1000;
+    ts = feed(ts, 0);
+    expect(eng.snapshot().cand_kg ?? null).toBeNull();
+    ts = feed(ts, 98);
+    ts = feed(ts, 101.5); // peak hold
+    let snap = eng.snapshot();
+    expect(snap.fase).toBe("bajar_prueba");
+    expect(snap.ref_kg).toBeNull();
+    expect(snap.cand_kg!).toBeCloseTo(101.5, 5);
+    ts = feed(ts, 0); // se baja → REFERENCIA
+    expect(events[0].delta_kg).toBeCloseTo(snap.cand_kg!, 5);
+    snap = eng.snapshot();
+    expect(snap.fase).toBe("lote");
+    expect(snap.cand_kg ?? null).toBeNull();
+  });
+});

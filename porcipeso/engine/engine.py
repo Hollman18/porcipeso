@@ -232,6 +232,7 @@ class WeighingEngine(Engine):
             total_kg=self._total_kg,
             pending=len(self._pending),
             fase=self._fase,
+            cand_kg=self._calib_candidate,
         )
 
     def close_session(self) -> EngineSnapshot:
