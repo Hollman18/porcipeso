@@ -188,3 +188,50 @@ def test_eliminar_lote_desde_datos(page, server_url):
     # vuelve a la lista y el lote ya no aparece
     expect(page.locator("#dvList")).to_have_class("subview active")
     expect(page.locator("#dataRows tr", has_text="LOTE-BORRAR-E2E")).to_have_count(0)
+
+
+# ----------------------------------- pregunta "¿Cuántos subieron?" (v2.9.15)
+
+def test_respuesta_a_pregunta_se_anota_una_sola_vez(page, server_url):
+    """Al responder «¿Cuántos subieron?», el backend re-emite el evento
+    confirmado por WS. La pantalla lo anotaba DOS veces: pesos por cerdo
+    duplicados (el veredicto parejo/disparejo salía falso) y el movimiento
+    repetido. Debe quedar UNA sola vez."""
+    expect = pw_sync.expect
+
+    def sim(action, **kw):
+        r = page.request.post(f"{server_url}/api/sim/action", data={"action": action, **kw})
+        assert r.ok, r.text()
+
+    page.goto(server_url)
+    page.evaluate("localStorage.removeItem('porcipeso_cfg')")
+    page.goto(server_url)
+    if page.locator("#bUseSim").is_visible():
+        page.click("#bUseSim")
+    page.click("#bStart")
+    page.click("#bModeLote")
+    page.click("#bComenzar")
+    expect(page.locator("#pvWeigh")).to_have_class("subview active")
+    page.wait_for_timeout(3500)  # base vacía estable
+
+    sim("pigs_on", n=1, kg_each=100.0)  # cerdo de prueba
+    expect(page.locator("#stepGuide")).to_contain_text("bájalo", timeout=30_000)
+    sim("pig_off")
+    expect(page.locator("#stepGuide")).to_contain_text("PASO 2", timeout=30_000)
+
+    sim("pigs_on", n=1, kg_each=250.0)  # 2,5 × promedio → el motor pregunta
+    botones = page.locator("#narrBtns button")
+    expect(botones.first).to_be_visible(timeout=30_000)
+    n = int(botones.first.text_content().strip())
+    botones.first.click()
+    expect(page.locator("#narrTxt")).to_contain_text("Anotado", timeout=10_000)
+    page.wait_for_timeout(2500)  # deja llegar el eco del confirm por WS
+
+    pesos = page.evaluate("APP.weights.length")
+    assert pesos == 1 + n, f"el grupo se anotó más de una vez: {pesos} pesos para 1 + {n}"
+    textos = page.evaluate("APP.moves.map(m => m.text || '')")
+    dijiste = [t for t in textos if t.startswith("Me dijiste que subieron")]
+    eco = [t for t in textos if t.startswith(("Subieron", "Subió 1"))]
+    assert len(dijiste) == 1, textos
+    assert eco == [], f"el eco del confirm se anotó como subida nueva: {eco}"
+    assert int(page.locator("#nCerdos").text_content()) == n
