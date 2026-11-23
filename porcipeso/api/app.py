@@ -370,14 +370,17 @@ def create_app(
             st.last_reading_broadcast = now
             state = "idle"
             fase = "lote"
+            cand_kg = None
             if engine is not None:
                 with contextlib.suppress(Exception):
                     snap = _snapshot_dict(engine.snapshot())
                     state = snap["state"]
                     fase = snap.get("fase", "lote")
+                    cand_kg = snap.get("cand_kg")
             hub.broadcast(
                 {"type": "reading", "kg": reading.kg,
                  "ts_ms": reading.ts_ms, "state": state, "fase": fase,
+                 "cand_kg": cand_kg,
                  # string crudo tal como lo muestra el indicador (LED de la
                  # UI lo pinta tal cual; null → la UI degrada a formato plano)
                  "raw": getattr(reading, "raw", None)}

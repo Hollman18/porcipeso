@@ -216,6 +216,7 @@ export class WeighingEngine {
       total_kg: this.totalKg,
       pending: this.pending.size,
       fase: this.fase,
+      cand_kg: this.calibCandidate,
     };
   }
 

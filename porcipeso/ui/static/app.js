@@ -653,9 +653,10 @@ function applyFase(fase, src) {
   // fases del flujo lote pisen la narración de unidades
   if (APP.mode === 'unidades' && fase !== 'unidades') return;
   APP.fase = fase;
-  // durante bajar_prueba el backend aún no confirma ref_kg: usamos el peso
-  // que está sobre la báscula (kg_now) como peso del cerdo de prueba
-  const ref = src?.ref_kg ?? APP.refKg ?? src?.kg_now ?? APP.candKg;
+  // durante bajar_prueba el backend aún no confirma ref_kg: el motor manda
+  // su candidato (cand_kg, el mismo valor que será la referencia); kg_now
+  // queda de respaldo para backends viejos que no lo mandan
+  const ref = src?.ref_kg ?? APP.refKg ?? src?.cand_kg ?? APP.candKg ?? src?.kg_now;
   if (fase === 'bajar_prueba' && ref != null) APP.candKg = ref;
   if (fase === 'calibracion') {
     setStep(1);
@@ -840,6 +841,8 @@ function onReading(m) {
   APP.lastReadingAt = Date.now();
   connCardLive(kg); // chip vivo de la tarjeta ⚙ Báscula (si está a la vista)
   rmLiveReading(m, kg); // LED crudo del monitor de datos (si está abierto)
+  // peso del cerdo de prueba que el motor ya tiene (antes de ref_kg)
+  if (m?.cand_kg != null && APP.refKg == null) APP.candKg = Number(m.cand_kg);
   if (m?.fase) { APP.faseSupported = true; if (APP.session) applyFase(m.fase, m); }
   setLed(ledText(m, kg));
   $('led').classList.add('pulse');
@@ -851,7 +854,9 @@ function onReading(m) {
   else if (st === 'estable') {
     if (!APP.session) return;
     if (APP.fase === 'bajar_prueba') {
-      ambient(`✓ Cerdo de prueba: ${fmt(APP.refKg ?? APP.candKg)} kg — ahora bájalo de la báscula`, 'calm');
+      const cand = APP.refKg ?? APP.candKg;
+      if (cand != null) setGuide(`✓ Cerdo de prueba: <b>${fmt(cand)} kg</b> — ahora bájalo de la báscula`);
+      ambient(`✓ Cerdo de prueba: ${fmt(cand)} kg — ahora bájalo de la báscula`, 'calm');
     } else if (APP.mode === 'unidades') {
       ambient(APP.unitCount
         ? 'Yo llevo la cuenta — bájalo y sube el siguiente cuando quieras'

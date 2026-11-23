@@ -104,6 +104,10 @@ class EngineSnapshot:
     #   bajar_prueba   → referencia capturada (peak estable); esperando que se baje
     #   lote           → plataforma vacía de nuevo; "sube todo el lote"
     fase: str = "lote"
+    #: peso del cerdo de prueba mientras se espera que lo bajen (peak estable
+    #: de la calibración); None fuera de calibracion/bajar_prueba. La UI lo
+    #: muestra ANTES de que exista ref_kg (antes salía "– kg").
+    cand_kg: Optional[float] = None
 
 
 @dataclass
