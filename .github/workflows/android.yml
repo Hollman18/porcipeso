@@ -51,6 +51,10 @@ jobs:
 
       - name: Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # el default ("tools platform-tools") pide el paquete legado 'tools',
+          # retirado del repositorio de Google: sdkmanager falla y tumba el build
+          packages: platform-tools
 
       - name: Node 22
         uses: actions/setup-node@v4
