@@ -235,3 +235,30 @@ def test_respuesta_a_pregunta_se_anota_una_sola_vez(page, server_url):
     assert len(dijiste) == 1, textos
     assert eco == [], f"el eco del confirm se anotó como subida nueva: {eco}"
     assert int(page.locator("#nCerdos").text_content()) == n
+
+
+# ------------------------- inicio de Pesaje tras conectar en ⚙ Báscula (v2.9.16)
+
+def test_inicio_pesaje_se_actualiza_al_volver_de_bascula(page, server_url):
+    """Conectar en ⚙ Báscula y tocar la pestaña Pesaje dejaba el inicio con el
+    estado del ARRANQUE: «Sin báscula — No hay báscula configurada», aunque ya
+    estuviera conectada y guardada. Al volver debe mostrar la báscula."""
+    expect = pw_sync.expect
+    # estado limpio (el servidor es del módulo): sin pesaje abierto, sin báscula ni simulador
+    for ses in page.request.get(f"{server_url}/api/sessions").json():
+        if ses.get("estado") == "abierta":
+            page.request.post(f"{server_url}/api/sessions/{ses['id']}/close")
+    page.request.post(f"{server_url}/api/sim/stop")
+    page.request.post(f"{server_url}/api/scale/disconnect", data={})
+    page.goto(server_url)
+    page.evaluate("localStorage.removeItem('porcipeso_cfg')")
+    page.goto(server_url)
+    expect(page.locator("#scaleChip")).to_have_text("Sin báscula")
+    page.locator('[data-mod="bascula"]:visible').first.click()
+    # lo mismo que deja un connect exitoso del asistente: config guardada + enlace vivo
+    page.evaluate("""saveCfg({method: 'bluetooth', transport: 'ble', profile_id: 'auto',
+                     port: '48:87:2D:9D:D5:71', name: 'Báscula BLE (RS232\\\\485)'});
+                     APP.scaleConnected = true;""")
+    page.locator('[data-mod="pesaje"]:visible').first.click()
+    expect(page.locator("#scaleChip")).to_have_text("Báscula BLE (RS232\\485)", timeout=5_000)
+    expect(page.locator("#startNote")).not_to_contain_text("No hay báscula configurada")

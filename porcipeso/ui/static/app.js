@@ -95,6 +95,9 @@ function setModule(mod) {
   try { history.replaceState(null, '', '#' + mod); } catch { /* sin history */ }
   if (mod === 'datos') refreshDatos().catch(() => {});
   if (mod === 'bascula') initBascula();
+  // volver a Pesaje tras conectar en ⚙ Báscula: el inicio decía «Sin báscula»
+  // (estado del arranque) aunque ya estuviera conectada y guardada
+  if (mod === 'pesaje' && $('pvHome').classList.contains('active')) refreshPesajeHome().catch(() => {});
   window.scrollTo({ top: 0 });
 }
 for (const b of document.querySelectorAll('[data-mod]')) {
@@ -382,7 +385,7 @@ async function refreshPesajeHome() {
   const syncSimNote = () => { $('simNote').hidden = simBtn.hidden && backBtn.hidden; };
   if (APP.scaleConnected) {
     chip.className = 'chip ' + (APP.simActive ? 'sim' : 'ok');
-    chip.textContent = APP.simActive ? 'Báscula simulada' : (st?.profile_name ?? st?.name ?? 'Báscula conectada');
+    chip.textContent = APP.simActive ? 'Báscula simulada' : (st?.profile_name ?? st?.name ?? loadCfg()?.name ?? 'Báscula conectada');
     btn.textContent = 'Empezar a pesar';
     note.hidden = true;
     syncSimNote();
