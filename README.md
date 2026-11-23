@@ -38,7 +38,7 @@ La guía detallada con diagramas de cableado, solución de problemas y preguntas
 
 1. **Sube UN cerdo solo** — es el cerdo de prueba; el sistema se calibra con su peso.
 2. **Sube los demás como quieras** — de a 1, 2 o 3; el sistema ve cuánto sube el peso y calcula cuántos entraron.
-3. **Él cuenta, tú supervisas** — si un cerdo se baja lo descuenta solo; si duda ("¿subieron 1 o 2?") te pregunta con botones grandes; al final: cerdos, kilos, promedio y si el lote es parejo.
+3. **Él cuenta, tú supervisas** — las bajadas no descuentan (en báscula de paso el cerdo sigue al camión): si uno se devuelve y vuelve a pasar, tú lo descuentas con un toque; si duda ("¿subieron 1 o 2?") te pregunta con botones grandes; al final: cerdos, kilos, promedio y si el lote es parejo.
 
 ## Para desarrolladores
 
