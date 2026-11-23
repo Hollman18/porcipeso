@@ -614,7 +614,7 @@ function startWeighing(nombre) {
   APP.fase = null; APP.loteAnnounced = false; APP.unitCount = 0;
   APP.weights = []; APP.moves = [];
   hist.length = 0;
-  questions.length = 0; activeQuestion = null;
+  questions.length = 0; activeQuestion = null; answeredIds.clear();
   narrLockUntil = 0;
   $('pesajeTitle').textContent = nombre;
   $('nCerdos').textContent = '0';
@@ -718,6 +718,10 @@ async function usarPesoManual() {
 let narrLockUntil = 0;
 let activeQuestion = null;
 const questions = [];
+/* ids de eventos ambiguos que el operario YA respondió aquí: el backend
+   re-emite el evento confirmado por WS y sin esto se anotaba dos veces
+   (pesos duplicados → «disparejo» falso, movimientos repetidos) */
+const answeredIds = new Set();
 
 function say(text, tone = '', stickyMs = 0) {
   if (activeQuestion) return;
@@ -748,6 +752,7 @@ function askNext() {
     b.textContent = String(o);
     b.onclick = async () => {
       b.disabled = true;
+      answeredIds.add(q.eventId);
       try {
         await api(`/api/events/${q.eventId}/confirm`, { method: 'POST', body: { n: o } });
         addMove(q.delta < 0 ? 'down' : 'up', q.delta < 0 ? '↩' : '✓',
@@ -759,6 +764,7 @@ function askNext() {
         refreshReturnedPigs();
         askNext();
       } catch {
+        answeredIds.delete(q.eventId);
         b.disabled = false;
       }
     };
@@ -776,6 +782,7 @@ function askNext() {
     const o = parseInt(inp.value, 10);
     if (!Number.isInteger(o) || o < 1) { inp.focus(); return; }
     ok.disabled = true;
+    answeredIds.add(q.eventId);
     try {
       await api(`/api/events/${q.eventId}/confirm`, { method: 'POST', body: { n: o } });
       addMove('up', '✓', `Me dijiste que subieron ${o} (+${fmt(q.delta)} kg)`);
@@ -784,7 +791,7 @@ function askNext() {
       if (q.delta > 0) for (let i = 0; i < o; i++) APP.weights.push(q.delta / o);
       refreshReturnedPigs();
       askNext();
-    } catch { ok.disabled = false; }
+    } catch { answeredIds.delete(q.eventId); ok.disabled = false; }
   };
   wrap.appendChild(inp); wrap.appendChild(ok);
   box.appendChild(wrap);
@@ -915,6 +922,8 @@ function onEvent(ev) {
   const delta = Number(ev.delta_kg ?? 0);
   const pendiente = !!ev.ambiguo && ev.animales_confirmados == null;
   const n = Math.abs(ev.animales_confirmados ?? ev.animales_estimados ?? 1);
+  // eco del confirm de una pregunta respondida en esta pantalla: ya se anotó
+  if (ev.animales_confirmados != null && answeredIds.has(ev.id)) return;
 
   if (tipo === 'referencia') {
     APP.refKg = delta;
